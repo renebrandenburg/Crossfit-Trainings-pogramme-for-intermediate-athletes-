@@ -10,8 +10,28 @@ function freshRequire(file) {
   return require(modulePath);
 }
 
-function mountApp() {
-  const dom = new JSDOM("<!doctype html><html><body><div id=\"root\"></div></body></html>", {
+function createMatchMedia(matches = false) {
+  const listeners = new Set();
+
+  return (query) => ({
+    matches,
+    media: query,
+    addEventListener: (event, listener) => {
+      if (event === "change") listeners.add(listener);
+    },
+    removeEventListener: (event, listener) => {
+      if (event === "change") listeners.delete(listener);
+    },
+    addListener: (listener) => listeners.add(listener),
+    removeListener: (listener) => listeners.delete(listener),
+    dispatch: (nextMatches) => {
+      listeners.forEach((listener) => listener({ matches: nextMatches, media: query }));
+    }
+  });
+}
+
+function mountApp({ prefersDark = false } = {}) {
+  const dom = new JSDOM("<!doctype html><html><head><meta name=\"theme-color\" content=\"#10120f\"></head><body><div id=\"root\"></div></body></html>", {
     pretendToBeVisual: true,
     url: "http://localhost/"
   });
@@ -31,6 +51,7 @@ function mountApp() {
 
   dom.window.confirm = () => true;
   dom.window.scrollTo = () => undefined;
+  dom.window.matchMedia = createMatchMedia(prefersDark);
   dom.window.React = require("react");
   dom.window.ReactDOM = require("react-dom/client");
 
@@ -128,6 +149,45 @@ test("React Testing Library filters the movement library", async () => {
 
     await waitFor(() => assert.ok(ui.getByRole("heading", { name: "Snatch" })));
     assert.equal(ui.queryByRole("heading", { name: "Bar muscle-up" }), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library persists and applies the theme preference", async () => {
+  const { cleanup, fireEvent, ui, waitFor } = mountApp({ prefersDark: false });
+
+  try {
+    const themeSelect = await ui.findByLabelText("Theme preference");
+    assert.equal(themeSelect.value, "system");
+
+    fireEvent.change(themeSelect, { target: { value: "dark" } });
+
+    await waitFor(() => assert.equal(document.documentElement.dataset.theme, "dark"));
+    assert.equal(document.querySelector('meta[name="theme-color"]').getAttribute("content"), "#070907");
+
+    const savedDarkState = JSON.parse(window.localStorage.getItem("forge-hour-state-v1"));
+    assert.equal(savedDarkState.themePreference, "dark");
+
+    fireEvent.change(themeSelect, { target: { value: "light" } });
+
+    await waitFor(() => assert.equal(document.documentElement.dataset.theme, "light"));
+    assert.equal(document.querySelector('meta[name="theme-color"]').getAttribute("content"), "#10120f");
+
+    const savedLightState = JSON.parse(window.localStorage.getItem("forge-hour-state-v1"));
+    assert.equal(savedLightState.themePreference, "light");
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library uses system preference by default", async () => {
+  const { cleanup, ui, waitFor } = mountApp({ prefersDark: true });
+
+  try {
+    const themeSelect = await ui.findByLabelText("Theme preference");
+    assert.equal(themeSelect.value, "system");
+    await waitFor(() => assert.equal(document.documentElement.dataset.theme, "dark"));
   } finally {
     cleanup();
   }

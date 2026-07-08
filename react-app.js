@@ -40,6 +40,10 @@
   } = api;
 
   const STORAGE_KEY = "forge-hour-state-v1";
+  const THEME_COLORS = {
+    light: "#10120f",
+    dark: "#070907"
+  };
   const h = ReactRuntime.createElement;
 
   function fallbackState() {
@@ -49,7 +53,8 @@
       customPlans: [],
       prs: {},
       prAttempts: [],
-      selectedWeek: 1
+      selectedWeek: 1,
+      themePreference: "system"
     };
   }
 
@@ -65,6 +70,7 @@
         ...fallback,
         ...parsed,
         selectedWeek: clamp(Number(parsed.selectedWeek) || fallback.selectedWeek, 1, 8),
+        themePreference: normalizeThemePreference(parsed.themePreference),
         profile: {
           ...fallback.profile,
           ...(parsed.profile || {}),
@@ -151,6 +157,26 @@
     return new Date().toISOString().slice(0, 10);
   }
 
+  function normalizeThemePreference(value) {
+    return ["system", "light", "dark"].includes(value) ? value : "system";
+  }
+
+  function getSystemTheme() {
+    if (typeof window.matchMedia !== "function") return "light";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+
+  function resolveTheme(preference, systemTheme) {
+    return preference === "system" ? systemTheme : preference;
+  }
+
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    const themeColor = THEME_COLORS[theme] || THEME_COLORS.light;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", themeColor);
+  }
+
   function weekOptions() {
     return WEEK_META.map((week) => h("option", { key: week.week, value: String(week.week) }, `Week ${week.week}`));
   }
@@ -163,11 +189,14 @@
     const [appState, setAppState] = ReactRuntime.useState(loadState);
     const [activeView, setActiveView] = ReactRuntime.useState("dashboardView");
     const [toast, setToast] = ReactRuntime.useState("");
+    const [systemTheme, setSystemTheme] = ReactRuntime.useState(getSystemTheme);
     const [logSelection, setLogSelection] = ReactRuntime.useState(() => ({
       week: 1,
       dayId: getNextDayForToday().id
     }));
     const toastTimer = ReactRuntime.useRef(null);
+    const themePreference = normalizeThemePreference(appState.themePreference);
+    const activeTheme = resolveTheme(themePreference, systemTheme);
 
     const updateAppState = ReactRuntime.useCallback((updater) => {
       setAppState((current) => {
@@ -210,6 +239,24 @@
       return () => window.clearTimeout(toastTimer.current);
     }, []);
 
+    ReactRuntime.useEffect(() => {
+      if (typeof window.matchMedia !== "function") return undefined;
+      const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+      const handleChange = (event) => setSystemTheme(event.matches ? "dark" : "light");
+
+      if (typeof mediaQuery.addEventListener === "function") {
+        mediaQuery.addEventListener("change", handleChange);
+        return () => mediaQuery.removeEventListener("change", handleChange);
+      }
+
+      mediaQuery.addListener(handleChange);
+      return () => mediaQuery.removeListener(handleChange);
+    }, []);
+
+    ReactRuntime.useLayoutEffect(() => {
+      applyTheme(activeTheme);
+    }, [activeTheme]);
+
     return h(ReactRuntime.Fragment, null,
       h("div", { className: "app-shell" },
         h("header", { className: "topbar" },
@@ -217,7 +264,18 @@
             h("p", { className: "eyebrow" }, "Intermediate CrossFit"),
             h("h1", null, "Forge Hour")
           ),
-          h("div", { className: "status-pill" }, "Local save")
+          h("div", { className: "topbar-actions" },
+            h("div", { className: "status-pill" }, "Local save"),
+            h(ThemeControl, {
+              value: themePreference,
+              onChange: (nextPreference) => {
+                updateAppState((current) => ({
+                  ...current,
+                  themePreference: normalizeThemePreference(nextPreference)
+                }));
+              }
+            })
+          )
         ),
         h("main", null,
           h(DashboardView, {
@@ -323,6 +381,21 @@
         h(BottomNav, { activeView, onActivate: activateView })
       ),
       h("div", { id: "toast", className: `toast${toast ? " is-visible" : ""}`, role: "status", "aria-live": "polite" }, toast)
+    );
+  }
+
+  function ThemeControl({ value, onChange }) {
+    return h("label", { className: "theme-control" },
+      h("span", { className: "theme-control-label" }, "Theme"),
+      h("select", {
+        "aria-label": "Theme preference",
+        value,
+        onChange: (event) => onChange(event.target.value)
+      },
+        h("option", { value: "system" }, "System"),
+        h("option", { value: "light" }, "Light"),
+        h("option", { value: "dark" }, "Dark")
+      )
     );
   }
 
