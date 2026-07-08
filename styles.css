@@ -350,6 +350,20 @@ button {
   margin-top: 12px;
 }
 
+.sync-form,
+.sync-actions {
+  margin-top: 12px;
+}
+
+.sync-form {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.sync-form button {
+  white-space: nowrap;
+}
+
 .primary-button,
 .ghost-button,
 .danger-button {
@@ -648,7 +662,8 @@ textarea:focus {
   .form-row,
   .profile-grid,
   .movement-filters,
-  .movement-detail-grid {
+  .movement-detail-grid,
+  .sync-form {
     grid-template-columns: 1fr;
   }
 

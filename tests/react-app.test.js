@@ -30,7 +30,59 @@ function createMatchMedia(matches = false) {
   });
 }
 
-function mountApp({ prefersDark = false } = {}) {
+function createMockSupabase({ session = null, remote = {}, calls = [] } = {}) {
+  const data = {
+    workout_logs: remote.workout_logs || [],
+    pr_attempts: remote.pr_attempts || [],
+    personal_records: remote.personal_records || []
+  };
+
+  function ok(value) {
+    return Promise.resolve({ data: value, error: null });
+  }
+
+  const client = {
+    auth: {
+      getSession: () => ok({ session }),
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => undefined } } }),
+      signInWithOtp: (payload) => {
+        calls.push({ type: "signInWithOtp", payload });
+        return ok({});
+      },
+      signOut: () => {
+        calls.push({ type: "signOut" });
+        return ok({});
+      }
+    },
+    from: (table) => ({
+      select: () => {
+        if (table === "personal_records") return ok(data[table]);
+        return {
+          order: () => ok(data[table])
+        };
+      },
+      upsert: (payload) => {
+        calls.push({ type: "upsert", table, payload });
+        return ok(payload);
+      },
+      delete: () => ({
+        neq: (column, value) => {
+          calls.push({ type: "delete", table, column, value });
+          return ok([]);
+        }
+      })
+    })
+  };
+
+  return {
+    client,
+    supabase: {
+      createClient: () => client
+    }
+  };
+}
+
+function mountApp({ prefersDark = false, supabaseMock = null } = {}) {
   const dom = new JSDOM("<!doctype html><html><head><meta name=\"theme-color\" content=\"#10120f\"></head><body><div id=\"root\"></div></body></html>", {
     pretendToBeVisual: true,
     url: "http://localhost/"
@@ -54,9 +106,18 @@ function mountApp({ prefersDark = false } = {}) {
   dom.window.matchMedia = createMatchMedia(prefersDark);
   dom.window.React = require("react");
   dom.window.ReactDOM = require("react-dom/client");
+  if (supabaseMock) {
+    dom.window.supabase = supabaseMock.supabase;
+    dom.window.ForgeHourSupabaseConfig = {
+      url: "https://example.supabase.co",
+      anonKey: "public-anon-key"
+    };
+  }
 
   freshRequire("../app.js");
+  freshRequire("../supabase-sync.js");
   dom.window.ForgeHour = global.ForgeHour;
+  dom.window.ForgeHourSync = global.ForgeHourSync;
   freshRequire("../react-app.js");
 
   const testingLibrary = require("@testing-library/react");
@@ -188,6 +249,85 @@ test("React Testing Library uses system preference by default", async () => {
     const themeSelect = await ui.findByLabelText("Theme preference");
     assert.equal(themeSelect.value, "system");
     await waitFor(() => assert.equal(document.documentElement.dataset.theme, "dark"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library shows Supabase setup guidance when sync is not configured", async () => {
+  const { cleanup, ui } = mountApp();
+
+  try {
+    assert.ok(await ui.findByRole("heading", { name: "Database sync" }));
+    assert.ok(ui.getByText(/Supabase is not configured yet/));
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library loads remote Supabase scores for a signed-in user", async () => {
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    remote: {
+      workout_logs: [{
+        id: "remote-log",
+        date: "2026-07-08",
+        week: 1,
+        day_id: "day1",
+        day_title: "Back squat + T2B",
+        readiness: "green",
+        rpe: "8",
+        strength_result: "Remote squat",
+        wod_score: "5 rounds",
+        notes: "Remote note",
+        mobility_done: true,
+        created_at: "2026-07-08T10:00:00.000Z"
+      }],
+      pr_attempts: [],
+      personal_records: [{
+        metric_id: "backSquat",
+        value: 150,
+        display: "150 kg",
+        date: "2026-07-08",
+        notes: "Remote PR"
+      }]
+    }
+  });
+  const { cleanup, fireEvent, ui } = mountApp({ supabaseMock });
+
+  try {
+    assert.ok(await ui.findByText("Scores are syncing with Supabase."));
+    fireEvent.click(ui.getByRole("button", { name: "Log" }));
+    assert.ok(await ui.findByText(/Remote squat/));
+    fireEvent.click(ui.getByRole("button", { name: "PRs" }));
+    assert.ok(await ui.findByText("150 kg"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library saves workout logs through Supabase when signed in", async () => {
+  const calls = [];
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    calls
+  });
+  const { cleanup, fireEvent, ui, waitFor } = mountApp({ supabaseMock });
+
+  try {
+    assert.ok(await ui.findByText("Scores are syncing with Supabase."));
+    fireEvent.click(ui.getByRole("button", { name: "Log" }));
+    fireEvent.change(ui.getByLabelText("WOD score"), {
+      target: { value: "4 rounds + 8 reps" }
+    });
+    fireEvent.click(ui.getByRole("button", { name: "Save workout log" }));
+
+    await waitFor(() => {
+      const insert = calls.find((call) => call.type === "upsert" && call.table === "workout_logs");
+      assert.ok(insert);
+      assert.equal(insert.payload.user_id, "user-1");
+      assert.equal(insert.payload.wod_score, "4 rounds + 8 reps");
+    });
   } finally {
     cleanup();
   }

@@ -3,12 +3,13 @@
 (function mountForgeHourReact() {
   const rootElement = document.querySelector("#root");
   const api = window.ForgeHour;
+  const syncApi = window.ForgeHourSync;
   const ReactRuntime = window.React;
   const ReactDOMRuntime = window.ReactDOM;
 
   if (!rootElement) return;
 
-  if (!api || !ReactRuntime || !ReactDOMRuntime) {
+  if (!api || !syncApi || !ReactRuntime || !ReactDOMRuntime) {
     rootElement.innerHTML = '<div class="app-shell"><section class="panel"><h1>Forge Hour</h1><p class="muted-copy">React could not load. Check your connection and reload the app.</p></section></div>';
     return;
   }
@@ -38,6 +39,12 @@
     splitLines,
     valueFromPath
   } = api;
+
+  const {
+    createSupabaseStore,
+    mergeById,
+    mergePrs
+  } = syncApi;
 
   const STORAGE_KEY = "forge-hour-state-v1";
   const THEME_COLORS = {
@@ -177,6 +184,15 @@
     if (meta) meta.setAttribute("content", themeColor);
   }
 
+  function createRemoteStore() {
+    const config = window.ForgeHourSupabaseConfig || {};
+    const hasConfig = Boolean(config.url && config.anonKey);
+    if (!hasConfig || !window.supabase || typeof window.supabase.createClient !== "function") {
+      return null;
+    }
+    return createSupabaseStore(window.supabase.createClient(config.url, config.anonKey));
+  }
+
   function weekOptions() {
     return WEEK_META.map((week) => h("option", { key: week.week, value: String(week.week) }, `Week ${week.week}`));
   }
@@ -190,6 +206,13 @@
     const [activeView, setActiveView] = ReactRuntime.useState("dashboardView");
     const [toast, setToast] = ReactRuntime.useState("");
     const [systemTheme, setSystemTheme] = ReactRuntime.useState(getSystemTheme);
+    const [remoteStore] = ReactRuntime.useState(createRemoteStore);
+    const [remoteUser, setRemoteUser] = ReactRuntime.useState(null);
+    const [remoteSnapshot, setRemoteSnapshot] = ReactRuntime.useState({ logs: [], prAttempts: [], prs: {} });
+    const [syncStatus, setSyncStatus] = ReactRuntime.useState(() => ({
+      state: remoteStore ? "signed-out" : "not-configured",
+      message: remoteStore ? "Sign in to sync logs and PRs." : "Add Supabase config to enable database sync."
+    }));
     const [logSelection, setLogSelection] = ReactRuntime.useState(() => ({
       week: 1,
       dayId: getNextDayForToday().id
@@ -205,6 +228,30 @@
         return next;
       });
     }, []);
+
+    const mergeRemoteState = ReactRuntime.useCallback((remoteData) => {
+      updateAppState((current) => ({
+        ...current,
+        logs: mergeById(current.logs, remoteData.logs),
+        prAttempts: mergeById(current.prAttempts, remoteData.prAttempts),
+        prs: seedPrs({ ...current, prs: mergePrs(current.prs, remoteData.prs) }).prs
+      }));
+      setRemoteSnapshot(remoteData);
+    }, [updateAppState]);
+
+    const loadRemoteScores = ReactRuntime.useCallback(async (session) => {
+      if (!remoteStore || !session || !session.user) return;
+      setSyncStatus({ state: "loading", message: "Loading scores from Supabase..." });
+      try {
+        const remoteData = await remoteStore.loadUserData();
+        setRemoteUser(session.user);
+        mergeRemoteState(remoteData);
+        setSyncStatus({ state: "signed-in", message: "Scores are syncing with Supabase." });
+      } catch (error) {
+        console.warn("Could not load Supabase scores.", error);
+        setSyncStatus({ state: "error", message: "Could not load Supabase scores." });
+      }
+    }, [mergeRemoteState, remoteStore]);
 
     const notify = ReactRuntime.useCallback((message) => {
       setToast(message);
@@ -238,6 +285,38 @@
       registerServiceWorker();
       return () => window.clearTimeout(toastTimer.current);
     }, []);
+
+    ReactRuntime.useEffect(() => {
+      if (!remoteStore) return undefined;
+      let isMounted = true;
+
+      remoteStore.getSession().then((session) => {
+        if (!isMounted) return;
+        if (session && session.user) {
+          loadRemoteScores(session);
+        } else {
+          setSyncStatus({ state: "signed-out", message: "Sign in to sync logs and PRs." });
+        }
+      }).catch((error) => {
+        console.warn("Could not read Supabase session.", error);
+        if (isMounted) setSyncStatus({ state: "error", message: "Could not read Supabase session." });
+      });
+
+      const unsubscribe = remoteStore.onAuthStateChange((event, session) => {
+        if (session && session.user) {
+          loadRemoteScores(session);
+        } else {
+          setRemoteUser(null);
+          setRemoteSnapshot({ logs: [], prAttempts: [], prs: {} });
+          setSyncStatus({ state: "signed-out", message: "Sign in to sync logs and PRs." });
+        }
+      });
+
+      return () => {
+        isMounted = false;
+        unsubscribe();
+      };
+    }, [loadRemoteScores, remoteStore]);
 
     ReactRuntime.useEffect(() => {
       if (typeof window.matchMedia !== "function") return undefined;
@@ -295,7 +374,54 @@
               setAppState(next);
               setLogSelection({ week: next.selectedWeek, dayId: getNextDayForToday().id });
               notify("Demo data reset.");
-            }
+            },
+            accountSyncPanel: h(AccountSyncPanel, {
+              appState,
+              remoteStore,
+              remoteUser,
+              syncStatus,
+              onSignIn: async (email) => {
+                if (!remoteStore) return;
+                setSyncStatus({ state: "loading", message: "Sending sign-in email..." });
+                try {
+                  await remoteStore.signIn(email, window.location.href);
+                  setSyncStatus({ state: "signed-out", message: "Check your email for the sign-in link." });
+                  notify("Check your email for the sign-in link.");
+                } catch (error) {
+                  console.warn("Could not send Supabase sign-in link.", error);
+                  setSyncStatus({ state: "error", message: "Could not send sign-in email." });
+                  notify("Could not send sign-in email.");
+                }
+              },
+              onSignOut: async () => {
+                if (!remoteStore) return;
+                try {
+                  await remoteStore.signOut();
+                  setRemoteUser(null);
+                  setSyncStatus({ state: "signed-out", message: "Signed out. Local cache remains on this device." });
+                  notify("Signed out.");
+                } catch (error) {
+                  console.warn("Could not sign out.", error);
+                  setSyncStatus({ state: "error", message: "Could not sign out." });
+                  notify("Could not sign out.");
+                }
+              },
+              onSyncLocal: async () => {
+                if (!remoteStore || !remoteUser) return;
+                setSyncStatus({ state: "loading", message: "Uploading local scores..." });
+                try {
+                  const uploaded = await remoteStore.uploadLocalScores(appState, remoteUser.id, remoteSnapshot);
+                  const remoteData = await remoteStore.loadUserData();
+                  mergeRemoteState(remoteData);
+                  setSyncStatus({ state: "signed-in", message: "Local scores synced to Supabase." });
+                  notify(`Synced ${uploaded.logs + uploaded.prAttempts + uploaded.prs} local records.`);
+                } catch (error) {
+                  console.warn("Could not sync local scores.", error);
+                  setSyncStatus({ state: "error", message: "Could not sync local scores." });
+                  notify("Could not sync local scores.");
+                }
+              }
+            })
           }),
           h(ProgramView, {
             appState,
@@ -346,14 +472,37 @@
             onWeekChange: setSelectedWeek,
             onNotify: notify,
             onSaveLog: (log) => {
+              if (remoteStore && remoteUser) {
+                return remoteStore.saveLog(log, remoteUser.id).then(() => {
+                  setRemoteSnapshot((current) => ({ ...current, logs: mergeById(current.logs, [log]) }));
+                  updateAppState((current) => ({ ...current, logs: mergeById(current.logs, [log]) }));
+                  notify("Workout log saved.");
+                }).catch((error) => {
+                  console.warn("Could not save workout log to Supabase.", error);
+                  notify("Could not save workout log to Supabase.");
+                  throw error;
+                });
+              }
               updateAppState((current) => ({ ...current, logs: [log, ...current.logs] }));
               notify("Workout log saved.");
+              return Promise.resolve();
             },
             onClearLogs: () => {
               if (!appState.logs.length) return;
               if (!window.confirm("Clear all workout logs on this device?")) return;
-              updateAppState((current) => ({ ...current, logs: [] }));
-              notify("Workout logs cleared.");
+              const clearLocalLogs = () => {
+                setRemoteSnapshot((current) => ({ ...current, logs: [] }));
+                updateAppState((current) => ({ ...current, logs: [] }));
+                notify("Workout logs cleared.");
+              };
+              if (remoteStore && remoteUser) {
+                remoteStore.clearLogs().then(clearLocalLogs).catch((error) => {
+                  console.warn("Could not clear Supabase workout logs.", error);
+                  notify("Could not clear Supabase workout logs.");
+                });
+                return;
+              }
+              clearLocalLogs();
             }
           }),
           h(PrView, {
@@ -361,26 +510,91 @@
             activeView,
             onNotify: notify,
             onSaveAttempt: (attempt) => {
-              updateAppState((current) => {
-                const prs = { ...current.prs };
-                if (attempt.isPr) {
-                  prs[attempt.metricId] = {
-                    metricId: attempt.metricId,
-                    value: attempt.value,
-                    display: attempt.display,
-                    date: attempt.date,
-                    notes: attempt.notes
-                  };
-                }
-                return { ...current, prs, prAttempts: [attempt, ...current.prAttempts] };
-              });
-              notify(attempt.isPr ? "New PR saved." : "Attempt saved.");
+              const prs = { ...appState.prs };
+              if (attempt.isPr) {
+                prs[attempt.metricId] = {
+                  metricId: attempt.metricId,
+                  value: attempt.value,
+                  display: attempt.display,
+                  date: attempt.date,
+                  notes: attempt.notes
+                };
+              }
+
+              const saveLocalAttempt = () => {
+                setRemoteSnapshot((current) => ({
+                  ...current,
+                  prs: mergePrs(current.prs, prs),
+                  prAttempts: mergeById(current.prAttempts, [attempt])
+                }));
+                updateAppState((current) => ({
+                  ...current,
+                  prs,
+                  prAttempts: mergeById(current.prAttempts, [attempt])
+                }));
+                notify(attempt.isPr ? "New PR saved." : "Attempt saved.");
+              };
+
+              if (remoteStore && remoteUser) {
+                return remoteStore.savePrAttempt(attempt, prs, remoteUser.id).then(saveLocalAttempt).catch((error) => {
+                  console.warn("Could not save PR attempt to Supabase.", error);
+                  notify("Could not save PR attempt to Supabase.");
+                  throw error;
+                });
+              }
+
+              saveLocalAttempt();
+              return Promise.resolve();
             }
           })
         ),
         h(BottomNav, { activeView, onActivate: activateView })
       ),
       h("div", { id: "toast", className: `toast${toast ? " is-visible" : ""}`, role: "status", "aria-live": "polite" }, toast)
+    );
+  }
+
+  function AccountSyncPanel({ appState, remoteStore, remoteUser, syncStatus, onSignIn, onSignOut, onSyncLocal }) {
+    const [email, setEmail] = ReactRuntime.useState("");
+    const localRecordCount = appState.logs.length + appState.prAttempts.length + Object.keys(appState.prs || {}).length;
+
+    return h("section", { className: "panel", "aria-labelledby": "accountSyncTitle" },
+      h("div", { className: "panel-title" },
+        h("div", null,
+          h("p", { className: "eyebrow" }, "Account"),
+          h("h3", { id: "accountSyncTitle" }, "Database sync")
+        ),
+        h("span", { className: "metric-pill" }, remoteUser ? "Signed in" : "Local only")
+      ),
+      h("p", { className: "muted-copy" }, syncStatus.message),
+      !remoteStore ? h("div", { className: "empty-state" }, "Supabase is not configured yet. Add your project URL and anon key in supabase-config.js, then deploy again.") : null,
+      remoteStore && !remoteUser ? h("form", {
+        className: "sync-form",
+        onSubmit: (event) => {
+          event.preventDefault();
+          const normalizedEmail = email.trim();
+          if (!normalizedEmail) return;
+          onSignIn(normalizedEmail);
+        }
+      },
+        h("label", null, "Email",
+          h("input", {
+            type: "email",
+            value: email,
+            placeholder: "athlete@example.com",
+            autoComplete: "email",
+            onChange: (event) => setEmail(event.target.value)
+          })
+        ),
+        h("button", { className: "primary-button", type: "submit", disabled: syncStatus.state === "loading" }, "Email sign-in link")
+      ) : null,
+      remoteStore && remoteUser ? h("div", { className: "sync-actions" },
+        h("p", { className: "muted-copy" }, remoteUser.email || "Signed in athlete"),
+        h("div", { className: "quick-actions" },
+          h("button", { className: "primary-button", type: "button", onClick: onSyncLocal, disabled: syncStatus.state === "loading" || localRecordCount === 0 }, "Sync local scores"),
+          h("button", { className: "ghost-button", type: "button", onClick: onSignOut, disabled: syncStatus.state === "loading" }, "Sign out")
+        )
+      ) : null
     );
   }
 
@@ -403,7 +617,7 @@
     return h("select", { id, "aria-label": label, value: String(value), onChange: (event) => onChange(event.target.value) }, weekOptions());
   }
 
-  function DashboardView({ appState, activeView, onWeekChange, onJumpLog, onViewPlan, onSaveProfile, onReset }) {
+  function DashboardView({ appState, activeView, onWeekChange, onJumpLog, onViewPlan, onSaveProfile, onReset, accountSyncPanel }) {
     const logsThisWeek = appState.logs.filter((log) => log.week === appState.selectedWeek);
     const mainDayIds = getProgramDays().map((day) => day.id);
     const completedDays = new Set(logsThisWeek.filter((log) => mainDayIds.includes(log.dayId)).map((log) => log.dayId)).size;
@@ -446,7 +660,8 @@
           )
         )
       ),
-      h(ProfilePanel, { profile: appState.profile, onSave: onSaveProfile, onReset })
+      h(ProfilePanel, { profile: appState.profile, onSave: onSaveProfile, onReset }),
+      accountSyncPanel
     );
   }
 
@@ -855,7 +1070,7 @@
         key: formVersion,
         id: "logForm",
         className: "panel log-form",
-        onSubmit: (event) => {
+        onSubmit: async (event) => {
           event.preventDefault();
           const data = new FormData(event.currentTarget);
           const day = findTrainingSessionForState(String(data.get("logDay")), Number(data.get("logWeek")), appState);
@@ -880,8 +1095,12 @@
             createdAt: new Date().toISOString()
           };
 
-          onSaveLog(log);
-          setFormVersion((version) => version + 1);
+          try {
+            await onSaveLog(log);
+            setFormVersion((version) => version + 1);
+          } catch (error) {
+            onNotify("Save failed. Try again after checking your connection.");
+          }
         }
       },
         h("div", { className: "form-row" },
@@ -1018,7 +1237,7 @@
         key: formVersion,
         id: "prForm",
         className: "panel pr-form",
-        onSubmit: (event) => {
+        onSubmit: async (event) => {
           event.preventDefault();
           const data = new FormData(event.currentTarget);
           const metric = PR_METRICS.find((item) => item.id === data.get("prMetric"));
@@ -1031,18 +1250,22 @@
 
           const current = appState.prs[metric.id];
           const isPr = !current || isBetterPr(normalized, current.value, metric);
-          onSaveAttempt({
-            id: createId(),
-            metricId: metric.id,
-            metricName: metric.name,
-            value: normalized,
-            display: formatPrValue(normalized, metric),
-            date: String(data.get("prDate")),
-            notes: String(data.get("prNotes") || "").trim(),
-            isPr,
-            createdAt: new Date().toISOString()
-          });
-          setFormVersion((version) => version + 1);
+          try {
+            await onSaveAttempt({
+              id: createId(),
+              metricId: metric.id,
+              metricName: metric.name,
+              value: normalized,
+              display: formatPrValue(normalized, metric),
+              date: String(data.get("prDate")),
+              notes: String(data.get("prNotes") || "").trim(),
+              isPr,
+              createdAt: new Date().toISOString()
+            });
+            setFormVersion((version) => version + 1);
+          } catch (error) {
+            onNotify("Save failed. Try again after checking your connection.");
+          }
         }
       },
         h("div", { className: "panel-title" },

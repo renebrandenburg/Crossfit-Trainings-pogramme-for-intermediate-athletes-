@@ -37,7 +37,7 @@ jobs:
       - name: Prepare static site
         run: |
           mkdir dist
-          cp index.html styles.css app.js react-app.js manifest.webmanifest sw.js icon.svg dist/
+          cp index.html styles.css app.js supabase-config.js supabase-sync.js react-app.js manifest.webmanifest sw.js icon.svg dist/
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v6
