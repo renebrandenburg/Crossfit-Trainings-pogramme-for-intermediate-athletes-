@@ -9,6 +9,7 @@ A phone-first CrossFit training programme and PR tracker for intermediate athlet
 - Needs-based programme generator for strength, endurance, gymnastics, or all-round goals.
 - WOD variation across time domains and formats: AMRAP, intervals, for-time, EMOM, ladder, repeat sets, chipper, and benchmark.
 - Manual training programme builder for adding your own sessions.
+- Movement library for gymnastics and weightlifting skills with cues, progressions, scaling, and video guide links.
 - Workout logging for readiness, RPE, strength or skill results, WOD score, notes, and mobility.
 - PR tracker for major lifts, rowing, Murph, and gymnastics benchmarks.
 - Local-first storage in the browser with a simple PWA manifest and offline cache.

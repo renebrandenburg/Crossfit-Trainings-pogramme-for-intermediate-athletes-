@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 
 const {
   DEFAULT_PROFILE,
+  MOVEMENT_LIBRARY,
   PR_METRICS,
   WEEK_META,
   buildGeneratedProgramme,
@@ -12,6 +13,7 @@ const {
   clamp,
   cloneDefaultProfile,
   customPlanSegments,
+  filterMovementLibrary,
   formatPrValue,
   getProgramDays,
   isBetterPr,
@@ -150,6 +152,30 @@ test("needs-based generator changes bias by goal and clamps options", () => {
   assert.match(JSON.stringify(gymnasticsPlans), /Muscle-up/);
   assert.equal(endurancePlans[0].duration, 60);
   assert.equal(gymnasticsPlans[0].duration, 45);
+});
+
+test("movement library covers gymnastics and weightlifting with video guides", () => {
+  const categories = new Set(MOVEMENT_LIBRARY.map((movement) => movement.category));
+  const ids = new Set(MOVEMENT_LIBRARY.map((movement) => movement.id));
+
+  assert.ok(MOVEMENT_LIBRARY.length >= 20);
+  assert.equal(ids.size, MOVEMENT_LIBRARY.length);
+  assert.ok(categories.has("Gymnastics"));
+  assert.ok(categories.has("Weightlifting"));
+  assert.ok(MOVEMENT_LIBRARY.some((movement) => movement.name === "Bar muscle-up"));
+  assert.ok(MOVEMENT_LIBRARY.some((movement) => movement.name === "Snatch"));
+  assert.ok(MOVEMENT_LIBRARY.some((movement) => movement.name === "Clean and jerk"));
+
+  for (const movement of MOVEMENT_LIBRARY) {
+    assert.ok(movement.cues.length >= 3, `${movement.name} should have coaching cues`);
+    assert.ok(movement.progressions.length >= 4, `${movement.name} should have progressions`);
+    assert.match(movement.videoUrl, /^https:\/\/www\.youtube\.com\/@CrossFit\/search/);
+    assert.match(movement.sourceUrl, /^https:\/\/www\.crossfit\.com\//);
+  }
+
+  assert.equal(filterMovementLibrary("Gymnastics", "bar muscle").map((movement) => movement.id).includes("bar-muscle-up"), true);
+  assert.equal(filterMovementLibrary("Weightlifting", "snatch").some((movement) => movement.id === "snatch"), true);
+  assert.equal(filterMovementLibrary("Gymnastics", "snatch").length, 0);
 });
 
 test("generated programme migration refreshes old WOD schema without changing IDs", () => {

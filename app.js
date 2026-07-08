@@ -99,6 +99,315 @@ const WEAKNESS_LABELS = {
   t2b: "Toes-to-bar"
 };
 
+function crossFitVideoSearch(query) {
+  return `https://www.youtube.com/@CrossFit/search?query=${encodeURIComponent(query)}`;
+}
+
+const CROSSFIT_MOVEMENT_SOURCE = "https://www.crossfit.com/essentials/movements";
+
+const MOVEMENT_LIBRARY = [
+  {
+    id: "strict-pull-up",
+    name: "Strict pull-up",
+    category: "Gymnastics",
+    level: "Base strength",
+    focus: "Build the pulling strength that makes kipping and chest-to-bar safer.",
+    cues: ["Start from an active hang.", "Pull elbows toward the ribs.", "Finish chin clearly over the bar."],
+    progressions: ["Ring row", "Band-assisted strict pull-up", "Eccentric pull-up", "Strict pull-up"],
+    scale: "Ring rows or banded strict pull-ups.",
+    videoUrl: crossFitVideoSearch("strict pull-up CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  },
+  {
+    id: "kipping-pull-up",
+    name: "Kipping pull-up",
+    category: "Gymnastics",
+    level: "Intermediate",
+    focus: "Use a controlled hollow-to-arch swing before adding speed.",
+    cues: ["Keep arms long through the swing.", "Snap from arch to hollow.", "Press away from the bar on the way down."],
+    progressions: ["Beat swing", "Kip swing with active shoulders", "Single kipping pull-up", "Small sets"],
+    scale: "Beat swings, jumping pull-ups, or strict volume.",
+    videoUrl: crossFitVideoSearch("kipping pull-up CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  },
+  {
+    id: "chest-to-bar",
+    name: "Chest-to-bar pull-up",
+    category: "Gymnastics",
+    level: "Intermediate",
+    focus: "Add range of motion and a stronger pull without losing rhythm.",
+    cues: ["Open the shoulders in the arch.", "Drive hips before pulling.", "Pull the bar to the lower chest."],
+    progressions: ["Kip swing", "Kipping pull-up", "Banded chest-to-bar", "Singles and doubles"],
+    scale: "Chin-over-bar pull-ups, banded chest-to-bar, or ring rows.",
+    videoUrl: crossFitVideoSearch("chest-to-bar pull-up CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  },
+  {
+    id: "toes-to-bar",
+    name: "Toes-to-bar",
+    category: "Gymnastics",
+    level: "Intermediate",
+    focus: "Connect lats and abs so the feet rise without a wild swing.",
+    cues: ["Stay long in the arch.", "Press down on the bar.", "Close fast and push away after contact."],
+    progressions: ["Hanging knee raise", "Kip swing", "Knees-to-elbows", "Toes-to-bar singles"],
+    scale: "Knees-to-chest, hanging knee raises, or lying leg raises.",
+    videoUrl: crossFitVideoSearch("toes-to-bar CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  },
+  {
+    id: "bar-muscle-up",
+    name: "Bar muscle-up",
+    category: "Gymnastics",
+    level: "Advanced",
+    focus: "Turn a strong kip and close pull into a fast turnover above the bar.",
+    cues: ["Keep the bar close.", "Drive hips toward the bar.", "Turn over with fast elbows and press tall."],
+    progressions: ["Chest-to-bar", "Box bar muscle-up transition", "Banded turnover", "Singles"],
+    scale: "Jumping bar muscle-ups, banded transitions, or chest-to-bar pull-ups.",
+    videoUrl: crossFitVideoSearch("bar muscle-up CrossFit tutorial"),
+    sourceUrl: "https://www.crossfit.com/essentials/the-muscle-up"
+  },
+  {
+    id: "ring-muscle-up",
+    name: "Ring muscle-up",
+    category: "Gymnastics",
+    level: "Advanced",
+    focus: "Combine false grip strength, a high pull, and a close ring transition.",
+    cues: ["Keep rings close to the body.", "Pull low to the ribs.", "Sit through the transition before the dip."],
+    progressions: ["False grip hang", "Low-ring transition", "Strict ring dip", "Assisted ring muscle-up"],
+    scale: "Low-ring transitions, banded ring muscle-ups, or ring rows plus dips.",
+    videoUrl: crossFitVideoSearch("ring muscle-up CrossFit tutorial"),
+    sourceUrl: "https://www.crossfit.com/essentials/the-muscle-up"
+  },
+  {
+    id: "ring-dip",
+    name: "Ring dip",
+    category: "Gymnastics",
+    level: "Strength",
+    focus: "Own support stability before adding depth or volume.",
+    cues: ["Lock out with rings close.", "Lower under control.", "Keep shoulders away from the ears."],
+    progressions: ["Top support hold", "Eccentric ring dip", "Banded ring dip", "Strict ring dip"],
+    scale: "Box dips, banded ring dips, or push-ups.",
+    videoUrl: crossFitVideoSearch("ring dip CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  },
+  {
+    id: "handstand-push-up",
+    name: "Handstand push-up",
+    category: "Gymnastics",
+    level: "Intermediate",
+    focus: "Stack the body, control the descent, and finish with a locked-out line.",
+    cues: ["Hands just outside shoulder width.", "Lower head between the hands.", "Press through and finish ribs down."],
+    progressions: ["Pike push-up", "Wall walk hold", "Strict negative", "Kipping handstand push-up"],
+    scale: "Pike push-ups, box handstand push-ups, or dumbbell strict press.",
+    videoUrl: crossFitVideoSearch("handstand push-up CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  },
+  {
+    id: "handstand-walk",
+    name: "Handstand walk",
+    category: "Gymnastics",
+    level: "Advanced",
+    focus: "Balance comes from a stacked line, fingertip pressure, and small steps.",
+    cues: ["Push tall through the floor.", "Keep ribs tucked.", "Shift weight before moving the hands."],
+    progressions: ["Wall walk", "Shoulder taps", "Box weight shifts", "Short freestanding walks"],
+    scale: "Wall walks, bear crawls, or handstand shoulder taps.",
+    videoUrl: crossFitVideoSearch("handstand walk CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  },
+  {
+    id: "rope-climb",
+    name: "Rope climb",
+    category: "Gymnastics",
+    level: "Intermediate",
+    focus: "Use the feet first so the arms do not become the limiter.",
+    cues: ["Jump high and lock the feet.", "Stand before pulling.", "Reach long, then re-clamp."],
+    progressions: ["Foot lock drill", "Rope pull from floor", "Half rope climb", "Full rope climb"],
+    scale: "Rope pulls from the floor or towel pull-ups.",
+    videoUrl: crossFitVideoSearch("rope climb CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  },
+  {
+    id: "pistol-squat",
+    name: "Pistol squat",
+    category: "Gymnastics",
+    level: "Intermediate",
+    focus: "Develop single-leg control through the whole range without collapsing the knee.",
+    cues: ["Keep the working foot rooted.", "Reach the free leg forward.", "Stand through the midfoot."],
+    progressions: ["Box pistol", "Counterweight pistol", "Assisted pistol", "Alternating pistols"],
+    scale: "Box pistols, step-ups, or assisted pistols.",
+    videoUrl: crossFitVideoSearch("pistol squat CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  },
+  {
+    id: "back-squat",
+    name: "Back squat",
+    category: "Weightlifting",
+    level: "Strength",
+    focus: "Build lower-body strength with a stable brace and full-foot pressure.",
+    cues: ["Brace before the descent.", "Knees track over toes.", "Drive the floor away to stand."],
+    progressions: ["Air squat", "Tempo goblet squat", "Light back squat", "Working sets"],
+    scale: "Goblet squat, box squat, or reduced range of motion.",
+    videoUrl: crossFitVideoSearch("back squat CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  },
+  {
+    id: "front-squat",
+    name: "Front squat",
+    category: "Weightlifting",
+    level: "Strength",
+    focus: "Train upright squatting and front-rack positions for cleans and thrusters.",
+    cues: ["Elbows high.", "Stay tall through the torso.", "Keep pressure through the whole foot."],
+    progressions: ["Goblet squat", "Front-rack hold", "Tempo front squat", "Front squat"],
+    scale: "Goblet squat, cross-arm front squat, or box front squat.",
+    videoUrl: crossFitVideoSearch("front squat CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  },
+  {
+    id: "overhead-squat",
+    name: "Overhead squat",
+    category: "Weightlifting",
+    level: "Mobility and strength",
+    focus: "Own the overhead position while squatting with control.",
+    cues: ["Press up into the bar.", "Keep armpits forward.", "Sit straight down between the heels."],
+    progressions: ["PVC pass-through", "PVC overhead squat", "Snatch balance", "Loaded overhead squat"],
+    scale: "PVC overhead squat, front squat, or reduced range.",
+    videoUrl: crossFitVideoSearch("overhead squat CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  },
+  {
+    id: "deadlift",
+    name: "Deadlift",
+    category: "Weightlifting",
+    level: "Strength",
+    focus: "Create a strong hinge pattern for pulling from the floor.",
+    cues: ["Bar over midfoot.", "Lats tight before the bar leaves.", "Hips and shoulders rise together."],
+    progressions: ["Kettlebell deadlift", "Romanian deadlift", "Tempo deadlift", "Working deadlift"],
+    scale: "Kettlebell deadlift, raised bar deadlift, or lighter sets.",
+    videoUrl: crossFitVideoSearch("deadlift CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  },
+  {
+    id: "shoulder-press",
+    name: "Shoulder press",
+    category: "Weightlifting",
+    level: "Base strength",
+    focus: "Build strict overhead strength without using the legs.",
+    cues: ["Squeeze legs and glutes.", "Move the head back, then through.", "Finish with biceps by the ears."],
+    progressions: ["Dumbbell strict press", "Barbell strict press", "Tempo strict press", "Heavy sets"],
+    scale: "Dumbbell strict press or seated press.",
+    videoUrl: crossFitVideoSearch("shoulder press CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  },
+  {
+    id: "push-press",
+    name: "Push press",
+    category: "Weightlifting",
+    level: "Power",
+    focus: "Transfer leg drive into the bar while keeping the torso vertical.",
+    cues: ["Dip straight down.", "Drive hard with the legs.", "Press after the hips open."],
+    progressions: ["Dip-drive drill", "Dumbbell push press", "Light barbell push press", "Cycling sets"],
+    scale: "Dumbbell push press or lighter barbell loads.",
+    videoUrl: crossFitVideoSearch("push press CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  },
+  {
+    id: "push-jerk",
+    name: "Push jerk",
+    category: "Weightlifting",
+    level: "Power",
+    focus: "Drive the bar up, then receive it with locked arms and bent knees.",
+    cues: ["Dip vertical.", "Punch under the bar.", "Stand to finish before lowering."],
+    progressions: ["Jump and land drill", "Tall jerk", "Push jerk from rack", "Cycling push jerks"],
+    scale: "Push press or light technique triples.",
+    videoUrl: crossFitVideoSearch("push jerk CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  },
+  {
+    id: "split-jerk",
+    name: "Split jerk",
+    category: "Weightlifting",
+    level: "Olympic lifting",
+    focus: "Receive heavy loads overhead with a balanced split stance.",
+    cues: ["Dip and drive vertical.", "Punch up as the feet split.", "Recover front foot, then back foot."],
+    progressions: ["Jerk footwork", "Tall split jerk", "Paused split jerk", "Split jerk"],
+    scale: "Push jerk, power jerk, or footwork with an empty bar.",
+    videoUrl: crossFitVideoSearch("split jerk CrossFit tutorial"),
+    sourceUrl: "https://www.crossfit.com/essentials/the-clean-and-jerk"
+  },
+  {
+    id: "clean",
+    name: "Clean",
+    category: "Weightlifting",
+    level: "Olympic lifting",
+    focus: "Move the bar from the floor to the front rack with speed and a strong catch.",
+    cues: ["Push the floor away.", "Keep the bar close.", "Receive with elbows fast and high."],
+    progressions: ["Clean deadlift", "Hang power clean", "Front squat", "Squat clean"],
+    scale: "Hang clean, power clean, or medicine-ball clean.",
+    videoUrl: crossFitVideoSearch("clean CrossFit tutorial"),
+    sourceUrl: "https://www.crossfit.com/essentials/the-clean-and-jerk"
+  },
+  {
+    id: "power-clean",
+    name: "Power clean",
+    category: "Weightlifting",
+    level: "Olympic lifting",
+    focus: "Catch the bar above parallel with a fast turnover.",
+    cues: ["Finish the pull.", "Move elbows around quickly.", "Meet the bar with a partial squat."],
+    progressions: ["Clean pull", "Hang power clean", "Tall power clean", "Power clean"],
+    scale: "Hang power clean or medicine-ball clean.",
+    videoUrl: crossFitVideoSearch("power clean CrossFit tutorial"),
+    sourceUrl: "https://www.crossfit.com/essentials/the-clean-and-jerk"
+  },
+  {
+    id: "clean-and-jerk",
+    name: "Clean and jerk",
+    category: "Weightlifting",
+    level: "Olympic lifting",
+    focus: "Combine a stable clean with a decisive overhead finish.",
+    cues: ["Reset the brace after the clean.", "Dip vertical.", "Lock out before recovering the feet."],
+    progressions: ["Clean", "Front squat", "Push jerk", "Clean and jerk singles"],
+    scale: "Power clean and push press, or clean plus push jerk.",
+    videoUrl: crossFitVideoSearch("clean and jerk CrossFit tutorial"),
+    sourceUrl: "https://www.crossfit.com/essentials/the-clean-and-jerk"
+  },
+  {
+    id: "snatch",
+    name: "Snatch",
+    category: "Weightlifting",
+    level: "Olympic lifting",
+    focus: "Move the bar from floor to overhead in one fast, balanced motion.",
+    cues: ["Stay patient to the knee.", "Jump vertically.", "Punch under and stabilize overhead."],
+    progressions: ["Burgener warm-up", "Hang power snatch", "Overhead squat", "Squat snatch"],
+    scale: "Hang power snatch, dumbbell snatch, or PVC technique work.",
+    videoUrl: crossFitVideoSearch("snatch CrossFit tutorial"),
+    sourceUrl: "https://www.crossfit.com/essentials/the-snatch"
+  },
+  {
+    id: "power-snatch",
+    name: "Power snatch",
+    category: "Weightlifting",
+    level: "Olympic lifting",
+    focus: "Receive the snatch above parallel with speed and stable shoulders.",
+    cues: ["Keep the bar close.", "Finish tall.", "Punch up as the feet move."],
+    progressions: ["Snatch high pull", "Hang power snatch", "Tall power snatch", "Power snatch"],
+    scale: "Dumbbell snatch, hang power snatch, or PVC drills.",
+    videoUrl: crossFitVideoSearch("power snatch CrossFit tutorial"),
+    sourceUrl: "https://www.crossfit.com/essentials/the-snatch"
+  },
+  {
+    id: "thruster",
+    name: "Thruster",
+    category: "Weightlifting",
+    level: "CrossFit staple",
+    focus: "Blend a front squat and push press into one smooth rep.",
+    cues: ["Elbows stay high in the squat.", "Drive out of the legs.", "Finish locked out overhead."],
+    progressions: ["Front squat", "Push press", "Pause thruster", "Cycling thrusters"],
+    scale: "Dumbbell thruster, lighter barbell, or front squat plus push press.",
+    videoUrl: crossFitVideoSearch("thruster CrossFit tutorial"),
+    sourceUrl: CROSSFIT_MOVEMENT_SOURCE
+  }
+];
+
 const WOD_SCHEMA_VERSION = 2;
 
 const canUseDOM = typeof document !== "undefined";
@@ -119,6 +428,9 @@ const elements = canUseDOM ? {
   profileForm: document.querySelector("#profileForm"),
   programmeGeneratorForm: document.querySelector("#programmeGeneratorForm"),
   customPlanForm: document.querySelector("#customPlanForm"),
+  movementCategory: document.querySelector("#movementCategory"),
+  movementSearch: document.querySelector("#movementSearch"),
+  movementLibrary: document.querySelector("#movementLibrary"),
   logForm: document.querySelector("#logForm"),
   prForm: document.querySelector("#prForm"),
   customProgramList: document.querySelector("#customProgramList"),
@@ -351,6 +663,9 @@ function bindEvents() {
     showToast("Training session saved.");
   });
 
+  elements.movementCategory.addEventListener("change", renderMovementLibrary);
+  elements.movementSearch.addEventListener("input", renderMovementLibrary);
+
   elements.logForm.addEventListener("submit", (event) => {
     event.preventDefault();
     const data = new FormData(elements.logForm);
@@ -474,6 +789,7 @@ function renderAll() {
   renderDashboard();
   renderProgramme();
   renderCustomPlans();
+  renderMovementLibrary();
   renderLogs();
   renderPrs();
 }
@@ -644,6 +960,70 @@ function renderSegment(segment) {
         ${segment.items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
       </ul>
     </section>
+  `;
+}
+
+function renderMovementLibrary() {
+  const category = elements.movementCategory.value || "all";
+  const query = elements.movementSearch.value || "";
+  const movements = filterMovementLibrary(category, query);
+
+  if (!movements.length) {
+    elements.movementLibrary.innerHTML = `<div class="empty-state">No movements found. Try a different search or category.</div>`;
+    return;
+  }
+
+  elements.movementLibrary.innerHTML = movements.map(renderMovementCard).join("");
+}
+
+function filterMovementLibrary(category = "all", query = "") {
+  const normalizedQuery = String(query).trim().toLowerCase();
+  return MOVEMENT_LIBRARY.filter((movement) => {
+    const matchesCategory = category === "all" || movement.category === category;
+    const searchable = [
+      movement.name,
+      movement.category,
+      movement.level,
+      movement.focus,
+      movement.scale,
+      ...movement.cues,
+      ...movement.progressions
+    ].join(" ").toLowerCase();
+    return matchesCategory && (!normalizedQuery || searchable.includes(normalizedQuery));
+  });
+}
+
+function renderMovementCard(movement) {
+  return `
+    <article class="movement-card">
+      <div class="movement-card-header">
+        <div>
+          <p class="eyebrow">${escapeHtml(movement.category)}</p>
+          <h3>${escapeHtml(movement.name)}</h3>
+        </div>
+        <span class="tag">${escapeHtml(movement.level)}</span>
+      </div>
+      <p class="muted-copy">${escapeHtml(movement.focus)}</p>
+      <div class="movement-detail-grid">
+        <section>
+          <h4>Cues</h4>
+          <ul>
+            ${movement.cues.map((cue) => `<li>${escapeHtml(cue)}</li>`).join("")}
+          </ul>
+        </section>
+        <section>
+          <h4>Progression</h4>
+          <ul>
+            ${movement.progressions.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}
+          </ul>
+        </section>
+      </div>
+      <p class="movement-scale"><strong>Scale:</strong> ${escapeHtml(movement.scale)}</p>
+      <div class="quick-actions">
+        <a class="primary-button movement-link" href="${escapeHtml(movement.videoUrl)}" target="_blank" rel="noopener noreferrer">Open video</a>
+        <a class="ghost-button movement-link" href="${escapeHtml(movement.sourceUrl)}" target="_blank" rel="noopener noreferrer">Source</a>
+      </div>
+    </article>
   `;
 }
 
@@ -1515,6 +1895,7 @@ function registerServiceWorker() {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     DEFAULT_PROFILE,
+    MOVEMENT_LIBRARY,
     PR_METRICS,
     WEEK_META,
     buildSession,
@@ -1522,6 +1903,7 @@ if (typeof module !== "undefined" && module.exports) {
     clamp,
     cloneDefaultProfile,
     customPlanSegments,
+    filterMovementLibrary,
     formatPrValue,
     getProgramDays,
     isBetterPr,

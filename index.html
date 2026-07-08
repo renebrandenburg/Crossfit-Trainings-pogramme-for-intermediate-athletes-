@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#10120f">
-    <meta name="description" content="An 8-week phone-first CrossFit programme generator, custom builder, and PR tracker for intermediate athletes.">
+    <meta name="description" content="An 8-week phone-first CrossFit programme generator, movement library, custom builder, and PR tracker for intermediate athletes.">
     <title>Forge Hour</title>
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="stylesheet" href="./styles.css">
@@ -205,6 +205,40 @@
           </section>
         </section>
 
+        <section id="learnView" class="view" aria-labelledby="learnTitle">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Movement library</p>
+              <h2 id="learnTitle">Learn the skills</h2>
+            </div>
+          </div>
+
+          <section class="panel movement-controls" aria-labelledby="movementFilterTitle">
+            <div class="panel-title">
+              <div>
+                <p class="eyebrow">Video guides</p>
+                <h3 id="movementFilterTitle">Gymnastics and lifting</h3>
+              </div>
+            </div>
+            <div class="movement-filters">
+              <label>
+                Category
+                <select id="movementCategory" aria-label="Movement category">
+                  <option value="all">All movements</option>
+                  <option value="Gymnastics">Gymnastics</option>
+                  <option value="Weightlifting">Weightlifting</option>
+                </select>
+              </label>
+              <label>
+                Search
+                <input id="movementSearch" type="search" autocomplete="off" placeholder="Bar muscle-up, snatch, rope climb">
+              </label>
+            </div>
+          </section>
+
+          <div id="movementLibrary" class="movement-grid"></div>
+        </section>
+
         <section id="logView" class="view" aria-labelledby="logTitle">
           <div class="section-heading">
             <div>
@@ -327,6 +361,7 @@
         <button class="nav-button is-active" type="button" data-view="dashboardView">Home</button>
         <button class="nav-button" type="button" data-view="programView">Plan</button>
         <button class="nav-button" type="button" data-view="builderView">Build</button>
+        <button class="nav-button" type="button" data-view="learnView">Learn</button>
         <button class="nav-button" type="button" data-view="logView">Log</button>
         <button class="nav-button" type="button" data-view="prView">PRs</button>
       </nav>

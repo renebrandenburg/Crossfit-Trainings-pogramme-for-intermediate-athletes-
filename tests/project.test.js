@@ -21,10 +21,11 @@ test("HTML contains the main app surfaces and asset references", () => {
   assert.match(html, /id="dashboardView"/);
   assert.match(html, /id="programView"/);
   assert.match(html, /id="builderView"/);
+  assert.match(html, /id="learnView"/);
   assert.match(html, /id="logView"/);
   assert.match(html, /id="prView"/);
   assert.match(html, /Eight-week cycle/);
-  assert.equal(navButtonCount, 5);
+  assert.equal(navButtonCount, 6);
 });
 
 test("builder form has the required fields for a full CrossFit session", () => {
@@ -56,6 +57,17 @@ test("builder form has the required fields for a full CrossFit session", () => {
   assert.match(html, /Better gymnastics/);
 });
 
+test("movement library surface exposes search and category filters", () => {
+  const html = read("index.html");
+
+  assert.match(html, /id="movementCategory"/);
+  assert.match(html, /id="movementSearch"/);
+  assert.match(html, /id="movementLibrary"/);
+  assert.match(html, /Gymnastics/);
+  assert.match(html, /Weightlifting/);
+  assert.match(html, /Learn/);
+});
+
 test("manifest is valid JSON and points to an existing icon", () => {
   const manifest = JSON.parse(read("manifest.webmanifest"));
   const icon = manifest.icons[0];
@@ -71,7 +83,7 @@ test("service worker caches the files needed to run offline", () => {
   const serviceWorker = read("sw.js");
   const assets = ["index.html", "styles.css", "app.js", "manifest.webmanifest", "icon.svg"];
 
-  assert.match(serviceWorker, /forge-hour-v5/);
+  assert.match(serviceWorker, /forge-hour-v6/);
 
   for (const asset of assets) {
     assert.match(serviceWorker, new RegExp(`"\\./${asset}"`));
@@ -86,6 +98,7 @@ test("project documentation describes the current feature set", () => {
   assert.match(readme, /Needs-based programme generator/);
   assert.match(readme, /WOD variation/);
   assert.match(readme, /Manual training programme builder/);
+  assert.match(readme, /Movement library/);
   assert.match(readme, /python3 -m http\.server 4173/);
   assert.match(readme, /GitHub Pages/);
 });
