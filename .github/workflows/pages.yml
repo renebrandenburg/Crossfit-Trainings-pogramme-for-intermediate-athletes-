@@ -30,13 +30,17 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Run tests
         run: npm test
 
       - name: Prepare static site
         run: |
-          mkdir dist
+          mkdir -p dist
           cp index.html styles.css app.js supabase-config.js supabase-sync.js react-app.js manifest.webmanifest sw.js icon.svg dist/
 
       - name: Configure GitHub Pages
