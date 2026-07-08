@@ -1,0 +1,9 @@
+{
+  "name": "crossfit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Phone-first CrossFit programme, custom builder, and PR tracker.",
+  "scripts": {
+    "test": "node --test"
+  }
+}

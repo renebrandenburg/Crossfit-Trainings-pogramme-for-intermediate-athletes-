@@ -185,7 +185,8 @@ button {
   font-size: 1.08rem;
 }
 
-.day-list {
+.day-list,
+.custom-list {
   display: grid;
   gap: 12px;
 }
@@ -260,6 +261,7 @@ button {
 
 .quick-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
 }
@@ -301,6 +303,7 @@ form {
 }
 
 .profile-grid button,
+.builder-form button,
 .log-form button,
 .pr-form button {
   width: 100%;
@@ -386,7 +389,7 @@ textarea:focus {
   left: 0;
   z-index: 20;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
   width: min(100%, 860px);
   margin: 0 auto;
@@ -473,7 +476,8 @@ textarea:focus {
     padding-top: 24px;
   }
 
-  .day-list {
+  .day-list,
+  .custom-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

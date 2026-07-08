@@ -40,6 +40,26 @@ const WEEK_META = [
     week: 4,
     title: "Week 4 - deload and control",
     note: "Lower fatigue, more skill quality, and a simple 1 km row check-in."
+  },
+  {
+    week: 5,
+    title: "Week 5 - second build",
+    note: "Start the second wave slightly heavier than week 2, but keep gymnastics submaximal."
+  },
+  {
+    week: 6,
+    title: "Week 6 - strength emphasis",
+    note: "Heavier doubles and sharper intervals. Scale the WOD before you let barbell positions degrade."
+  },
+  {
+    week: 7,
+    title: "Week 7 - peak exposure",
+    note: "Highest intensity week. Chase clean reps, controlled misses, and repeatable metcon pacing."
+  },
+  {
+    week: 8,
+    title: "Week 8 - deload and tests",
+    note: "Reduce volume, test selected benchmarks, and use the results to set the next cycle."
   }
 ];
 
@@ -62,35 +82,63 @@ const READINESS_LABELS = {
   red: "Red"
 };
 
+const GOAL_LABELS = {
+  stronger: "Get stronger",
+  endurance: "More endurance",
+  gymnastics: "Better gymnastics",
+  balanced: "All-round CrossFit"
+};
+
+const WEAKNESS_LABELS = {
+  squat: "Squat strength",
+  olympic: "Olympic lifting",
+  rowing: "Rowing engine",
+  running: "Running stamina",
+  pulling: "Pull-ups and chest-to-bar",
+  muscleup: "Muscle-up skill",
+  t2b: "Toes-to-bar"
+};
+
+const WOD_SCHEMA_VERSION = 2;
+
+const canUseDOM = typeof document !== "undefined";
 const state = loadState();
 
-const elements = {
+const elements = canUseDOM ? {
   views: Array.from(document.querySelectorAll(".view")),
   navButtons: Array.from(document.querySelectorAll(".nav-button")),
   dashboardWeek: document.querySelector("#dashboardWeek"),
   programWeek: document.querySelector("#programWeek"),
   logWeek: document.querySelector("#logWeek"),
   logDay: document.querySelector("#logDay"),
+  customPlanWeek: document.querySelector("#customPlanWeek"),
   statsGrid: document.querySelector("#statsGrid"),
   nextSession: document.querySelector("#nextSession"),
   programList: document.querySelector("#programList"),
   weekNote: document.querySelector("#weekNote"),
   profileForm: document.querySelector("#profileForm"),
+  programmeGeneratorForm: document.querySelector("#programmeGeneratorForm"),
+  customPlanForm: document.querySelector("#customPlanForm"),
   logForm: document.querySelector("#logForm"),
   prForm: document.querySelector("#prForm"),
+  customProgramList: document.querySelector("#customProgramList"),
   recentLogs: document.querySelector("#recentLogs"),
   prGrid: document.querySelector("#prGrid"),
   prMetric: document.querySelector("#prMetric"),
   prHistory: document.querySelector("#prHistory"),
+  clearCustomPlans: document.querySelector("#clearCustomPlans"),
   clearLogs: document.querySelector("#clearLogs"),
   resetDemoData: document.querySelector("#resetDemoData"),
   toast: document.querySelector("#toast")
-};
+} : {};
 
-init();
+if (canUseDOM) {
+  init();
+}
 
 function init() {
   seedPrs();
+  migrateStoredGeneratedPlans();
   populateStaticSelects();
   bindEvents();
   setDefaultDates();
@@ -102,12 +150,14 @@ function loadState() {
   const fallback = {
     profile: cloneDefaultProfile(),
     logs: [],
+    customPlans: [],
     prs: {},
     prAttempts: [],
     selectedWeek: 1
   };
 
   try {
+    if (typeof localStorage === "undefined") return fallback;
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
@@ -134,6 +184,7 @@ function loadState() {
 }
 
 function saveState() {
+  if (typeof localStorage === "undefined") return;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
@@ -142,8 +193,9 @@ function cloneDefaultProfile() {
 }
 
 function createId() {
-  if (window.crypto && typeof window.crypto.randomUUID === "function") {
-    return window.crypto.randomUUID();
+  const cryptoSource = typeof globalThis !== "undefined" ? globalThis.crypto : undefined;
+  if (cryptoSource && typeof cryptoSource.randomUUID === "function") {
+    return cryptoSource.randomUUID();
   }
   return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -179,20 +231,41 @@ function syncBaselinePrsFromProfile() {
   });
 }
 
+function migrateStoredGeneratedPlans() {
+  const migration = migrateGeneratedProgrammePlans(state.customPlans, state.profile);
+  if (!migration.migrated) return;
+  state.customPlans = migration.plans;
+  saveState();
+}
+
 function populateStaticSelects() {
   const weekOptions = WEEK_META.map((week) => `<option value="${week.week}">Week ${week.week}</option>`).join("");
-  [elements.dashboardWeek, elements.programWeek, elements.logWeek].forEach((select) => {
+  [elements.dashboardWeek, elements.programWeek, elements.logWeek, elements.customPlanWeek].forEach((select) => {
     select.innerHTML = weekOptions;
     select.value = String(state.selectedWeek);
   });
 
-  elements.logDay.innerHTML = getProgramDays().map((day) => {
-    return `<option value="${day.id}">${day.weekday} - ${day.shortTitle}</option>`;
-  }).join("");
+  renderLogSessionOptions();
 
   elements.prMetric.innerHTML = PR_METRICS.map((metric) => {
     return `<option value="${metric.id}">${metric.name}</option>`;
   }).join("");
+}
+
+function renderLogSessionOptions() {
+  const mainOptions = getProgramDays().map((day) => {
+    return `<option value="${day.id}">${day.weekday} - ${day.shortTitle}</option>`;
+  }).join("");
+  const customOptions = state.customPlans.map((plan) => {
+    return `<option value="${plan.id}">Custom W${plan.week}: ${escapeHtml(plan.title)}</option>`;
+  }).join("");
+
+  elements.logDay.innerHTML = `
+    <optgroup label="Forge Hour">
+      ${mainOptions}
+    </optgroup>
+    ${customOptions ? `<optgroup label="My programme">${customOptions}</optgroup>` : ""}
+  `;
 }
 
 function bindEvents() {
@@ -223,14 +296,74 @@ function bindEvents() {
     showToast("Training maxes saved.");
   });
 
+  elements.programmeGeneratorForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(elements.programmeGeneratorForm);
+    const options = {
+      goal: String(data.get("generatorGoal") || "stronger"),
+      daysPerWeek: Number(data.get("generatorDays") || 4),
+      weakness: String(data.get("generatorWeakness") || "squat"),
+      duration: positiveNumber(data.get("generatorDuration"), 60)
+    };
+    const generatedPlans = buildGeneratedProgramme(options, state.profile, createId);
+
+    if (data.get("replaceGenerated")) {
+      state.customPlans = state.customPlans.filter((plan) => !plan.generated);
+    }
+
+    state.customPlans = [...generatedPlans, ...state.customPlans];
+    state.selectedWeek = 1;
+    saveState();
+    renderAll();
+    showToast(`Generated ${generatedPlans.length} sessions.`);
+  });
+
+  elements.customPlanForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(elements.customPlanForm);
+    const title = String(data.get("customPlanTitle") || "").trim();
+    if (!title) {
+      showToast("Add a title for the training session.");
+      return;
+    }
+
+    const duration = Math.min(90, Math.max(15, positiveNumber(data.get("customPlanDuration"), 60)));
+    const plan = {
+      id: createId(),
+      week: Number(data.get("customPlanWeek")),
+      title,
+      focus: String(data.get("customPlanFocus") || "Custom training session").trim(),
+      warmup: splitLines(data.get("customPlanWarmup")),
+      strength: splitLines(data.get("customPlanStrength")),
+      wod: splitLines(data.get("customPlanWod")),
+      mobility: splitLines(data.get("customPlanMobility")),
+      duration,
+      intensity: String(data.get("customPlanIntensity") || "Moderate"),
+      createdAt: new Date().toISOString()
+    };
+
+    state.customPlans.unshift(plan);
+    saveState();
+    elements.customPlanForm.reset();
+    document.querySelector("#customPlanDuration").value = "60";
+    elements.customPlanWeek.value = String(state.selectedWeek);
+    renderAll();
+    showToast("Training session saved.");
+  });
+
   elements.logForm.addEventListener("submit", (event) => {
     event.preventDefault();
     const data = new FormData(elements.logForm);
-    const day = getProgramDays().find((item) => item.id === data.get("logDay"));
+    const day = findTrainingSession(String(data.get("logDay")), Number(data.get("logWeek")));
+    if (!day) {
+      showToast("Choose a valid session to log.");
+      return;
+    }
+    const logWeek = day.week || Number(data.get("logWeek"));
     const log = {
       id: createId(),
       date: String(data.get("logDate")),
-      week: Number(data.get("logWeek")),
+      week: logWeek,
       dayId: day.id,
       dayTitle: day.shortTitle,
       readiness: String(data.get("readiness")),
@@ -302,8 +435,18 @@ function bindEvents() {
     showToast("Workout logs cleared.");
   });
 
+  elements.clearCustomPlans.addEventListener("click", () => {
+    if (!state.customPlans.length) return;
+    const confirmed = window.confirm("Clear all custom training sessions on this device?");
+    if (!confirmed) return;
+    state.customPlans = [];
+    saveState();
+    renderAll();
+    showToast("Custom programme cleared.");
+  });
+
   elements.resetDemoData.addEventListener("click", () => {
-    const confirmed = window.confirm("Reset profile, logs, and PRs on this device?");
+    const confirmed = window.confirm("Reset profile, custom sessions, logs, and PRs on this device?");
     if (!confirmed) return;
     localStorage.removeItem(STORAGE_KEY);
     window.location.reload();
@@ -315,6 +458,7 @@ function setDefaultDates() {
   document.querySelector("#logDate").value = today;
   document.querySelector("#prDate").value = today;
   elements.logWeek.value = String(state.selectedWeek);
+  elements.customPlanWeek.value = String(state.selectedWeek);
 }
 
 function activateView(viewId) {
@@ -325,15 +469,17 @@ function activateView(viewId) {
 
 function renderAll() {
   syncWeekSelects();
+  renderLogSessionOptions();
   renderProfile();
   renderDashboard();
   renderProgramme();
+  renderCustomPlans();
   renderLogs();
   renderPrs();
 }
 
 function syncWeekSelects() {
-  [elements.dashboardWeek, elements.programWeek, elements.logWeek].forEach((select) => {
+  [elements.dashboardWeek, elements.programWeek, elements.logWeek, elements.customPlanWeek].forEach((select) => {
     select.value = String(state.selectedWeek);
   });
 }
@@ -348,7 +494,8 @@ function renderProfile() {
 
 function renderDashboard() {
   const logsThisWeek = state.logs.filter((log) => log.week === state.selectedWeek);
-  const completedDays = new Set(logsThisWeek.map((log) => log.dayId)).size;
+  const mainDayIds = getProgramDays().map((day) => day.id);
+  const completedDays = new Set(logsThisWeek.filter((log) => mainDayIds.includes(log.dayId)).map((log) => log.dayId)).size;
   const latestRpe = state.logs.find((log) => log.rpe);
   const latestPr = state.prAttempts.find((attempt) => attempt.isPr);
   const weekPercent = Math.round((completedDays / 4) * 100);
@@ -427,6 +574,65 @@ function renderProgramme() {
   });
 }
 
+function renderCustomPlans() {
+  if (!state.customPlans.length) {
+    elements.customProgramList.innerHTML = `<div class="empty-state">No custom sessions yet. Build one here, then log it from the Log tab.</div>`;
+    return;
+  }
+
+  elements.customProgramList.innerHTML = state.customPlans.map((plan) => {
+    const logged = state.logs.some((log) => log.dayId === plan.id);
+    return `
+      <article class="day-card custom-card">
+        <div class="day-card-header">
+          <div>
+            <p>Week ${escapeHtml(plan.week)}</p>
+            <h3>${escapeHtml(plan.title)}</h3>
+          </div>
+          <span class="tag">${escapeHtml(plan.duration)} min</span>
+        </div>
+        <div class="day-card-body">
+          <div class="history-meta">
+            <span class="metric-pill">${escapeHtml(plan.intensity)}</span>
+            ${plan.generated ? `<span class="metric-pill">${escapeHtml(GOAL_LABELS[plan.sourceGoal] || "Generated")}</span>` : ""}
+            ${logged ? `<span class="metric-pill">Logged</span>` : ""}
+          </div>
+          <p class="muted-copy">${escapeHtml(plan.focus || "Custom training session")}</p>
+          ${customPlanSegments(plan).map(renderSegment).join("")}
+          <div class="quick-actions">
+            <button class="primary-button" type="button" data-log-custom="${plan.id}">Log session</button>
+            <button class="danger-button" type="button" data-delete-custom="${plan.id}">Delete</button>
+          </div>
+        </div>
+      </article>
+    `;
+  }).join("");
+
+  elements.customProgramList.querySelectorAll("[data-log-custom]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      const plan = state.customPlans.find((item) => item.id === event.currentTarget.dataset.logCustom);
+      if (!plan) return;
+      elements.logDay.value = plan.id;
+      elements.logWeek.value = String(plan.week);
+      activateView("logView");
+    });
+  });
+
+  elements.customProgramList.querySelectorAll("[data-delete-custom]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      const planId = event.currentTarget.dataset.deleteCustom;
+      const plan = state.customPlans.find((item) => item.id === planId);
+      if (!plan) return;
+      const confirmed = window.confirm(`Delete "${plan.title}"?`);
+      if (!confirmed) return;
+      state.customPlans = state.customPlans.filter((item) => item.id !== planId);
+      saveState();
+      renderAll();
+      showToast("Custom session deleted.");
+    });
+  });
+}
+
 function renderSegment(segment) {
   return `
     <section class="segment">
@@ -439,6 +645,16 @@ function renderSegment(segment) {
       </ul>
     </section>
   `;
+}
+
+function customPlanSegments(plan) {
+  const minutes = plan.segmentMinutes || {};
+  return [
+    { title: "Warm-up", minutes: String(minutes.warmup || 8), items: plan.warmup || [] },
+    { title: "Strength and skill", minutes: String(minutes.strength || 20), items: plan.strength || [] },
+    { title: "WOD", minutes: String(minutes.wod || 20), items: plan.wod || [] },
+    { title: "Cooldown and mobility", minutes: String(minutes.mobility || 12), items: plan.mobility || [] }
+  ].filter((segment) => segment.items.length);
 }
 
 function renderLogs() {
@@ -499,6 +715,431 @@ function statCard(value, label) {
   `;
 }
 
+function buildGeneratedProgramme(options, profile, idFactory = createId) {
+  const normalized = normalizeGeneratorOptions(options);
+  const plans = [];
+
+  for (let week = 1; week <= 8; week += 1) {
+    for (let day = 1; day <= normalized.daysPerWeek; day += 1) {
+      plans.push(buildGeneratedSession(normalized, profile, week, day, idFactory));
+    }
+  }
+
+  return plans;
+}
+
+function migrateGeneratedProgrammePlans(plans, profile) {
+  let migrated = false;
+  const nextPlans = (plans || []).map((plan) => {
+    if (!plan || !plan.generated || plan.wodSchemaVersion === WOD_SCHEMA_VERSION) return plan;
+    migrated = true;
+    const goal = GOAL_LABELS[plan.sourceGoal] ? plan.sourceGoal : "balanced";
+    const weakness = WEAKNESS_LABELS[plan.sourceWeakness] ? plan.sourceWeakness : "squat";
+    const week = clamp(parsePlanWeek(plan), 1, 8);
+    const day = clamp(parsePlanDay(plan), 1, 5);
+    const duration = clamp(roundToNearest(Number(plan.duration) || 60, 5), 45, 60);
+    const replacement = buildGeneratedSession({ goal, weakness, daysPerWeek: day, duration }, profile, week, day, () => plan.id || createId());
+
+    return {
+      ...replacement,
+      id: plan.id || replacement.id,
+      createdAt: plan.createdAt || replacement.createdAt
+    };
+  });
+
+  return { plans: nextPlans, migrated };
+}
+
+function parsePlanWeek(plan) {
+  const explicit = Number(plan.week);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const titleMatch = String(plan.title || "").match(/\bW(\d+)\b/i);
+  return titleMatch ? Number(titleMatch[1]) : 1;
+}
+
+function parsePlanDay(plan) {
+  const titleMatch = String(plan.title || "").match(/\bD(\d+)\b/i);
+  if (titleMatch) return Number(titleMatch[1]);
+  const idMatch = String(plan.id || "").match(/-d(\d+)\b/i);
+  return idMatch ? Number(idMatch[1]) : 1;
+}
+
+function normalizeGeneratorOptions(options) {
+  const goal = GOAL_LABELS[options.goal] ? options.goal : "balanced";
+  const weakness = WEAKNESS_LABELS[options.weakness] ? options.weakness : "squat";
+  const daysPerWeek = clamp(Math.round(Number(options.daysPerWeek) || 4), 3, 5);
+  const duration = clamp(roundToNearest(Number(options.duration) || 60, 5), 45, 60);
+  return { goal, weakness, daysPerWeek, duration };
+}
+
+function buildGeneratedSession(options, profile, week, day, idFactory) {
+  const phase = getGeneratedWeekPhase(week, options.goal);
+  const title = generatedDayTitle(options.goal, day);
+  const segmentMinutes = getGeneratedSegmentMinutes(options.duration, options.goal);
+
+  return {
+    id: idFactory(`generated-${options.goal}-w${week}-d${day}`),
+    week,
+    title: `W${week} D${day}: ${title}`,
+    focus: `${GOAL_LABELS[options.goal]} with ${WEAKNESS_LABELS[options.weakness].toLowerCase()} priority. ${phase.note}`,
+    warmup: generatedWarmup(options.goal, options.weakness, day),
+    strength: generatedStrengthItems(options.goal, options.weakness, day, week, profile, phase),
+    wod: generatedWodItems(options.goal, options.weakness, day, week, profile, phase, segmentMinutes.wod),
+    mobility: generatedMobility(options.weakness),
+    duration: options.duration,
+    segmentMinutes,
+    intensity: phase.intensity,
+    generated: true,
+    wodSchemaVersion: WOD_SCHEMA_VERSION,
+    sourceGoal: options.goal,
+    sourceWeakness: options.weakness,
+    createdAt: new Date().toISOString()
+  };
+}
+
+function getGeneratedWeekPhase(week, goal) {
+  const base = {
+    1: { note: "Base week: learn paces and keep 2 reps in reserve.", intensity: "Moderate", load: 0.7, oly: 0.65, front: 0.75, reps: "5x5" },
+    2: { note: "Build week: add a little load or one small set.", intensity: "Moderate", load: 0.75, oly: 0.7, front: 0.8, reps: "5x4" },
+    3: { note: "Intensity week: heavier work with cleaner breaks.", intensity: "Hard", load: 0.82, oly: 0.75, front: 0.85, reps: "6x3" },
+    4: { note: "Deload week: reduce volume and leave the gym fresher.", intensity: "Deload", load: 0.62, oly: 0.6, front: 0.68, reps: "3x5" },
+    5: { note: "Second build: restart heavier than week 1.", intensity: "Moderate", load: 0.78, oly: 0.72, front: 0.82, reps: "5x3" },
+    6: { note: "Overload week: lower reps, higher focus.", intensity: "Hard", load: 0.85, oly: 0.8, front: 0.87, reps: "6x2" },
+    7: { note: "Peak week: heavy singles or doubles without grinding.", intensity: "Hard", load: 0.9, oly: 0.85, front: 0.9, reps: "5x2" },
+    8: { note: "Test week: lower volume and benchmark one priority.", intensity: "Test", load: 0.7, oly: 0.75, front: 0.75, reps: "3x3" }
+  }[week];
+
+  if (goal === "endurance") return { ...base, load: Math.max(0.55, base.load - 0.08), front: Math.max(0.6, base.front - 0.08) };
+  if (goal === "stronger") return { ...base, load: Math.min(0.92, base.load + 0.03), front: Math.min(0.92, base.front + 0.02) };
+  return base;
+}
+
+function generatedDayTitle(goal, day) {
+  const titles = {
+    stronger: ["Squat strength", "Olympic lift strength", "Front squat and pull", "Upper strength plus WOD", "Weakness strength"],
+    endurance: ["Aerobic base", "Row intervals", "Threshold mixed", "Longer engine", "Zone 2 plus mobility"],
+    gymnastics: ["Pulling volume", "Toes-to-bar and core", "Muscle-up transition", "Inverted skill plus WOD", "Weakness skill"],
+    balanced: ["Squat plus short WOD", "Snatch plus rowing", "Clean and jerk plus pull", "Gymnastics plus long WOD", "Weakness day"]
+  };
+  return titles[goal][day - 1] || titles.balanced[day - 1];
+}
+
+function getGeneratedSegmentMinutes(duration, goal) {
+  const warmup = duration >= 55 ? 8 : 7;
+  const mobility = duration >= 55 ? 8 : 6;
+  const available = duration - warmup - mobility;
+  const strengthRatio = { stronger: 0.58, endurance: 0.35, gymnastics: 0.55, balanced: 0.48 }[goal] || 0.48;
+  const strength = Math.round(available * strengthRatio);
+  return {
+    warmup,
+    strength,
+    wod: available - strength,
+    mobility
+  };
+}
+
+function generatedWarmup(goal, weakness, day) {
+  const bias = goal === "endurance" ? "bike, row, or easy run" : "row or bike";
+  return [
+    `Easy ${bias} with nasal breathing`,
+    "Dynamic hips, ankles, T-spine, and shoulders",
+    `${WEAKNESS_LABELS[weakness]} prep: ${weaknessPrep(weakness)}`,
+    day % 2 === 0 ? "Empty-bar or banded movement rehearsal" : "Core brace and kip rhythm primer"
+  ];
+}
+
+function generatedStrengthItems(goal, weakness, day, week, profile, phase) {
+  const backSquat = `Back squat ${phase.reps} at ${percent(phase.load)} (${kg(profile.maxes.backSquat, phase.load)})`;
+  const frontSquat = `Front squat ${phase.reps} at ${percent(phase.front)} (${kg(profile.maxes.frontSquat, phase.front)})`;
+  const snatch = `Snatch technique 6x2 at ${percent(phase.oly)} (${kg(profile.maxes.snatch, phase.oly)})`;
+  const cleanJerk = `Clean and jerk 8x1 at ${percent(phase.oly)} (${kg(profile.maxes.cleanJerk, phase.oly)})`;
+  const gymnastics = gymnasticsSkillBlock(weakness, week);
+
+  const templates = {
+    stronger: [
+      [backSquat, weaknessAccessory(weakness, week)],
+      [snatch, `Clean pull 4x3 at ${kg(profile.maxes.cleanJerk, phase.oly + 0.2)}`],
+      [cleanJerk, frontSquat],
+      ["Strict press or weighted dip 5x5", gymnastics],
+      [backSquat, weaknessAccessory(weakness, week)]
+    ],
+    endurance: [
+      [`Back squat 4x3 at ${percent(phase.load)} (${kg(profile.maxes.backSquat, phase.load)})`, "Then 6 min smooth sled, bike, or step-up flush"],
+      [`Row skill: 6x250 m at controlled stroke rate`, weaknessAccessory(weakness, week)],
+      [cleanJerk, "Tempo front rack lunges 3x8 per leg"],
+      ["Mixed engine skill: transitions and breathing practice", gymnastics],
+      ["Zone 2 strength circuit: 3 rounds easy KB deadlift, ring row, carry", weaknessAccessory(weakness, week)]
+    ],
+    gymnastics: [
+      [`Back squat 4x4 at ${percent(phase.load)} (${kg(profile.maxes.backSquat, phase.load)})`, gymnastics],
+      [gymnastics, weaknessAccessory(weakness, week)],
+      [snatch, "Strict pull-up or ring row volume 5 submax sets"],
+      ["Handstand line, hollow/arch, and dip strength density block", gymnastics],
+      [gymnastics, weaknessAccessory(weakness, week)]
+    ],
+    balanced: [
+      [backSquat, gymnasticsSkillBlock("t2b", week)],
+      [snatch, `Row technique: 5x300 m smooth, rest 1:00`],
+      [cleanJerk, frontSquat],
+      [gymnasticsSkillBlock("muscleup", week), weaknessAccessory(weakness, week)],
+      [weaknessAccessory(weakness, week), "Easy loaded carry 4x40 m"]
+    ]
+  };
+
+  return templates[goal][day - 1] || templates.balanced[day - 1];
+}
+
+function generatedWodItems(goal, weakness, day, week, profile, phase, wodMinutes) {
+  const movement = generatedWodMovementPool(goal, weakness, day, week, profile, phase);
+  const cap = clamp(Math.round(Number(wodMinutes) || 12), 8, 24);
+  const pattern = buildWodPattern(week, goal, day, cap, movement);
+
+  return [
+    pattern.workout,
+    `Stimulus: ${pattern.stimulus}`,
+    `Score: ${pattern.score}. Target intensity: ${phase.intensity}; scale reps, distance, or loading before extending the cap.`
+  ];
+}
+
+function buildWodPattern(week, goal, day, cap, movement) {
+  const intervals = Math.max(3, Math.floor(cap / 3));
+  const repeatSets = Math.max(3, Math.floor(cap / 4));
+  const rounds = cap >= 16 ? 5 : cap >= 13 ? 4 : 3;
+  const calories = goal === "endurance" ? "14/11 cal" : "10/8 cal";
+  const benchmarkName = generatedBenchmarkName(goal, day);
+
+  const patterns = {
+    1: {
+      workout: `AMRAP ${Math.min(cap, 12)}: ${movement.weight}, ${calories} ${movement.mono}, ${movement.gym}`,
+      stimulus: "short-to-medium mixed piece; unbroken early rounds, quick transitions",
+      score: "total rounds and reps"
+    },
+    2: {
+      workout: `Every 3 min x ${intervals}: ${movement.monoInterval}, ${movement.weightLowRep}, ${movement.simpleGym}; rest remaining time`,
+      stimulus: "repeatable intervals; each set should feel fast but controlled",
+      score: "slowest interval split"
+    },
+    3: {
+      workout: `${rounds} rounds for time, ${cap} min cap: ${movement.monoInterval}, ${movement.gym}, ${movement.weight}`,
+      stimulus: "medium for-time test; hold one repeatable break plan",
+      score: "finish time or completed reps at cap"
+    },
+    4: {
+      workout: `EMOM ${cap}: min 1 ${movement.weakness}, min 2 easy ${movement.mono}, min 3 ${movement.simpleGym}, min 4 rest or mobility`,
+      stimulus: "deload skill conditioning; leave fresher than you started",
+      score: "quality completed, no failed reps"
+    },
+    5: {
+      workout: `${cap} min ascending ladder: 2-4-6-8... ${movement.weightLowRep} and ${movement.gym}; after each round complete ${movement.shortMono}`,
+      stimulus: "second-wave density piece; manageable reps that accumulate",
+      score: "last completed round plus reps"
+    },
+    6: {
+      workout: `${repeatSets} sets, rest 1:00 between sets: ${movement.monoInterval}, ${movement.weight}, ${movement.simpleGym}`,
+      stimulus: "hard repeat efforts; pacing should not fade more than 10 percent",
+      score: "total working time"
+    },
+    7: {
+      workout: `For time, ${cap} min cap: ${movement.chipper}`,
+      stimulus: "longer mixed chipper; controlled opening pace, strong finish",
+      score: "finish time or reps completed"
+    },
+    8: {
+      workout: `Benchmark ${benchmarkName}, ${cap} min cap: ${movement.benchmark}`,
+      stimulus: "test week; compare against future cycles without changing standards",
+      score: "benchmark result"
+    }
+  };
+
+  return patterns[week];
+}
+
+function generatedWodMovementPool(goal, weakness, day, week, profile, phase) {
+  const cleanLoad = kg(profile.maxes.cleanJerk, goal === "stronger" ? 0.65 : 0.55);
+  const lightCleanLoad = kg(profile.maxes.cleanJerk, goal === "stronger" ? 0.55 : 0.45);
+  const snatchLoad = kg(profile.maxes.snatch, goal === "stronger" ? 0.55 : 0.45);
+  const monoOptions = goal === "endurance"
+    ? ["row", "bike", "run", "ski", "shuttle run"]
+    : ["row", "bike", "run", "double unders", "ski"];
+  const mono = pick(monoOptions, week + day);
+  const gymOptions = {
+    stronger: ["8 toes-to-bar", "8 box jumps", "10 push-ups", "6 chest-to-bar", "12 wall balls"],
+    endurance: ["10 burpees", "14 wall balls", "12 sit-ups", "10 box step-overs", "12 air squats"],
+    gymnastics: ["8 pull-ups", "10 toes-to-bar", "4 bar muscle-up transitions", "1 wall walk", "30 sec handstand hold"],
+    balanced: ["10 pull-ups", "12 wall balls", "10 toes-to-bar", "8 burpees", "15 air squats"]
+  };
+  const weightOptions = {
+    stronger: [`6 power cleans at ${cleanLoad}`, `8 DB front squats`, `6 deadlifts at ${kg(profile.maxes.cleanJerk, 0.85)}`, `8 DB snatches`, `6 push jerks at ${lightCleanLoad}`],
+    endurance: [`12 light KB swings`, `10 DB snatches`, `12 goblet squats`, `8 power cleans at ${lightCleanLoad}`, `16 alternating DB step-ups`],
+    gymnastics: [`8 DB snatches at ${snatchLoad}`, `10 light KB swings`, `8 overhead squats at ${snatchLoad}`, `10 medicine-ball cleans`, `12 DB lunges`],
+    balanced: [`8 power cleans at ${lightCleanLoad}`, `8 overhead squats at ${snatchLoad}`, `10 DB snatches`, `12 KB swings`, `8 clean and jerks at ${lightCleanLoad}`]
+  };
+
+  const gym = pick(gymOptions[goal] || gymOptions.balanced, week + day);
+  const weight = pick(weightOptions[goal] || weightOptions.balanced, week + day * 2);
+  const simpleGym = pick(["8 burpees", "10 sit-ups", "10 push-ups", "12 air squats", "8 ring rows"], week + day * 3);
+  const weaknessMove = weaknessWodMovement(weakness, week);
+
+  return {
+    mono,
+    monoInterval: monoInterval(mono, goal),
+    shortMono: shortMono(mono),
+    gym,
+    simpleGym,
+    weakness: weaknessMove,
+    weight,
+    weightLowRep: lowerRepMovement(weight),
+    chipper: generatedChipper(goal, weaknessMove, mono, gym, weight),
+    benchmark: generatedBenchmark(goal, day, mono, gym, weight, weaknessMove)
+  };
+}
+
+function generatedChipper(goal, weaknessMove, mono, gym, weight) {
+  const opening = monoInterval(mono, goal);
+  const closer = shortMono(mono);
+  return `${opening}, 40 air squats, 30 ${gym.replace(/^\d+\s*/, "")}, 20 ${weight.replace(/^\d+\s*/, "")}, 10 ${weaknessMove.replace(/^\d+\s*/, "")}, ${closer}`;
+}
+
+function generatedBenchmark(goal, day, mono, gym, weight, weaknessMove) {
+  const benchmarks = {
+    stronger: [
+      `10 rounds: 3 ${weight.replace(/^\d+\s*/, "")}, 6 box jumps`,
+      `5 rounds: ${monoInterval(mono, goal)}, 5 ${weight.replace(/^\d+\s*/, "")}`,
+      `AMRAP: 5 ${weight.replace(/^\d+\s*/, "")}, 7 ${gym.replace(/^\d+\s*/, "")}, 9 wall balls`,
+      `Max rounds quality: 6 strict push-ups, 8 KB swings, 10 cal bike`,
+      `EMOM test: ${weaknessMove}, ${shortMono(mono)}, loaded carry`
+    ],
+    endurance: [
+      `max sustainable meters on ${mono}`,
+      `5x${monoInterval(mono, goal)}, rest 1:00`,
+      `AMRAP: 400 m run, 15 wall balls, 12 sit-ups`,
+      `for time: 800 m ${mono}, 60 air squats, 40 burpees, 800 m ${mono}`,
+      `zone 2 distance check, same machine for full cap`
+    ],
+    gymnastics: [
+      `AMRAP: 5 pull-ups, 10 push-ups, 15 air squats`,
+      `EMOM rotation: toes-to-bar, burpees, ${shortMono(mono)}`,
+      `max quality ${weaknessMove} with easy ${shortMono(mono)} after each set`,
+      `AMRAP: wall walk or hold, 12 sit-ups, 200 m run`,
+      `skill density: ${weaknessMove}, hollow rocks, easy machine`
+    ],
+    balanced: [
+      `AMRAP: ${weight}, 10 box jump overs, ${shortMono(mono)}`,
+      `5 rounds: ${monoInterval(mono, goal)}, 8 overhead squats, 10 burpees`,
+      `AMRAP: 200 m run, 10 pull-ups, 12 wall balls`,
+      `AMRAP: 400 m run, 10 pull-ups, 15 push-ups, 20 air squats`,
+      `EMOM rotation: ${weaknessMove}, ${shortMono(mono)}, light barbell, core`
+    ]
+  };
+  return pick(benchmarks[goal] || benchmarks.balanced, day - 1);
+}
+
+function generatedBenchmarkName(goal, day) {
+  const names = {
+    stronger: ["Barbell sprint", "Power intervals", "Heavy triplet", "Upper stamina", "Weakness repeat"],
+    endurance: ["Mono engine", "Split control", "Threshold triplet", "Long chipper", "Zone 2 check"],
+    gymnastics: ["Bodyweight repeat", "Midline EMOM", "Skill density", "Inverted control", "Weakness repeat"],
+    balanced: ["Mixed baseline", "Row-barbell repeat", "Run-pull triplet", "Cindy-style engine", "Weakness EMOM"]
+  };
+  return pick(names[goal] || names.balanced, day - 1);
+}
+
+function weaknessWodMovement(weakness, week) {
+  const reps = week >= 5 ? "8" : "6";
+  const movements = {
+    squat: `${reps} tempo goblet squats`,
+    olympic: `${reps} hang power clean drills`,
+    rowing: "250 m technique row",
+    running: "200 m relaxed run",
+    pulling: `${reps} strict pull-ups or ring rows`,
+    muscleup: `${Math.max(3, Number(reps) - 3)} bar muscle-up transitions`,
+    t2b: `${reps} toes-to-bar or hanging knee raises`
+  };
+  return movements[weakness];
+}
+
+function monoInterval(mono, goal) {
+  if (mono === "run") return goal === "endurance" ? "400 m run" : "200 m run";
+  if (mono === "row") return goal === "endurance" ? "500 m row" : "250 m row";
+  if (mono === "bike") return goal === "endurance" ? "18/14 cal bike" : "12/9 cal bike";
+  if (mono === "ski") return goal === "endurance" ? "400 m ski" : "250 m ski";
+  if (mono === "shuttle run") return "10 shuttle runs";
+  return "50 double unders";
+}
+
+function shortMono(mono) {
+  if (mono === "run") return "100 m run";
+  if (mono === "row") return "150 m row";
+  if (mono === "bike") return "8/6 cal bike";
+  if (mono === "ski") return "150 m ski";
+  if (mono === "shuttle run") return "5 shuttle runs";
+  return "30 double unders";
+}
+
+function lowerRepMovement(movement) {
+  return movement
+    .replace(/^12\s/, "8 ")
+    .replace(/^10\s/, "7 ")
+    .replace(/^8\s/, "6 ")
+    .replace(/^6\s/, "5 ")
+    .replace(/^16\s/, "10 ");
+}
+
+function generatedMobility(weakness) {
+  return [
+    weaknessMobility(weakness),
+    "2 min nasal breathing to downshift",
+    "Write one note: what to repeat, scale, or push next time"
+  ];
+}
+
+function weaknessPrep(weakness) {
+  const prep = {
+    squat: "tempo air squats and ankle rocks",
+    olympic: "PVC high pulls, muscle snatch, and front rack",
+    rowing: "pause row drill and stroke-rate control",
+    running: "ankle hops, calf raises, and relaxed strides",
+    pulling: "scap pull-ups and active hangs",
+    muscleup: "false grip or low-bar transition rehearsal",
+    t2b: "hollow/arch swings and hanging knee raises"
+  };
+  return prep[weakness];
+}
+
+function weaknessAccessory(weakness, week) {
+  const reps = week >= 5 ? "4 sets" : "3 sets";
+  const accessories = {
+    squat: `${reps}: 8 tempo goblet squats + 8 split squats per leg`,
+    olympic: `${reps}: tall clean/snatch pulls + overhead or front rack holds`,
+    rowing: `${reps}: 90 sec row at perfect technique, easy rest`,
+    running: `${reps}: 200 m relaxed strides or incline treadmill walk`,
+    pulling: `${reps}: strict pull-up negatives, ring rows, and active hang`,
+    muscleup: `${reps}: low-bar transitions, deep dips, and slow negatives`,
+    t2b: `${reps}: kip swings, hanging knee raises, and hollow rocks`
+  };
+  return accessories[weakness];
+}
+
+function gymnasticsSkillBlock(weakness, week) {
+  if (weakness === "muscleup") return week >= 6 ? "Muscle-up practice: 6-10 quality singles or banded transitions, full rest" : "Muscle-up base: transition drill, dip strength, slow negative";
+  if (weakness === "t2b") return week >= 6 ? "Toes-to-bar EMOM 8: 6-9 reps, never to failure" : "Toes-to-bar base: kip swings, knee raises, hollow rocks";
+  if (weakness === "pulling") return week >= 6 ? "Pulling density: 8 min submax pull-up or chest-to-bar sets" : "Pulling base: strict pulls, ring rows, active hangs";
+  return "Gymnastics skill: hollow/arch control, strict pulling, and midline strength";
+}
+
+function weaknessMobility(weakness) {
+  const mobility = {
+    squat: "Couch stretch, ankle dorsiflexion, and deep squat breathing",
+    olympic: "Front rack, lats, pecs, T-spine extension",
+    rowing: "Hamstrings, hip flexors, and easy thoracic rotation",
+    running: "Calves, hip flexors, and foot/ankle tissue work",
+    pulling: "Lats, pecs, forearms, and 60 sec active-passive hang",
+    muscleup: "Pecs, lats, triceps, forearms, and gentle shoulder extension",
+    t2b: "Lats, hip flexors, hamstrings, and hollow breathing"
+  };
+  return mobility[weakness];
+}
+
 function getProgramDays() {
   return [
     {
@@ -528,6 +1169,24 @@ function getProgramDays() {
   ];
 }
 
+function findTrainingSession(sessionId, weekNumber) {
+  const mainDay = getProgramDays().find((day) => day.id === sessionId);
+  if (mainDay) {
+    return buildSession(mainDay.id, weekNumber, state.profile);
+  }
+
+  const customPlan = state.customPlans.find((plan) => plan.id === sessionId);
+  if (!customPlan) return null;
+  return {
+    id: customPlan.id,
+    week: customPlan.week,
+    weekday: `Week ${customPlan.week}`,
+    shortTitle: customPlan.title,
+    focus: customPlan.focus,
+    segments: customPlanSegments(customPlan)
+  };
+}
+
 function buildSession(dayId, weekNumber, profile) {
   const base = getProgramDays().find((day) => day.id === dayId);
   const builders = {
@@ -542,14 +1201,31 @@ function buildSession(dayId, weekNumber, profile) {
   };
 }
 
+function buildProgramWod(dayId, week, profile, wodMinutes) {
+  const config = {
+    day1: { goal: "balanced", weakness: "t2b", generatedDay: 1 },
+    day2: { goal: "endurance", weakness: "rowing", generatedDay: 2 },
+    day3: { goal: "balanced", weakness: "pulling", generatedDay: 3 },
+    day4: { goal: "gymnastics", weakness: "muscleup", generatedDay: 4 }
+  }[dayId];
+  const phase = getGeneratedWeekPhase(week, config.goal);
+  return generatedWodItems(config.goal, config.weakness, config.generatedDay, week, profile, phase, Number(wodMinutes));
+}
+
 function buildDayOne(week, profile) {
   const squat = {
     1: ["5x4", 0.75],
     2: ["5x4", 0.8],
     3: ["6x3", 0.85],
-    4: ["3x4", 0.65]
+    4: ["3x4", 0.65],
+    5: ["5x3", 0.825],
+    6: ["6x2", 0.875],
+    7: ["5x2", 0.9],
+    8: ["Build to heavy 3, then 2x3", 0.85]
   }[week];
-  const t2b = { 1: 6, 2: 7, 3: 8, 4: 5 }[week];
+  const t2b = { 1: 6, 2: 7, 3: 8, 4: 5, 5: 7, 6: 8, 7: 9, 8: 5 }[week];
+  const wodMinutes = week === 4 ? "10" : "12";
+  const wod = buildProgramWod("day1", week, profile, wodMinutes);
   return [
     {
       title: "Warm-up",
@@ -566,11 +1242,8 @@ function buildDayOne(week, profile) {
     },
     {
       title: "WOD",
-      minutes: "12",
-      items: [
-        `AMRAP 12: 8 power cleans at ${kg(profile.maxes.cleanJerk, 0.6)}, 10 box jump overs, 250 m row`,
-        "Target RPE 8 with consistent rounds"
-      ]
+      minutes: wodMinutes,
+      items: wod
     },
     {
       title: "Accessory and mobility",
@@ -584,14 +1257,9 @@ function buildDayOne(week, profile) {
 }
 
 function buildDayTwo(week, profile) {
-  const complexPct = { 1: 0.65, 2: 0.7, 3: 0.75, 4: 0.6 }[week];
-  const singlePct = { 1: 0.8, 2: 0.825, 3: 0.85, 4: 0.75 }[week];
-  const row = {
-    1: "5x500 m, rest 1:00, target 1:50-1:55/500 m",
-    2: "5x600 m, rest 1:00, keep splits controlled",
-    3: "4x750 m, rest 1:30, strong but repeatable",
-    4: "1,000 m time trial after technique work"
-  }[week];
+  const complexPct = { 1: 0.65, 2: 0.7, 3: 0.75, 4: 0.6, 5: 0.7, 6: 0.75, 7: 0.7, 8: 0.6 }[week];
+  const singlePct = { 1: 0.8, 2: 0.825, 3: 0.85, 4: 0.75, 5: 0.825, 6: 0.875, 7: 0.9, 8: 0.8 }[week];
+  const engine = buildProgramWod("day2", week, profile, 15);
   return [
     {
       title: "Warm-up",
@@ -607,9 +1275,9 @@ function buildDayTwo(week, profile) {
       ]
     },
     {
-      title: "Engine",
+      title: "Engine WOD",
       minutes: "15",
-      items: [row, "Score the slowest split, not the fastest one"]
+      items: engine
     },
     {
       title: "Accessory and mobility",
@@ -620,13 +1288,29 @@ function buildDayTwo(week, profile) {
 }
 
 function buildDayThree(week, profile) {
-  const cjPct = { 1: 0.7, 2: 0.75, 3: 0.825, 4: 0.65 }[week];
+  const cjPct = { 1: 0.7, 2: 0.75, 3: 0.825, 4: 0.65, 5: 0.75, 6: 0.8, 7: 0.85, 8: 0.8 }[week];
   const fs = {
     1: ["E2MOM x 6: 3 reps", 0.8],
     2: ["E2MOM x 6: 3 reps", 0.825],
     3: ["5x2", 0.875],
-    4: ["3x3", 0.7]
+    4: ["3x3", 0.7],
+    5: ["5x3", 0.825],
+    6: ["6x2", 0.85],
+    7: ["5x2", 0.9],
+    8: ["3x2", 0.75]
   }[week];
+  const cjFormat = {
+    1: "EMOM 10: 1 rep",
+    2: "EMOM 10: 1 rep",
+    3: "8x1 E2:00",
+    4: "EMOM 8: 1 rep",
+    5: "EMOM 10: 1 rep",
+    6: "8x1 E2:00",
+    7: "6x1 E2:00",
+    8: "Build to a crisp single"
+  }[week];
+  const wodMinutes = week === 4 ? "10" : "12";
+  const wod = buildProgramWod("day3", week, profile, wodMinutes);
   return [
     {
       title: "Warm-up",
@@ -637,14 +1321,14 @@ function buildDayThree(week, profile) {
       title: "Clean and jerk + squat",
       minutes: "24",
       items: [
-        `Clean and jerk ${week === 3 ? "8x1 E2:00" : "EMOM 10: 1 rep"} at ${percent(cjPct)} (${kg(profile.maxes.cleanJerk, cjPct)})`,
+        `Clean and jerk ${cjFormat} at ${percent(cjPct)} (${kg(profile.maxes.cleanJerk, cjPct)})`,
         `Front squat ${fs[0]} at ${percent(fs[1])} (${kg(profile.maxes.frontSquat, fs[1])})`
       ]
     },
     {
       title: "WOD",
-      minutes: "12",
-      items: ["AMRAP 12: 200 m run, 10 pull-ups or 6 chest-to-bar, 12 wall balls", "Target RPE 8, keep runs steady"]
+      minutes: wodMinutes,
+      items: wod
     },
     {
       title: "Accessory and mobility",
@@ -659,14 +1343,24 @@ function buildDayFour(week, profile) {
     1: ["4x3", 1.05],
     2: ["4x3", 1.1],
     3: ["5x2", 1.15],
-    4: ["3x3", 0.95]
+    4: ["3x3", 0.95],
+    5: ["4x3", 1.1],
+    6: ["5x2", 1.15],
+    7: ["5x2", 1.2],
+    8: ["3x2", 1]
   }[week];
   const muscleUp = {
     1: "3 rounds: 5 scap pull-ups, 3-5 strict chest-to-bar or band assist, 5 jumping bar MU transitions, 3 slow negatives",
     2: "Same structure with slightly less assistance and cleaner transitions",
     3: "Try 3-6 early singles only if positions are sharp, then return to controlled negatives",
-    4: "Deload drills only: transitions, hollow-arch rhythm, and easy pulling"
+    4: "Deload drills only: transitions, hollow-arch rhythm, and easy pulling",
+    5: "4 rounds: 4 strict chest-to-bar, 4 low-bar transitions, 2 slow negatives, keep one rep in reserve",
+    6: "Practice 4-8 singles with full rest if you have the skill, otherwise banded transitions plus deep dips",
+    7: "Test controlled singles early, then finish with low-volume transition and dip strength",
+    8: "Benchmark: max quality bar muscle-ups in 8 min, or max clean transition reps without misses"
   }[week];
+  const wodMinutes = week === 5 || week === 8 ? "20" : week === 4 ? "15" : "18";
+  const wod = buildProgramWod("day4", week, profile, wodMinutes);
   return [
     {
       title: "Warm-up",
@@ -683,15 +1377,12 @@ function buildDayFour(week, profile) {
     },
     {
       title: "WOD",
-      minutes: week === 4 ? "15" : "18",
-      items: [
-        `${week === 4 ? "AMRAP 15" : "AMRAP 18"}: 400 m run, 10 pull-ups, 15 push-ups, 20 air squats`,
-        "Target RPE 7-8 with round times within 10 percent"
-      ]
+      minutes: wodMinutes,
+      items: wod
     },
     {
       title: "Accessory and mobility",
-      minutes: week === 4 ? "14" : "11",
+      minutes: week === 4 ? "14" : week === 5 || week === 8 ? "9" : "11",
       items: ["2 sets max hollow rocks + 2 sets max arch rocks", "Shoulder, pec, calves, and 60 sec hang"]
     }
   ];
@@ -717,6 +1408,14 @@ function roundToNearest(value, step) {
   return Math.round(value / step) * step;
 }
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function pick(items, index) {
+  return items[((index % items.length) + items.length) % items.length];
+}
+
 function positiveNumber(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : fallback;
@@ -724,6 +1423,13 @@ function positiveNumber(value, fallback) {
 
 function valueFromPath(source, path) {
   return path.split(".").reduce((current, key) => current && current[key], source);
+}
+
+function splitLines(value) {
+  return String(value || "")
+    .split(/\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function normalizePrValue(rawValue, metric) {
@@ -798,10 +1504,34 @@ function showToast(message) {
 }
 
 function registerServiceWorker() {
-  if (!("serviceWorker" in navigator)) return;
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js").catch((error) => {
       console.info("Service worker registration skipped.", error);
     });
   });
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    DEFAULT_PROFILE,
+    PR_METRICS,
+    WEEK_META,
+    buildSession,
+    buildGeneratedProgramme,
+    clamp,
+    cloneDefaultProfile,
+    customPlanSegments,
+    formatPrValue,
+    getProgramDays,
+    isBetterPr,
+    kg,
+    migrateGeneratedProgrammePlans,
+    normalizePrValue,
+    parseTimeToSeconds,
+    percent,
+    roundToNearest,
+    splitLines,
+    trimNumber
+  };
 }

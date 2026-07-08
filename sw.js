@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "forge-hour-v1";
+const CACHE_NAME = "forge-hour-v5";
 const ASSETS = [
   "./",
   "./index.html",
