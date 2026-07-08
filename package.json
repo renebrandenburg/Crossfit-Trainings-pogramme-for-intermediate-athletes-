@@ -5,5 +5,11 @@
   "description": "Phone-first CrossFit programme, custom builder, and PR tracker.",
   "scripts": {
     "test": "node --test"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.2",
+    "jsdom": "^29.1.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   }
 }

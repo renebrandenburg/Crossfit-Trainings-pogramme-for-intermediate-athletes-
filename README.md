@@ -17,6 +17,12 @@ A phone-first CrossFit training programme and PR tracker for intermediate athlet
 
 ## Run locally
 
+Install the test dependencies once:
+
+```sh
+npm install
+```
+
 Open `index.html` directly in a browser, or serve the folder for full PWA behavior:
 
 ```sh
@@ -24,6 +30,12 @@ python3 -m http.server 4173
 ```
 
 Then open `http://localhost:4173`.
+
+Run the unit and React Testing Library tests with:
+
+```sh
+npm test
+```
 
 ## Host on GitHub Pages
 
