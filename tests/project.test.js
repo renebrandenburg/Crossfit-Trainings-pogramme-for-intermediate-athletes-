@@ -11,25 +11,35 @@ function read(file) {
   return fs.readFileSync(path.join(ROOT, file), "utf8");
 }
 
-test("HTML contains the main app surfaces and asset references", () => {
+test("HTML mounts the React app and references the required assets", () => {
   const html = read("index.html");
-  const navButtonCount = (html.match(/class="nav-button/g) || []).length;
 
   assert.match(html, /<link rel="manifest" href="\.\/manifest\.webmanifest">/);
   assert.match(html, /<link rel="stylesheet" href="\.\/styles\.css">/);
+  assert.match(html, /id="root"/);
+  assert.match(html, /react@18\.3\.1\/umd\/react\.production\.min\.js/);
+  assert.match(html, /react-dom@18\.3\.1\/umd\/react-dom\.production\.min\.js/);
   assert.match(html, /<script src="\.\/app\.js" defer><\/script>/);
-  assert.match(html, /id="dashboardView"/);
-  assert.match(html, /id="programView"/);
-  assert.match(html, /id="builderView"/);
-  assert.match(html, /id="learnView"/);
-  assert.match(html, /id="logView"/);
-  assert.match(html, /id="prView"/);
-  assert.match(html, /Eight-week cycle/);
-  assert.equal(navButtonCount, 6);
+  assert.match(html, /<script src="\.\/react-app\.js" defer><\/script>/);
+});
+
+test("React app contains the main app surfaces and navigation", () => {
+  const app = read("react-app.js");
+
+  assert.match(app, /dashboardView/);
+  assert.match(app, /programView/);
+  assert.match(app, /builderView/);
+  assert.match(app, /learnView/);
+  assert.match(app, /logView/);
+  assert.match(app, /prView/);
+  assert.match(app, /Eight-week cycle/);
+  assert.match(app, /nav-button/);
+  assert.match(app, /Home/);
+  assert.match(app, /PRs/);
 });
 
 test("builder form has the required fields for a full CrossFit session", () => {
-  const html = read("index.html");
+  const app = read("react-app.js");
   const requiredIds = [
     "programmeGeneratorForm",
     "generatorGoal",
@@ -49,23 +59,23 @@ test("builder form has the required fields for a full CrossFit session", () => {
   ];
 
   for (const id of requiredIds) {
-    assert.match(html, new RegExp(`id="${id}"`));
+    assert.match(app, new RegExp(`"${id}"`));
   }
 
-  assert.match(html, /Get stronger/);
-  assert.match(html, /More endurance/);
-  assert.match(html, /Better gymnastics/);
+  assert.match(app, /Get stronger/);
+  assert.match(app, /More endurance/);
+  assert.match(app, /Better gymnastics/);
 });
 
 test("movement library surface exposes search and category filters", () => {
-  const html = read("index.html");
+  const app = read("react-app.js");
 
-  assert.match(html, /id="movementCategory"/);
-  assert.match(html, /id="movementSearch"/);
-  assert.match(html, /id="movementLibrary"/);
-  assert.match(html, /Gymnastics/);
-  assert.match(html, /Weightlifting/);
-  assert.match(html, /Learn/);
+  assert.match(app, /movementCategory/);
+  assert.match(app, /movementSearch/);
+  assert.match(app, /movementLibrary/);
+  assert.match(app, /Gymnastics/);
+  assert.match(app, /Weightlifting/);
+  assert.match(app, /Learn/);
 });
 
 test("manifest is valid JSON and points to an existing icon", () => {
@@ -81,9 +91,11 @@ test("manifest is valid JSON and points to an existing icon", () => {
 
 test("service worker caches the files needed to run offline", () => {
   const serviceWorker = read("sw.js");
-  const assets = ["index.html", "styles.css", "app.js", "manifest.webmanifest", "icon.svg"];
+  const assets = ["index.html", "styles.css", "app.js", "react-app.js", "manifest.webmanifest", "icon.svg"];
 
-  assert.match(serviceWorker, /forge-hour-v6/);
+  assert.match(serviceWorker, /forge-hour-v7/);
+  assert.match(serviceWorker, /react@18\.3\.1\/umd\/react\.production\.min\.js/);
+  assert.match(serviceWorker, /react-dom@18\.3\.1\/umd\/react-dom\.production\.min\.js/);
 
   for (const asset of assets) {
     assert.match(serviceWorker, new RegExp(`"\\./${asset}"`));
@@ -99,6 +111,7 @@ test("project documentation describes the current feature set", () => {
   assert.match(readme, /WOD variation/);
   assert.match(readme, /Manual training programme builder/);
   assert.match(readme, /Movement library/);
+  assert.match(readme, /React-powered/);
   assert.match(readme, /python3 -m http\.server 4173/);
   assert.match(readme, /GitHub Pages/);
 });
@@ -116,5 +129,5 @@ test("GitHub Pages workflow tests and publishes the static app", () => {
   assert.match(workflow, /actions\/configure-pages@v6/);
   assert.match(workflow, /actions\/upload-pages-artifact@v5/);
   assert.match(workflow, /actions\/deploy-pages@v5/);
-  assert.match(workflow, /cp index\.html styles\.css app\.js manifest\.webmanifest sw\.js icon\.svg dist\//);
+  assert.match(workflow, /cp index\.html styles\.css app\.js react-app\.js manifest\.webmanifest sw\.js icon\.svg dist\//);
 });

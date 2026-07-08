@@ -1,18 +1,27 @@
 "use strict";
 
-const CACHE_NAME = "forge-hour-v6";
-const ASSETS = [
+const CACHE_NAME = "forge-hour-v7";
+const LOCAL_ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
+  "./react-app.js",
   "./manifest.webmanifest",
   "./icon.svg"
+];
+const RUNTIME_ASSETS = [
+  "https://unpkg.com/react@18.3.1/umd/react.production.min.js",
+  "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"
 ];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+    caches.open(CACHE_NAME).then((cache) => {
+      return cache.addAll(LOCAL_ASSETS).then(() => {
+        return Promise.all(RUNTIME_ASSETS.map((asset) => cache.add(asset).catch(() => undefined)));
+      });
+    })
   );
   self.skipWaiting();
 });

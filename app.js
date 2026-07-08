@@ -444,7 +444,7 @@ const elements = canUseDOM ? {
   toast: document.querySelector("#toast")
 } : {};
 
-if (canUseDOM) {
+if (canUseDOM && document.querySelector("[data-vanilla-app]")) {
   init();
 }
 
@@ -1885,35 +1885,57 @@ function showToast(message) {
 
 function registerServiceWorker() {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-  window.addEventListener("load", () => {
+
+  const register = () => {
     navigator.serviceWorker.register("./sw.js").catch((error) => {
       console.info("Service worker registration skipped.", error);
     });
-  });
+  };
+
+  if (document.readyState === "complete") {
+    register();
+  } else {
+    window.addEventListener("load", register, { once: true });
+  }
+}
+
+const FORGE_HOUR_API = {
+  DEFAULT_PROFILE,
+  GOAL_LABELS,
+  MOVEMENT_LIBRARY,
+  PR_METRICS,
+  READINESS_LABELS,
+  WEEK_META,
+  WEAKNESS_LABELS,
+  buildGeneratedProgramme,
+  buildSession,
+  clamp,
+  cloneDefaultProfile,
+  createId,
+  customPlanSegments,
+  filterMovementLibrary,
+  formatDate,
+  formatPrValue,
+  getNextDayForToday,
+  getProgramDays,
+  isBetterPr,
+  kg,
+  migrateGeneratedProgrammePlans,
+  normalizePrValue,
+  parseTimeToSeconds,
+  percent,
+  positiveNumber,
+  registerServiceWorker,
+  roundToNearest,
+  splitLines,
+  trimNumber,
+  valueFromPath
+};
+
+if (typeof globalThis !== "undefined") {
+  globalThis.ForgeHour = FORGE_HOUR_API;
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = {
-    DEFAULT_PROFILE,
-    MOVEMENT_LIBRARY,
-    PR_METRICS,
-    WEEK_META,
-    buildSession,
-    buildGeneratedProgramme,
-    clamp,
-    cloneDefaultProfile,
-    customPlanSegments,
-    filterMovementLibrary,
-    formatPrValue,
-    getProgramDays,
-    isBetterPr,
-    kg,
-    migrateGeneratedProgrammePlans,
-    normalizePrValue,
-    parseTimeToSeconds,
-    percent,
-    roundToNearest,
-    splitLines,
-    trimNumber
-  };
+  module.exports = FORGE_HOUR_API;
 }

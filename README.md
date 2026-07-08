@@ -12,6 +12,7 @@ A phone-first CrossFit training programme and PR tracker for intermediate athlet
 - Movement library for gymnastics and weightlifting skills with cues, progressions, scaling, and video guide links.
 - Workout logging for readiness, RPE, strength or skill results, WOD score, notes, and mobility.
 - PR tracker for major lifts, rowing, Murph, and gymnastics benchmarks.
+- React-powered phone-first UI mounted into a static app shell.
 - Local-first storage in the browser with a simple PWA manifest and offline cache.
 
 ## Run locally
