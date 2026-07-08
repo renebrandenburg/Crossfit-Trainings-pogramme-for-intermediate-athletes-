@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#10120f">
+    <meta name="description" content="A phone-first CrossFit programme and PR tracker for intermediate athletes.">
+    <title>Forge Hour</title>
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Intermediate CrossFit</p>
+          <h1>Forge Hour</h1>
+        </div>
+        <div class="status-pill">Local save</div>
+      </header>
+
+      <main>
+        <section id="dashboardView" class="view is-active" aria-labelledby="dashboardTitle">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Today</p>
+              <h2 id="dashboardTitle">Training dashboard</h2>
+            </div>
+            <select id="dashboardWeek" aria-label="Dashboard week"></select>
+          </div>
+
+          <div class="stats-grid" id="statsGrid"></div>
+          <div id="nextSession"></div>
+
+          <section class="panel" aria-labelledby="profileTitle">
+            <div class="panel-title">
+              <div>
+                <p class="eyebrow">Profile</p>
+                <h3 id="profileTitle">Training maxes</h3>
+              </div>
+              <button class="ghost-button" id="resetDemoData" type="button">Reset</button>
+            </div>
+            <form id="profileForm" class="profile-grid">
+              <label>
+                Athlete
+                <input id="athleteName" name="athleteName" type="text" autocomplete="name">
+              </label>
+              <label>
+                Back squat 1RM
+                <input id="backSquatMax" name="backSquatMax" type="number" min="1" step="0.5" inputmode="decimal">
+              </label>
+              <label>
+                Front squat 1RM
+                <input id="frontSquatMax" name="frontSquatMax" type="number" min="1" step="0.5" inputmode="decimal">
+              </label>
+              <label>
+                Snatch 1RM
+                <input id="snatchMax" name="snatchMax" type="number" min="1" step="0.5" inputmode="decimal">
+              </label>
+              <label>
+                Clean and jerk 1RM
+                <input id="cleanJerkMax" name="cleanJerkMax" type="number" min="1" step="0.5" inputmode="decimal">
+              </label>
+              <button class="primary-button" type="submit">Save maxes</button>
+            </form>
+          </section>
+        </section>
+
+        <section id="programView" class="view" aria-labelledby="programTitle">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Four-week mesocycle</p>
+              <h2 id="programTitle">Programme</h2>
+            </div>
+            <select id="programWeek" aria-label="Programme week"></select>
+          </div>
+          <div class="week-note" id="weekNote"></div>
+          <div class="day-list" id="programList"></div>
+        </section>
+
+        <section id="logView" class="view" aria-labelledby="logTitle">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">SugarWOD-style</p>
+              <h2 id="logTitle">Log workout</h2>
+            </div>
+          </div>
+
+          <form id="logForm" class="panel log-form">
+            <div class="form-row">
+              <label>
+                Date
+                <input id="logDate" name="logDate" type="date" required>
+              </label>
+              <label>
+                Week
+                <select id="logWeek" name="logWeek" required></select>
+              </label>
+            </div>
+            <label>
+              Session
+              <select id="logDay" name="logDay" required></select>
+            </label>
+            <div class="form-row">
+              <label>
+                Readiness
+                <select id="readiness" name="readiness">
+                  <option value="green">Green - push the plan</option>
+                  <option value="amber">Amber - hold technique</option>
+                  <option value="red">Red - scale today</option>
+                </select>
+              </label>
+              <label>
+                RPE
+                <input id="rpe" name="rpe" type="number" min="1" max="10" step="0.5" inputmode="decimal" placeholder="8">
+              </label>
+            </div>
+            <label>
+              Strength or skill result
+              <input id="strengthResult" name="strengthResult" type="text" placeholder="Back squat 5x4 at 110 kg, all smooth">
+            </label>
+            <label>
+              WOD score
+              <input id="wodScore" name="wodScore" type="text" placeholder="4 rounds + 8 reps, or 14:36">
+            </label>
+            <label>
+              Notes
+              <textarea id="logNotes" name="logNotes" rows="4" placeholder="Pacing, scaling, misses, mobility, next adjustment"></textarea>
+            </label>
+            <label class="check-row">
+              <input id="mobilityDone" name="mobilityDone" type="checkbox">
+              Mobility completed
+            </label>
+            <button class="primary-button" type="submit">Save workout log</button>
+          </form>
+
+          <section class="panel" aria-labelledby="recentLogsTitle">
+            <div class="panel-title">
+              <div>
+                <p class="eyebrow">History</p>
+                <h3 id="recentLogsTitle">Recent logs</h3>
+              </div>
+              <button class="ghost-button" id="clearLogs" type="button">Clear logs</button>
+            </div>
+            <div id="recentLogs" class="history-list"></div>
+          </section>
+        </section>
+
+        <section id="prView" class="view" aria-labelledby="prTitle">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Personal records</p>
+              <h2 id="prTitle">PR tracker</h2>
+            </div>
+          </div>
+
+          <div class="pr-grid" id="prGrid"></div>
+
+          <form id="prForm" class="panel pr-form">
+            <div class="panel-title">
+              <div>
+                <p class="eyebrow">Attempt</p>
+                <h3>Log PR attempt</h3>
+              </div>
+            </div>
+            <label>
+              Metric
+              <select id="prMetric" name="prMetric"></select>
+            </label>
+            <div class="form-row">
+              <label>
+                Result
+                <input id="prValue" name="prValue" type="text" required placeholder="145, 3:30, 12">
+              </label>
+              <label>
+                Date
+                <input id="prDate" name="prDate" type="date" required>
+              </label>
+            </div>
+            <label>
+              Notes
+              <textarea id="prNotes" name="prNotes" rows="3" placeholder="How it felt, setup, video cue, split, scaling"></textarea>
+            </label>
+            <button class="primary-button" type="submit">Save PR attempt</button>
+          </form>
+
+          <section class="panel" aria-labelledby="attemptHistoryTitle">
+            <div class="panel-title">
+              <div>
+                <p class="eyebrow">Timeline</p>
+                <h3 id="attemptHistoryTitle">Recent PR attempts</h3>
+              </div>
+            </div>
+            <div id="prHistory" class="history-list"></div>
+          </section>
+        </section>
+      </main>
+
+      <nav class="bottom-nav" aria-label="Main navigation">
+        <button class="nav-button is-active" type="button" data-view="dashboardView">Home</button>
+        <button class="nav-button" type="button" data-view="programView">Plan</button>
+        <button class="nav-button" type="button" data-view="logView">Log</button>
+        <button class="nav-button" type="button" data-view="prView">PRs</button>
+      </nav>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
