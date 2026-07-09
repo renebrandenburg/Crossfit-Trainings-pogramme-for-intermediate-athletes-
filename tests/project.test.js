@@ -20,6 +20,7 @@ test("HTML mounts the React app and references the required assets", () => {
   assert.match(html, /react@18\.3\.1\/umd\/react\.production\.min\.js/);
   assert.match(html, /react-dom@18\.3\.1\/umd\/react-dom\.production\.min\.js/);
   assert.match(html, /@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/);
+  assert.match(html, /cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/);
   assert.match(html, /<script src="\.\/supabase-config\.js" defer><\/script>/);
   assert.match(html, /<script src="\.\/app\.js" defer><\/script>/);
   assert.match(html, /<script src="\.\/supabase-sync\.js" defer><\/script>/);
@@ -100,10 +101,11 @@ test("service worker caches the files needed to run offline", () => {
   const serviceWorker = read("sw.js");
   const assets = ["index.html", "styles.css", "app.js", "supabase-config.js", "supabase-sync.js", "react-app.js", "manifest.webmanifest", "icon.svg"];
 
-  assert.match(serviceWorker, /crossfit-training-programme-v2/);
+  assert.match(serviceWorker, /crossfit-training-programme-v3/);
   assert.match(serviceWorker, /react@18\.3\.1\/umd\/react\.production\.min\.js/);
   assert.match(serviceWorker, /react-dom@18\.3\.1\/umd\/react-dom\.production\.min\.js/);
   assert.match(serviceWorker, /@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/);
+  assert.match(serviceWorker, /cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/);
 
   for (const asset of assets) {
     assert.match(serviceWorker, new RegExp(`"\\./${asset}"`));

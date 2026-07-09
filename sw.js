@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "crossfit-training-programme-v2";
+const CACHE_NAME = "crossfit-training-programme-v3";
 const LOCAL_ASSETS = [
   "./",
   "./index.html",
@@ -15,7 +15,8 @@ const LOCAL_ASSETS = [
 const RUNTIME_ASSETS = [
   "https://unpkg.com/react@18.3.1/umd/react.production.min.js",
   "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js",
-  "https://unpkg.com/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js"
+  "https://unpkg.com/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js",
+  "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js"
 ];
 
 self.addEventListener("install", (event) => {

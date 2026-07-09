@@ -203,6 +203,13 @@
     return createSupabaseStore(window.supabase.createClient(config.url, config.anonKey));
   }
 
+  function remoteSetupMessage() {
+    const externalConfig = window.ForgeHourSupabaseConfig || {};
+    const hasConfig = Boolean((externalConfig.url || SUPABASE_CONFIG.url) && (externalConfig.anonKey || SUPABASE_CONFIG.anonKey));
+    if (!hasConfig) return "Add Supabase config to enable database sync.";
+    return "Supabase SDK could not load. Refresh the page or check whether your browser is blocking the Supabase script.";
+  }
+
   function weekOptions() {
     return WEEK_META.map((week) => h("option", { key: week.week, value: String(week.week) }, `Week ${week.week}`));
   }
@@ -221,7 +228,7 @@
     const [remoteSnapshot, setRemoteSnapshot] = ReactRuntime.useState({ logs: [], prAttempts: [], prs: {} });
     const [syncStatus, setSyncStatus] = ReactRuntime.useState(() => ({
       state: remoteStore ? "signed-out" : "not-configured",
-      message: remoteStore ? "Sign in to sync logs and PRs." : "Add Supabase config to enable database sync."
+      message: remoteStore ? "Sign in to sync logs and PRs." : remoteSetupMessage()
     }));
     const [logSelection, setLogSelection] = ReactRuntime.useState(() => ({
       week: 1,
@@ -577,7 +584,7 @@
         h("span", { className: "metric-pill" }, remoteUser ? "Signed in" : "Local only")
       ),
       h("p", { className: "muted-copy" }, syncStatus.message),
-      !remoteStore ? h("div", { className: "empty-state" }, "Supabase is not configured yet. Add your project URL and anon key in supabase-config.js, then deploy again.") : null,
+      !remoteStore ? h("div", { className: "empty-state" }, syncStatus.message) : null,
       remoteStore && !remoteUser ? h("form", {
         className: "sync-form",
         onSubmit: (event) => {

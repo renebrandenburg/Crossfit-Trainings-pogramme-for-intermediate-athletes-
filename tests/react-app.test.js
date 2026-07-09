@@ -172,9 +172,9 @@ test("React Testing Library keeps cleared time benchmarks as test-needed values"
   try {
     assert.ok(await ui.findByRole("heading", { name: "Masters RX assessment" }));
 
-    fireEvent.change(ui.getByLabelText("1 km row"), { target: { value: "" } });
-    fireEvent.change(ui.getByLabelText("2 km row"), { target: { value: "" } });
-    fireEvent.change(ui.getByLabelText("5 km run"), { target: { value: "" } });
+    fireEvent.change(ui.getByLabelText("1 km row"), { target: { value: " " } });
+    fireEvent.change(ui.getByLabelText("2 km row"), { target: { value: " " } });
+    fireEvent.change(ui.getByLabelText("5 km run"), { target: { value: " " } });
     fireEvent.click(ui.getByRole("button", { name: "Save assessment" }));
 
     await waitFor(() => {
@@ -310,7 +310,7 @@ test("React Testing Library shows Supabase setup guidance when sync is not confi
 
   try {
     assert.ok(await ui.findByRole("heading", { name: "Database sync" }));
-    assert.ok(ui.getByText(/Supabase is not configured yet/));
+    assert.ok(ui.getAllByText(/Supabase SDK could not load/).length >= 1);
   } finally {
     cleanup();
   }
