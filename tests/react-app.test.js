@@ -151,6 +151,8 @@ test("React Testing Library renders the dashboard and bottom navigation", async 
     assert.ok(await ui.findByRole("heading", { name: "Training dashboard" }));
     assert.ok(ui.getByRole("heading", { name: "Masters RX assessment" }));
     assert.ok(ui.getByRole("heading", { name: "RX readiness" }));
+    assert.ok(ui.getByText("RX Level"));
+    assert.ok(ui.getByText("Strict press: 60 kg vs 75 kg."));
     assert.ok(ui.getAllByText("Men Masters 35-39").length >= 1);
     assert.ok(ui.getByLabelText("Deadlift 1RM"));
     assert.ok(ui.getByLabelText("Unbroken ring muscle-ups"));
@@ -182,6 +184,7 @@ test("React Testing Library keeps cleared time benchmarks as test-needed values"
       assert.equal(saved.profile.benchmarks.row1k, "");
       assert.equal(saved.profile.benchmarks.row2k, "");
       assert.equal(saved.profile.benchmarks.run5k, "");
+      assert.ok(ui.getByText("Test needed: 1 km row"));
     });
   } finally {
     cleanup();

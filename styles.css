@@ -245,6 +245,13 @@ button {
   font-weight: 750;
 }
 
+.stat-detail {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
 .panel,
 .week-note {
   margin-top: 12px;

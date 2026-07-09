@@ -703,15 +703,16 @@
         )
       ),
       h(ProfilePanel, { profile: appState.profile, onSave: onSaveProfile, onReset }),
-      h(RxReadinessPanel, { profile: appState.profile }),
+      h(RxReadinessPanel, { profile: appState.profile, logs: appState.logs }),
       accountSyncPanel
     );
   }
 
-  function StatCard({ value, label }) {
+  function StatCard({ value, label, detail }) {
     return h("article", { className: "stat-card" },
       h("p", { className: "stat-label" }, label),
-      h("p", { className: "stat-value" }, value)
+      h("p", { className: "stat-value" }, value),
+      detail ? h("p", { className: "stat-detail" }, detail) : null
     );
   }
 
@@ -837,8 +838,8 @@
     );
   }
 
-  function RxReadinessPanel({ profile }) {
-    const readiness = buildRxReadiness(profile);
+  function RxReadinessPanel({ profile, logs }) {
+    const readiness = buildRxReadiness(profile, logs);
     return h("section", { className: "panel", "aria-labelledby": "rxReadinessTitle" },
       h("div", { className: "panel-title" },
         h("div", null,
@@ -848,13 +849,23 @@
         h("span", { className: "metric-pill" }, `Age ${profile.age || 36}`)
       ),
       h("div", { className: "stats-grid" },
+        h(StatCard, {
+          value: `${readiness.rxLevel}`,
+          label: "RX Level"
+        }),
         readiness.categories.map((category) => h(StatCard, {
           key: category.id,
           value: `${category.score}%`,
-          label: category.missing ? `${category.label} (${category.missing} tests)` : category.label
+          label: category.missing ? `${category.label} (${category.missing} tests)` : category.label,
+          detail: category.summary
         }))
       ),
       h("p", { className: "muted-copy" }, readiness.recommendation),
+      readiness.missingTests.length ? h("div", { className: "history-meta", "aria-label": "Missing RX tests" },
+        readiness.missingTests.slice(0, 6).map((item) => (
+          h("span", { className: "metric-pill", key: `${item.categoryId}-${item.id}` }, `Test needed: ${item.label}`)
+        ))
+      ) : null,
       h("div", { className: "history-meta" },
         readiness.weakest.map((category) => h("span", { className: "metric-pill", key: category.id }, `Focus: ${category.label}`))
       )

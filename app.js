@@ -1835,7 +1835,7 @@ function mastersRxAddOns(week, day) {
   return [pick(engine, week + day), pick(skill, week * 2 + day)];
 }
 
-function buildRxReadiness(profile) {
+function buildRxReadiness(profile, logs = []) {
   const groups = [
     { id: "strength", label: "Strength", targets: MASTERS_RX_TARGETS.strength },
     { id: "olympic", label: "Olympic lifting", targets: MASTERS_RX_TARGETS.olympic },
@@ -1846,37 +1846,54 @@ function buildRxReadiness(profile) {
   const categories = groups.map((group) => {
     const items = Object.entries(group.targets).map(([id, target]) => readinessItem(id, target, profile));
     const tested = items.filter((item) => item.status !== "missing");
-    const score = tested.length ? Math.round(tested.reduce((sum, item) => sum + item.score, 0) / tested.length) : 0;
+    const averageScore = tested.length ? tested.reduce((sum, item) => sum + item.score, 0) / tested.length : 0;
+    const coverage = items.length ? tested.length / items.length : 1;
+    const score = tested.length ? clamp(Math.round(averageScore * (0.85 + coverage * 0.15)), 0, 100) : 0;
     return {
       id: group.id,
       label: group.label,
       score,
       missing: items.length - tested.length,
+      summary: readinessCategorySummary(items),
       items
     };
   });
 
+  const missingTests = categories.flatMap((category) => (
+    category.items
+      .filter((item) => item.status === "missing")
+      .map((item) => ({ ...item, categoryId: category.id, categoryLabel: category.label }))
+  ));
   const openSkillsScore = Math.round((
     categoryScore(categories, "engine") +
     categoryScore(categories, "gymnastics") +
     categoryScore(categories, "olympic")
   ) / 3);
-  const recoveryScore = recoveryReadinessScore(profile);
+  const consistencyScore = consistencyReadinessScore(logs);
+  const recoveryScore = recoveryReadinessScore(profile, logs);
   const fullCategories = [
     ...categories,
-    { id: "openSkills", label: "Open skills", score: openSkillsScore, missing: 0, items: [] },
-    { id: "recovery", label: "Recovery", score: recoveryScore, missing: 0, items: [] }
+    { id: "openSkills", label: "Open skills", score: openSkillsScore, missing: 0, summary: "Blends Olympic lifting, engine, and gymnastics.", items: [] },
+    { id: "consistency", label: "Consistency", score: consistencyScore, missing: 0, summary: consistencyReadinessSummary(logs), items: [] },
+    { id: "recovery", label: "Recovery", score: recoveryScore, missing: 0, summary: recoveryReadinessSummary(profile, logs), items: [] }
   ];
-  const weakest = [...fullCategories]
+  const rxLevel = clamp(Math.round(fullCategories.reduce((sum, category) => sum + category.score, 0) / fullCategories.length), 0, 100);
+  const actionableWeakest = [...fullCategories]
     .filter((category) => category.id !== "recovery")
-    .sort((a, b) => a.score - b.score)
-    .slice(0, 2);
+    .sort((a, b) => a.score - b.score);
+  const weakest = actionableWeakest.slice(0, 2);
+  const recovery = fullCategories.find((category) => category.id === "recovery");
+  if (recovery && weakest.length && recovery.score <= weakest[0].score - 10) {
+    weakest.splice(1, 1, recovery);
+  }
 
   return {
     division: DIVISION_LABELS[profile.division] || DIVISION_LABELS.men35to39,
+    rxLevel,
     categories: fullCategories,
+    missingTests,
     weakest,
-    recommendation: readinessRecommendation(weakest)
+    recommendation: readinessRecommendation(weakest, missingTests)
   };
 }
 
@@ -1884,20 +1901,40 @@ function readinessItem(id, target, profile) {
   const metric = PR_METRICS.find((item) => item.id === id) || { type: target.unit === "time" ? "time" : "number" };
   const rawValue = valueFromPath(profile, target.source);
   const value = normalizePrValue(rawValue, metric);
+  const targetDisplay = formatPrValue(target.target, metric);
   if (!Number.isFinite(value) || value <= 0) {
-    return { id, label: target.label, target: target.target, display: "Test needed", score: 0, status: "missing" };
+    return { id, label: target.label, target: target.target, targetDisplay, display: "Test needed", score: 0, status: "missing" };
   }
   const direction = target.direction || "higher";
   const ratio = direction === "lower" ? target.target / value : value / target.target;
-  const score = clamp(Math.round(ratio * 100), 0, 125);
+  const score = clamp(Math.round(ratio * 100), 0, 100);
   return {
     id,
     label: target.label,
     target: target.target,
+    targetDisplay,
     display: formatPrValue(value, metric),
     score,
     status: score >= 100 ? "ready" : "building"
   };
+}
+
+function readinessCategorySummary(items) {
+  const missing = items.filter((item) => item.status === "missing");
+  const weakestTested = items
+    .filter((item) => item.status !== "missing")
+    .sort((a, b) => a.score - b.score)[0];
+
+  if (weakestTested && missing.length) {
+    return `${weakestTested.label}: ${weakestTested.display} vs ${weakestTested.targetDisplay}. ${missing[0].label} test needed.`;
+  }
+  if (weakestTested) {
+    return `${weakestTested.label}: ${weakestTested.display} vs ${weakestTested.targetDisplay}.`;
+  }
+  if (missing.length) {
+    return `${missing[0].label} test needed.`;
+  }
+  return "";
 }
 
 function categoryScore(categories, id) {
@@ -1905,14 +1942,72 @@ function categoryScore(categories, id) {
   return category ? category.score : 0;
 }
 
-function recoveryReadinessScore(profile) {
-  const age = Number(profile.age) || 36;
-  return age >= 35 ? 85 : 90;
+function consistencyReadinessScore(logs = []) {
+  const recentLogs = recentTrainingLogs(logs);
+  return clamp(Math.round((recentLogs.length / 12) * 100), 0, 100);
 }
 
-function readinessRecommendation(weakest) {
+function consistencyReadinessSummary(logs = []) {
+  const recentLogs = recentTrainingLogs(logs);
+  return `${recentLogs.length}/12 sessions logged in the last 28 days.`;
+}
+
+function recoveryReadinessScore(profile, logs = []) {
+  const age = Number(profile.age) || 36;
+  const baseline = age >= 35 ? 85 : 90;
+  const recentLogs = recentTrainingLogs(logs);
+  if (!recentLogs.length) return baseline;
+
+  const readinessAdjustment = average(recentLogs.map((log) => {
+    if (log.readiness === "green") return 4;
+    if (log.readiness === "red") return -8;
+    return 0;
+  }));
+  const rpeValues = recentLogs.map((log) => Number(log.rpe)).filter(Number.isFinite);
+  const averageRpe = rpeValues.length ? average(rpeValues) : 7.5;
+  const rpeAdjustment = averageRpe >= 8.5 ? -5 : averageRpe <= 7 ? 3 : 0;
+  const mobilityRate = recentLogs.filter((log) => log.mobilityDone).length / recentLogs.length;
+  const mobilityAdjustment = mobilityRate >= 0.75 ? 4 : mobilityRate <= 0.25 ? -4 : 0;
+
+  return clamp(Math.round(baseline + readinessAdjustment + rpeAdjustment + mobilityAdjustment), 0, 100);
+}
+
+function recoveryReadinessSummary(profile, logs = []) {
+  const age = Number(profile.age) || 36;
+  const recentLogs = recentTrainingLogs(logs);
+  if (!recentLogs.length) return `Age ${age} baseline; log readiness, RPE, and mobility to refine.`;
+
+  const rpeValues = recentLogs.map((log) => Number(log.rpe)).filter(Number.isFinite);
+  const averageRpe = rpeValues.length ? average(rpeValues) : 0;
+  const mobilityCount = recentLogs.filter((log) => log.mobilityDone).length;
+  const rpeText = averageRpe ? `Average RPE ${trimNumber(averageRpe)}.` : "No RPE trend yet.";
+  return `${rpeText} Mobility ${mobilityCount}/${recentLogs.length} recent logs.`;
+}
+
+function recentTrainingLogs(logs = []) {
+  const now = Date.now();
+  const windowMs = 28 * 24 * 60 * 60 * 1000;
+  return logs.filter((log) => {
+    const dateTimestamp = Date.parse(log.date || "");
+    const createdAtTimestamp = Date.parse(log.createdAt || "");
+    const timestamp = Number.isFinite(dateTimestamp) ? dateTimestamp : createdAtTimestamp;
+    return Number.isFinite(timestamp) && timestamp <= now && now - timestamp <= windowMs;
+  });
+}
+
+function average(values) {
+  if (!values.length) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function readinessRecommendation(weakest, missingTests = []) {
+  if (missingTests.length && !weakest.length) {
+    return `Log ${missingTests.slice(0, 2).map((item) => item.label.toLowerCase()).join(" and ")} to reveal your next RX focus.`;
+  }
   if (!weakest.length) return "Log assessment tests to reveal your next RX focus.";
-  return `Prioritize ${weakest.map((item) => item.label.toLowerCase()).join(" and ")} in the next generated cycle.`;
+  const focus = weakest.map((item) => item.label.toLowerCase()).join(" and ");
+  const testing = missingTests.length ? ` Test ${missingTests.slice(0, 2).map((item) => item.label.toLowerCase()).join(" and ")} next.` : "";
+  return `Prioritize ${focus} in the next generated cycle.${testing}`;
 }
 
 function getProgramDays() {

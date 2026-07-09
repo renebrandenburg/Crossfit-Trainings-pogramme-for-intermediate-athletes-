@@ -41,6 +41,14 @@ function wodSegment(session) {
   return session.segments.find((segment) => /WOD|Engine/.test(segment.title));
 }
 
+function daysAgo(days) {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function daysAgoIso(days) {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
 test("programme exposes an eight-week cycle", () => {
   assert.equal(WEEK_META.length, 8);
   assert.deepEqual(WEEK_META.map((week) => week.week), [1, 2, 3, 4, 5, 6, 7, 8]);
@@ -227,9 +235,9 @@ test("Masters RX generator creates Open prep sessions with separate add-ons", ()
   assert.match(serialized, /Optional|add-on|Engine add-on|Skill add-on/i);
 });
 
-test("RX readiness scoring reports weakest categories and missing tests", () => {
+test("RX readiness scoring reports RX Level, weakest categories, and missing tests", () => {
   const profile = cloneDefaultProfile();
-  const readiness = buildRxReadiness({
+  const strongProfile = {
     ...profile,
     maxes: {
       ...profile.maxes,
@@ -255,13 +263,63 @@ test("RX readiness scoring reports weakest categories and missing tests", () => 
       handstandWalk: 15,
       doubleUnders: 100
     }
+  };
+  const readiness = buildRxReadiness(strongProfile, [
+    { date: daysAgo(1), readiness: "green", rpe: "7", mobilityDone: true },
+    { date: daysAgo(3), readiness: "green", rpe: "7.5", mobilityDone: true },
+    { date: daysAgo(5), readiness: "amber", rpe: "8", mobilityDone: true }
+  ]);
+  const incomplete = buildRxReadiness({
+    ...profile,
+    benchmarks: {
+      ...profile.benchmarks,
+      row1k: "",
+      row2k: "",
+      run5k: "",
+      pullUps: 1,
+      chestToBar: 1,
+      t2b: 1,
+      doubleUnders: 5
+    }
   });
 
   assert.equal(readiness.division, "Men Masters 35-39");
+  assert.ok(readiness.rxLevel > incomplete.rxLevel);
+  assert.ok(readiness.rxLevel <= 100);
   assert.ok(readiness.categories.some((category) => category.label === "Strength" && category.score >= 100));
   assert.ok(readiness.categories.some((category) => category.label === "Engine" && category.missing === 1));
+  assert.ok(readiness.categories.some((category) => category.label === "Engine" && /1 km row test needed/.test(category.summary)));
+  assert.ok(readiness.categories.some((category) => category.label === "Consistency"));
+  assert.ok(readiness.missingTests.some((item) => item.label === "1 km row" && item.categoryLabel === "Engine"));
   assert.equal(readiness.weakest.length, 2);
   assert.match(readiness.recommendation, /Prioritize/);
+  assert.match(readiness.recommendation, /Test 1 km row/);
+});
+
+test("RX readiness consistency score uses recent workout logs", () => {
+  const profile = cloneDefaultProfile();
+  const quiet = buildRxReadiness(profile, []);
+  const logs = Array.from({ length: 11 }, (_, index) => ({
+    date: daysAgo(index * 2),
+    readiness: "green",
+    rpe: "7",
+    mobilityDone: true
+  }));
+  logs.push({
+    date: "not-a-date",
+    createdAt: daysAgoIso(2),
+    readiness: "green",
+    rpe: "7",
+    mobilityDone: true
+  });
+  const active = buildRxReadiness(profile, logs);
+  const quietConsistency = quiet.categories.find((category) => category.id === "consistency");
+  const activeConsistency = active.categories.find((category) => category.id === "consistency");
+
+  assert.equal(quietConsistency.score, 0);
+  assert.equal(activeConsistency.score, 100);
+  assert.equal(activeConsistency.summary, "12/12 sessions logged in the last 28 days.");
+  assert.ok(active.rxLevel > quiet.rxLevel);
 });
 
 test("movement library covers gymnastics and weightlifting with video guides", () => {
