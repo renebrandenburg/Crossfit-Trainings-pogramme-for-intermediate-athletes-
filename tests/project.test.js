@@ -100,7 +100,7 @@ test("service worker caches the files needed to run offline", () => {
   const serviceWorker = read("sw.js");
   const assets = ["index.html", "styles.css", "app.js", "supabase-config.js", "supabase-sync.js", "react-app.js", "manifest.webmanifest", "icon.svg"];
 
-  assert.match(serviceWorker, /crossfit-training-programme-v1/);
+  assert.match(serviceWorker, /crossfit-training-programme-v2/);
   assert.match(serviceWorker, /react@18\.3\.1\/umd\/react\.production\.min\.js/);
   assert.match(serviceWorker, /react-dom@18\.3\.1\/umd\/react-dom\.production\.min\.js/);
   assert.match(serviceWorker, /@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/);

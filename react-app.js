@@ -49,6 +49,10 @@
   } = syncApi;
 
   const STORAGE_KEY = "forge-hour-state-v1";
+  const SUPABASE_CONFIG = {
+    url: "https://wvypnaojkysxrftuqrnu.supabase.co",
+    anonKey: "sb_publishable_lUuIsYjeWwY9Wsr15-_Z4Q_VqNGALR4"
+  };
   const THEME_COLORS = {
     light: "#10120f",
     dark: "#070907"
@@ -187,7 +191,11 @@
   }
 
   function createRemoteStore() {
-    const config = window.ForgeHourSupabaseConfig || {};
+    const externalConfig = window.ForgeHourSupabaseConfig || {};
+    const config = {
+      url: externalConfig.url || SUPABASE_CONFIG.url,
+      anonKey: externalConfig.anonKey || SUPABASE_CONFIG.anonKey
+    };
     const hasConfig = Boolean(config.url && config.anonKey);
     if (!hasConfig || !window.supabase || typeof window.supabase.createClient !== "function") {
       return null;

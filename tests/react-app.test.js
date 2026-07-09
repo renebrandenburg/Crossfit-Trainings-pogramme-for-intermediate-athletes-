@@ -82,7 +82,7 @@ function createMockSupabase({ session = null, remote = {}, calls = [] } = {}) {
   };
 }
 
-function mountApp({ prefersDark = false, supabaseMock = null } = {}) {
+function mountApp({ prefersDark = false, supabaseMock = null, supabaseConfig = true } = {}) {
   const dom = new JSDOM("<!doctype html><html><head><meta name=\"theme-color\" content=\"#10120f\"></head><body><div id=\"root\"></div></body></html>", {
     pretendToBeVisual: true,
     url: "http://localhost/"
@@ -108,7 +108,7 @@ function mountApp({ prefersDark = false, supabaseMock = null } = {}) {
   dom.window.ReactDOM = require("react-dom/client");
   if (supabaseMock) {
     dom.window.supabase = supabaseMock.supabase;
-    dom.window.ForgeHourSupabaseConfig = {
+    if (supabaseConfig) dom.window.ForgeHourSupabaseConfig = {
       url: "https://example.supabase.co",
       anonKey: "public-anon-key"
     };
@@ -311,6 +311,19 @@ test("React Testing Library shows Supabase setup guidance when sync is not confi
   try {
     assert.ok(await ui.findByRole("heading", { name: "Database sync" }));
     assert.ok(ui.getByText(/Supabase is not configured yet/));
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library uses bundled Supabase config if the config file is cached or missing", async () => {
+  const supabaseMock = createMockSupabase();
+  const { cleanup, ui } = mountApp({ supabaseMock, supabaseConfig: false });
+
+  try {
+    assert.ok(await ui.findByRole("heading", { name: "Database sync" }));
+    assert.ok(ui.getByText("Sign in to sync logs and PRs."));
+    assert.ok(ui.getByRole("button", { name: "Email sign-in link" }));
   } finally {
     cleanup();
   }
