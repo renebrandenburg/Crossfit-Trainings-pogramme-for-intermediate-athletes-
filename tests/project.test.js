@@ -101,7 +101,7 @@ test("service worker caches the files needed to run offline", () => {
   const serviceWorker = read("sw.js");
   const assets = ["index.html", "styles.css", "app.js", "supabase-config.js", "supabase-sync.js", "react-app.js", "manifest.webmanifest", "icon.svg"];
 
-  assert.match(serviceWorker, /crossfit-training-programme-v3/);
+  assert.match(serviceWorker, /crossfit-training-programme-v4/);
   assert.match(serviceWorker, /react@18\.3\.1\/umd\/react\.production\.min\.js/);
   assert.match(serviceWorker, /react-dom@18\.3\.1\/umd\/react-dom\.production\.min\.js/);
   assert.match(serviceWorker, /@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/);
@@ -153,6 +153,7 @@ test("Supabase schema scopes policies to authenticated owners", () => {
   assert.equal((schema.match(/to authenticated/g) || []).length, policyCount);
   assert.equal((schema.match(/auth\.uid\(\) is not null and auth\.uid\(\) = user_id/g) || []).length, 15);
   assert.match(schema, /alter table public\.workout_logs enable row level security/);
+  assert.match(schema, /timer_result jsonb/);
   assert.match(schema, /alter table public\.pr_attempts enable row level security/);
   assert.match(schema, /alter table public\.personal_records enable row level security/);
 });

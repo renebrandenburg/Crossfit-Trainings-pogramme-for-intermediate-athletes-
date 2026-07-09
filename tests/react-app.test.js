@@ -212,6 +212,43 @@ test("React Testing Library generates a Masters 35-39 RX Open prep programme", a
   }
 });
 
+test("React Testing Library records workout timer splits into a saved log", async () => {
+  const { cleanup, fireEvent, ui, waitFor } = mountApp();
+
+  try {
+    assert.ok(await ui.findByRole("heading", { name: "Training dashboard" }));
+    const nextSession = document.querySelector("#nextSession");
+    const openTimer = nextSession.querySelector(".timer-panel button");
+    fireEvent.click(openTimer);
+
+    const start = Array.from(nextSession.querySelectorAll("button")).find((button) => button.textContent === "Start");
+    fireEvent.click(start);
+
+    await waitFor(() => {
+      const split = Array.from(nextSession.querySelectorAll("button")).find((button) => button.textContent === "Split");
+      assert.equal(split.disabled, false);
+    }, { timeout: 2500 });
+
+    const split = Array.from(nextSession.querySelectorAll("button")).find((button) => button.textContent === "Split");
+    fireEvent.click(split);
+    const finish = Array.from(nextSession.querySelectorAll("button")).find((button) => button.textContent === "Finish and log");
+    fireEvent.click(finish);
+
+    assert.ok(await ui.findByRole("heading", { name: "Log workout" }));
+    assert.ok(ui.getByText("Timer result ready"));
+    fireEvent.click(ui.getByRole("button", { name: "Save workout log" }));
+
+    await waitFor(() => {
+      const saved = JSON.parse(window.localStorage.getItem("forge-hour-state-v1"));
+      assert.ok(["amrap", "emom", "forTime", "interval", "tabata", "rest"].includes(saved.logs[0].timerResult.mode));
+      assert.equal(saved.logs[0].timerResult.splits.length, 1);
+      assert.match(saved.logs[0].wodScore, /splits/);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
 test("React Testing Library saves a manual training session", async () => {
   const { cleanup, fireEvent, ui, waitFor } = mountApp();
 

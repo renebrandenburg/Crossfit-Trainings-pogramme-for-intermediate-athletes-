@@ -1398,6 +1398,121 @@ function buildWodPattern(week, goal, day, cap, movement) {
   return patterns[week];
 }
 
+function inferWorkoutTimer(session) {
+  if (!session || !Array.isArray(session.segments)) return null;
+  const timedSegment = session.segments.find((segment) => /WOD|Engine/i.test(segment.title || ""));
+  const workout = timedSegment && Array.isArray(timedSegment.items) ? timedSegment.items[0] : "";
+  return inferTimerFromText(workout);
+}
+
+function inferTimerFromText(value) {
+  const workout = String(value || "").trim();
+  if (!workout) return null;
+  const compact = workout.replace(/\s+/g, " ");
+  const lower = compact.toLowerCase();
+
+  if (/tabata/.test(lower)) {
+    return timerConfig("tabata", compact, 240, {
+      rounds: 8,
+      intervalSeconds: 30,
+      label: "Tabata 8 x :20/:10"
+    });
+  }
+
+  const amrap = lower.match(/\bamrap\s+(\d{1,2})\b/);
+  if (amrap) {
+    const minutes = Number(amrap[1]);
+    return timerConfig("amrap", compact, minutes * 60, { label: `AMRAP ${minutes}:00` });
+  }
+
+  const emom = lower.match(/\bemom\s+(\d{1,2})\b/);
+  if (emom) {
+    const minutes = Number(emom[1]);
+    return timerConfig("emom", compact, minutes * 60, {
+      intervalSeconds: 60,
+      rounds: minutes,
+      label: `EMOM ${minutes}:00`
+    });
+  }
+
+  const every = lower.match(/\bevery\s+(\d{1,2})(?::(\d{2}))?\s*min\s*x\s*(\d{1,2})\b/);
+  if (every) {
+    const intervalSeconds = Number(every[1]) * 60 + Number(every[2] || 0);
+    const rounds = Number(every[3]);
+    return timerConfig("interval", compact, intervalSeconds * rounds, {
+      intervalSeconds,
+      rounds,
+      label: `${rounds} intervals of ${formatSeconds(intervalSeconds)}`
+    });
+  }
+
+  const cap = lower.match(/(\d{1,2})\s*min\s*cap/);
+  if (/for time|rounds for time|benchmark/.test(lower) && cap) {
+    const minutes = Number(cap[1]);
+    return timerConfig("forTime", compact, minutes * 60, { label: `For time cap ${minutes}:00` });
+  }
+
+  const setsRest = lower.match(/(\d{1,2})\s+sets?,\s*rest\s+(\d{1,2})(?::(\d{2}))?/);
+  if (setsRest) {
+    const rounds = Number(setsRest[1]);
+    const restSeconds = Number(setsRest[2]) * (setsRest[3] ? 60 : 1) + Number(setsRest[3] || 0);
+    return timerConfig("rest", compact, rounds * restSeconds, {
+      rounds,
+      intervalSeconds: restSeconds,
+      label: `${rounds} rest breaks of ${formatSeconds(restSeconds)}`
+    });
+  }
+
+  const rest = lower.match(/\brest\s+(\d{1,2})(?::(\d{2}))\b/);
+  if (rest) {
+    const restSeconds = Number(rest[1]) * 60 + Number(rest[2]);
+    return timerConfig("rest", compact, restSeconds, {
+      intervalSeconds: restSeconds,
+      label: `Rest ${formatSeconds(restSeconds)}`
+    });
+  }
+
+  return null;
+}
+
+function timerConfig(mode, workout, plannedSeconds, options = {}) {
+  return {
+    mode,
+    source: "inferred",
+    workout,
+    plannedSeconds,
+    rounds: options.rounds || null,
+    intervalSeconds: options.intervalSeconds || null,
+    label: options.label || timerModeLabel(mode)
+  };
+}
+
+function timerDisplaySeconds(mode, plannedSeconds, elapsedSeconds) {
+  if (mode === "forTime") return elapsedSeconds;
+  if (Number.isFinite(plannedSeconds)) return Math.max(0, plannedSeconds - elapsedSeconds);
+  return elapsedSeconds;
+}
+
+function timerModeLabel(mode) {
+  const labels = {
+    amrap: "AMRAP",
+    emom: "EMOM",
+    forTime: "For time",
+    interval: "Intervals",
+    tabata: "Tabata",
+    rest: "Rest"
+  };
+  return labels[mode] || "Timer";
+}
+
+function formatTimerResult(result) {
+  if (!result) return "";
+  const mode = timerModeLabel(result.mode);
+  const elapsed = formatSeconds(Number(result.elapsedSeconds) || 0);
+  const splitCount = Array.isArray(result.splits) ? result.splits.length : 0;
+  return splitCount ? `${mode} ${elapsed}, ${splitCount} splits` : `${mode} ${elapsed}`;
+}
+
 function generatedWodMovementPool(goal, weakness, day, week, profile, phase) {
   const cleanLoad = kg(profile.maxes.cleanJerk, goal === "stronger" ? 0.65 : 0.55);
   const lightCleanLoad = kg(profile.maxes.cleanJerk, goal === "stronger" ? 0.55 : 0.45);
@@ -2199,8 +2314,12 @@ const FORGE_HOUR_API = {
   filterMovementLibrary,
   formatDate,
   formatPrValue,
+  formatTimerResult,
+  timerDisplaySeconds,
   getNextDayForToday,
   getProgramDays,
+  inferTimerFromText,
+  inferWorkoutTimer,
   isBetterPr,
   kg,
   migrateGeneratedProgrammePlans,

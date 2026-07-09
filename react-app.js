@@ -31,14 +31,17 @@
     filterMovementLibrary,
     formatDate,
     formatPrValue,
+    formatTimerResult,
     getNextDayForToday,
     getProgramDays,
+    inferWorkoutTimer,
     isBetterPr,
     migrateGeneratedProgrammePlans,
     normalizePrValue,
     positiveNumber,
     registerServiceWorker,
     splitLines,
+    timerDisplaySeconds,
     valueFromPath
   } = api;
 
@@ -230,6 +233,7 @@
       state: remoteStore ? "signed-out" : "not-configured",
       message: remoteStore ? "Sign in to sync logs and PRs." : remoteSetupMessage()
     }));
+    const [pendingTimerResult, setPendingTimerResult] = ReactRuntime.useState(null);
     const [logSelection, setLogSelection] = ReactRuntime.useState(() => ({
       week: 1,
       dayId: getNextDayForToday().id
@@ -293,6 +297,15 @@
       updateAppState((current) => ({ ...current, selectedWeek: week }));
       activateView("logView");
     }, [activateView, appState.selectedWeek, updateAppState]);
+
+    const finishTimerToLog = ReactRuntime.useCallback((session, timerResult) => {
+      const week = clamp(Number(session.week) || appState.selectedWeek, 1, 8);
+      setPendingTimerResult({ ...timerResult, dayId: session.id, week });
+      setLogSelection({ dayId: session.id, week });
+      updateAppState((current) => ({ ...current, selectedWeek: week }));
+      activateView("logView");
+      notify("Timer result ready to save.");
+    }, [activateView, appState.selectedWeek, notify, updateAppState]);
 
     ReactRuntime.useEffect(() => {
       setLogSelection((current) => ({ ...current, week: appState.selectedWeek }));
@@ -379,6 +392,7 @@
             activeView,
             onWeekChange: setSelectedWeek,
             onJumpLog: jumpToLog,
+            onTimerFinish: finishTimerToLog,
             onViewPlan: () => activateView("programView"),
             onSaveProfile: (profile) => {
               updateAppState((current) => syncBaselinePrsFromProfile({ ...current, profile }));
@@ -444,7 +458,8 @@
             appState,
             activeView,
             onWeekChange: setSelectedWeek,
-            onLogSession: jumpToLog
+            onLogSession: jumpToLog,
+            onTimerFinish: finishTimerToLog
           }),
           h(BuilderView, {
             appState,
@@ -478,21 +493,29 @@
               }));
               notify("Custom session deleted.");
             },
-            onLogSession: jumpToLog
+            onLogSession: jumpToLog,
+            onTimerFinish: finishTimerToLog
           }),
           h(LearnView, { activeView }),
           h(LogView, {
             appState,
             activeView,
             logSelection,
+            pendingTimerResult,
             onLogSelectionChange: setLogSelection,
             onWeekChange: setSelectedWeek,
             onNotify: notify,
             onSaveLog: (log) => {
+              const clearMatchingTimer = () => {
+                if (pendingTimerResult && pendingTimerResult.dayId === log.dayId && pendingTimerResult.week === log.week) {
+                  setPendingTimerResult(null);
+                }
+              };
               if (remoteStore && remoteUser) {
                 return remoteStore.saveLog(log, remoteUser.id).then(() => {
                   setRemoteSnapshot((current) => ({ ...current, logs: mergeById(current.logs, [log]) }));
                   updateAppState((current) => ({ ...current, logs: mergeById(current.logs, [log]) }));
+                  clearMatchingTimer();
                   notify("Workout log saved.");
                 }).catch((error) => {
                   console.warn("Could not save workout log to Supabase.", error);
@@ -501,6 +524,7 @@
                 });
               }
               updateAppState((current) => ({ ...current, logs: [log, ...current.logs] }));
+              clearMatchingTimer();
               notify("Workout log saved.");
               return Promise.resolve();
             },
@@ -634,7 +658,7 @@
     return h("select", { id, "aria-label": label, value: String(value), onChange: (event) => onChange(event.target.value) }, weekOptions());
   }
 
-  function DashboardView({ appState, activeView, onWeekChange, onJumpLog, onViewPlan, onSaveProfile, onReset, accountSyncPanel }) {
+  function DashboardView({ appState, activeView, onWeekChange, onJumpLog, onTimerFinish, onViewPlan, onSaveProfile, onReset, accountSyncPanel }) {
     const logsThisWeek = appState.logs.filter((log) => log.week === appState.selectedWeek);
     const mainDayIds = getProgramDays().map((day) => day.id);
     const completedDays = new Set(logsThisWeek.filter((log) => mainDayIds.includes(log.dayId)).map((log) => log.dayId)).size;
@@ -674,7 +698,8 @@
           h("div", { className: "quick-actions" },
             h("button", { className: "primary-button", type: "button", onClick: () => onJumpLog(session.id, appState.selectedWeek) }, "Log this"),
             h("button", { className: "ghost-button", type: "button", onClick: onViewPlan }, "View plan")
-          )
+          ),
+          h(WorkoutTimer, { session, onFinish: onTimerFinish })
         )
       ),
       h(ProfilePanel, { profile: appState.profile, onSave: onSaveProfile, onReset }),
@@ -836,7 +861,7 @@
     );
   }
 
-  function ProgramView({ appState, activeView, onWeekChange, onLogSession }) {
+  function ProgramView({ appState, activeView, onWeekChange, onLogSession, onTimerFinish }) {
     const week = WEEK_META.find((item) => item.week === appState.selectedWeek);
 
     return h("section", { id: "programView", className: viewClass("programView", activeView), "aria-labelledby": "programTitle" },
@@ -858,14 +883,15 @@
             key: session.id,
             session,
             tag: logged ? "Logged" : "60 min",
-            onLog: () => onLogSession(session.id, appState.selectedWeek)
+            onLog: () => onLogSession(session.id, appState.selectedWeek),
+            onTimerFinish
           });
         })
       )
     );
   }
 
-  function SessionCard({ session, tag, meta, onLog, onDelete }) {
+  function SessionCard({ session, tag, meta, onLog, onDelete, onTimerFinish }) {
     return h("article", { className: "day-card", id: session.id },
       h("div", { className: "day-card-header" },
         h("div", null,
@@ -879,12 +905,130 @@
         h("p", { className: "muted-copy" }, session.focus || "Custom training session"),
         h(SegmentList, { segments: session.segments }),
         session.addOns && session.addOns.length ? h(AddOnList, { addOns: session.addOns }) : null,
+        h(WorkoutTimer, { session, onFinish: onTimerFinish }),
         h("div", { className: "quick-actions" },
           onLog ? h("button", { className: "primary-button", type: "button", onClick: onLog }, "Log session") : null,
           onDelete ? h("button", { className: "danger-button", type: "button", onClick: onDelete }, "Delete") : null
         )
       )
     );
+  }
+
+  function WorkoutTimer({ session, onFinish }) {
+    const config = inferWorkoutTimer(session);
+    const [isOpen, setIsOpen] = ReactRuntime.useState(false);
+    const [running, setRunning] = ReactRuntime.useState(false);
+    const [startedAt, setStartedAt] = ReactRuntime.useState(null);
+    const [baseElapsed, setBaseElapsed] = ReactRuntime.useState(0);
+    const [tick, setTick] = ReactRuntime.useState(Date.now());
+    const [splits, setSplits] = ReactRuntime.useState([]);
+    const [completed, setCompleted] = ReactRuntime.useState(null);
+
+    ReactRuntime.useEffect(() => {
+      if (!running) return undefined;
+      const interval = window.setInterval(() => setTick(Date.now()), 500);
+      return () => window.clearInterval(interval);
+    }, [running]);
+
+    if (!config) return null;
+
+    const elapsed = running && startedAt ? baseElapsed + Math.floor((tick - startedAt) / 1000) : baseElapsed;
+    const currentRound = config.intervalSeconds ? Math.min(config.rounds || 999, Math.floor(elapsed / config.intervalSeconds) + 1) : null;
+    const displayTime = formatTimerSeconds(timerDisplaySeconds(config.mode, config.plannedSeconds, elapsed));
+
+    function startTimer() {
+      setCompleted(null);
+      setRunning(true);
+      setStartedAt(Date.now());
+      setTick(Date.now());
+    }
+
+    function pauseTimer() {
+      setBaseElapsed(elapsed);
+      setRunning(false);
+      setStartedAt(null);
+    }
+
+    function resetTimer() {
+      setRunning(false);
+      setStartedAt(null);
+      setBaseElapsed(0);
+      setTick(Date.now());
+      setSplits([]);
+      setCompleted(null);
+    }
+
+    function addSplit() {
+      const nextSplit = {
+        label: `Split ${splits.length + 1}`,
+        elapsedSeconds: elapsed
+      };
+      setSplits((current) => [...current, nextSplit]);
+    }
+
+    function finishTimer() {
+      const result = {
+        mode: config.mode,
+        source: config.source,
+        workout: config.workout,
+        startedAt: startedAt ? new Date(startedAt).toISOString() : new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        elapsedSeconds: elapsed,
+        plannedSeconds: config.plannedSeconds,
+        rounds: config.rounds,
+        intervalSeconds: config.intervalSeconds,
+        splits,
+        status: "completed"
+      };
+      setBaseElapsed(elapsed);
+      setRunning(false);
+      setStartedAt(null);
+      setCompleted(result);
+      if (onFinish) onFinish(session, result);
+    }
+
+    return h("section", { className: "timer-panel", "aria-label": `${config.label} timer` },
+      !isOpen ? h("button", { className: "ghost-button", type: "button", onClick: () => setIsOpen(true) }, "Start timer") : null,
+      isOpen ? h(ReactRuntime.Fragment, null,
+        h("div", { className: "timer-display" },
+          h("div", null,
+            h("p", { className: "eyebrow" }, config.label),
+            h("strong", null, displayTime)
+          ),
+          h("span", { className: "metric-pill" }, currentRound ? `Round ${currentRound}` : timerStateLabel(running, completed))
+        ),
+        h("p", { className: "muted-copy" }, config.workout),
+        splits.length ? h("ol", { className: "timer-splits" },
+          splits.map((split) => h("li", { key: split.label }, `${split.label} - ${formatTimerSeconds(split.elapsedSeconds)}`))
+        ) : null,
+        h("div", { className: "quick-actions" },
+          !running ? h("button", { className: "primary-button", type: "button", onClick: startTimer }, elapsed ? "Resume" : "Start") : null,
+          running ? h("button", { className: "ghost-button", type: "button", onClick: pauseTimer }, "Pause") : null,
+          h("button", { className: "ghost-button", type: "button", onClick: addSplit, disabled: !elapsed }, "Split"),
+          h("button", { className: "primary-button", type: "button", onClick: finishTimer, disabled: !elapsed }, "Finish and log"),
+          h("button", { className: "ghost-button", type: "button", onClick: resetTimer }, "Reset")
+        )
+      ) : null
+    );
+  }
+
+  function timerStateLabel(running, completed) {
+    if (completed) return "Finished";
+    return running ? "Running" : "Ready";
+  }
+
+  function formatTimerSeconds(totalSeconds) {
+    const seconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const rest = seconds % 60;
+    if (hours) return `${hours}:${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+    return `${minutes}:${String(rest).padStart(2, "0")}`;
+  }
+
+  function stripPendingTimerContext(timerResult) {
+    const { dayId, week, ...result } = timerResult;
+    return result;
   }
 
   function SegmentList({ segments }) {
@@ -907,7 +1051,7 @@
     );
   }
 
-  function BuilderView({ appState, activeView, onNotify, onGenerate, onAddCustomPlan, onClearCustomPlans, onDeleteCustomPlan, onLogSession }) {
+  function BuilderView({ appState, activeView, onNotify, onGenerate, onAddCustomPlan, onClearCustomPlans, onDeleteCustomPlan, onLogSession, onTimerFinish }) {
     const [customFormVersion, setCustomFormVersion] = ReactRuntime.useState(0);
 
     return h("section", { id: "builderView", className: viewClass("builderView", activeView), "aria-labelledby": "builderTitle" },
@@ -963,6 +1107,7 @@
                   logged ? h("span", { className: "metric-pill" }, "Logged") : null
                 ),
                 onLog: () => onLogSession(plan.id, plan.week),
+                onTimerFinish,
                 onDelete: () => onDeleteCustomPlan(plan.id)
               });
             })
@@ -1174,10 +1319,12 @@
     );
   }
 
-  function LogView({ appState, activeView, logSelection, onLogSelectionChange, onWeekChange, onNotify, onSaveLog, onClearLogs }) {
+  function LogView({ appState, activeView, logSelection, pendingTimerResult, onLogSelectionChange, onWeekChange, onNotify, onSaveLog, onClearLogs }) {
     const [formVersion, setFormVersion] = ReactRuntime.useState(0);
     const selectedWeek = clamp(Number(logSelection.week) || appState.selectedWeek, 1, 8);
     const selectedDayId = logSelection.dayId || getProgramDays()[0].id;
+    const matchingTimer = pendingTimerResult && pendingTimerResult.dayId === selectedDayId && pendingTimerResult.week === selectedWeek ? pendingTimerResult : null;
+    const timerSummary = matchingTimer ? formatTimerResult(matchingTimer) : "";
 
     return h("section", { id: "logView", className: viewClass("logView", activeView), "aria-labelledby": "logTitle" },
       h("div", { className: "section-heading" },
@@ -1187,7 +1334,7 @@
         )
       ),
       h("form", {
-        key: formVersion,
+        key: `${formVersion}-${matchingTimer ? matchingTimer.completedAt : "manual"}`,
         id: "logForm",
         className: "panel log-form",
         onSubmit: async (event) => {
@@ -1200,6 +1347,7 @@
             return;
           }
 
+          const timerResult = matchingTimer ? stripPendingTimerContext(matchingTimer) : null;
           const log = {
             id: createId(),
             date: String(data.get("logDate")),
@@ -1210,6 +1358,7 @@
             rpe: String(data.get("rpe") || "").trim(),
             strengthResult: String(data.get("strengthResult") || "").trim(),
             wodScore: String(data.get("wodScore") || "").trim(),
+            timerResult,
             notes: String(data.get("logNotes") || "").trim(),
             mobilityDone: Boolean(data.get("mobilityDone")),
             createdAt: new Date().toISOString()
@@ -1273,8 +1422,15 @@
           h("input", { id: "strengthResult", name: "strengthResult", type: "text", placeholder: "Back squat 5x4 at 110 kg, all smooth" })
         ),
         h("label", null, "WOD score",
-          h("input", { id: "wodScore", name: "wodScore", type: "text", placeholder: "4 rounds + 8 reps, or 14:36" })
+          h("input", { id: "wodScore", name: "wodScore", type: "text", placeholder: "4 rounds + 8 reps, or 14:36", defaultValue: timerSummary })
         ),
+        matchingTimer ? h("section", { className: "timer-summary", "aria-label": "Pending timer result" },
+          h("h3", null, "Timer result ready"),
+          h("p", null, timerSummary),
+          matchingTimer.splits && matchingTimer.splits.length ? h("ol", null,
+            matchingTimer.splits.map((split) => h("li", { key: split.label }, `${split.label} - ${formatTimerSeconds(split.elapsedSeconds)}`))
+          ) : null
+        ) : null,
         h("label", null, "Notes",
           h("textarea", { id: "logNotes", name: "logNotes", rows: "4", placeholder: "Pacing, scaling, misses, mobility, next adjustment" })
         ),
@@ -1305,6 +1461,7 @@
     return h("article", { className: "history-item" },
       h("h4", null, `${formatDate(log.date)} - Week ${log.week}, ${log.dayTitle}`),
       h("p", null, `${log.wodScore || "No WOD score"} ${log.strengthResult ? "- " + log.strengthResult : ""}`),
+      log.timerResult ? h("p", null, `Timer: ${formatTimerResult(log.timerResult)}`) : null,
       log.notes ? h("p", null, log.notes) : null,
       h("div", { className: "history-meta" },
         h("span", { className: `metric-pill readiness-${log.readiness}` }, READINESS_LABELS[log.readiness] || log.readiness),

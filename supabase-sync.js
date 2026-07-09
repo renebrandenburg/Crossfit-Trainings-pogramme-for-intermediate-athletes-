@@ -37,6 +37,7 @@
       rpe: log.rpe || null,
       strength_result: log.strengthResult || null,
       wod_score: log.wodScore || null,
+      timer_result: log.timerResult || null,
       notes: log.notes || null,
       mobility_done: Boolean(log.mobilityDone),
       created_at: log.createdAt
@@ -54,6 +55,7 @@
       rpe: row.rpe || "",
       strengthResult: row.strength_result || "",
       wodScore: row.wod_score || "",
+      timerResult: row.timer_result || null,
       notes: row.notes || "",
       mobilityDone: Boolean(row.mobility_done),
       createdAt: row.created_at

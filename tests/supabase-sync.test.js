@@ -42,6 +42,12 @@ test("Supabase sync helpers map workout logs to database rows and back", () => {
     rpe: "8",
     strengthResult: "Back squat smooth",
     wodScore: "4 rounds",
+    timerResult: {
+      mode: "amrap",
+      elapsedSeconds: 724,
+      plannedSeconds: 720,
+      splits: [{ label: "Round 1", elapsedSeconds: 95 }]
+    },
     notes: "Good pacing",
     mobilityDone: true,
     createdAt: "2026-07-08T10:00:00.000Z"
@@ -52,6 +58,7 @@ test("Supabase sync helpers map workout logs to database rows and back", () => {
   assert.equal(row.user_id, "user-1");
   assert.equal(row.day_id, "day1");
   assert.equal(row.wod_score, "4 rounds");
+  assert.equal(row.timer_result.mode, "amrap");
   assert.deepEqual(rowToLog(row), log);
 });
 

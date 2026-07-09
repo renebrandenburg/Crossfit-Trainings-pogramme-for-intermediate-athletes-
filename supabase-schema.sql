@@ -9,10 +9,14 @@ create table if not exists public.workout_logs (
   rpe text,
   strength_result text,
   wod_score text,
+  timer_result jsonb,
   notes text,
   mobility_done boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+alter table public.workout_logs
+  add column if not exists timer_result jsonb;
 
 create table if not exists public.pr_attempts (
   id text primary key,

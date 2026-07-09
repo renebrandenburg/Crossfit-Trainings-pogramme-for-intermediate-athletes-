@@ -17,7 +17,10 @@ const {
   customPlanSegments,
   filterMovementLibrary,
   formatPrValue,
+  formatTimerResult,
   getProgramDays,
+  inferTimerFromText,
+  inferWorkoutTimer,
   isBetterPr,
   kg,
   migrateGeneratedProgrammePlans,
@@ -26,6 +29,7 @@ const {
   percent,
   roundToNearest,
   splitLines,
+  timerDisplaySeconds,
   trimNumber
 } = require("../app.js");
 
@@ -93,6 +97,33 @@ test("built-in WODs vary by week and expose stimulus, score, and scaling", () =>
     assert.match(wods.join(" "), /AMRAP/);
     assert.match(wods.join(" "), /Every 3 min|rounds for time|EMOM|ascending ladder|sets, rest|For time|Benchmark/);
   }
+});
+
+test("timer helpers infer CrossFit workout formats and format results", () => {
+  const profile = cloneDefaultProfile();
+  const session = buildSession("day1", 1, profile);
+  const inferred = inferWorkoutTimer(session);
+
+  assert.equal(inferred.mode, "amrap");
+  assert.equal(inferred.plannedSeconds, 720);
+  assert.equal(inferTimerFromText("EMOM 16: min 1 row, min 2 rest").mode, "emom");
+  assert.deepEqual(
+    {
+      mode: inferTimerFromText("Every 3 min x 5: 15 cal row, 8 burpees").mode,
+      plannedSeconds: inferTimerFromText("Every 3 min x 5: 15 cal row, 8 burpees").plannedSeconds,
+      intervalSeconds: inferTimerFromText("Every 3 min x 5: 15 cal row, 8 burpees").intervalSeconds,
+      rounds: inferTimerFromText("Every 3 min x 5: 15 cal row, 8 burpees").rounds
+    },
+    { mode: "interval", plannedSeconds: 900, intervalSeconds: 180, rounds: 5 }
+  );
+  assert.equal(inferTimerFromText("4 rounds for time, 15 min cap: row and wall balls").mode, "forTime");
+  assert.equal(inferTimerFromText("Tabata air squats").plannedSeconds, 240);
+  assert.equal(inferTimerFromText("5 sets, rest 1:00 between sets").mode, "rest");
+  assert.equal(inferTimerFromText("5 sets, rest 1:00 between sets").plannedSeconds, 300);
+  assert.equal(timerDisplaySeconds("amrap", 900, 900), 0);
+  assert.equal(timerDisplaySeconds("amrap", 900, 960), 0);
+  assert.equal(timerDisplaySeconds("forTime", 900, 960), 960);
+  assert.equal(formatTimerResult({ mode: "amrap", elapsedSeconds: 724, splits: [{}, {}] }), "AMRAP 12:04, 2 splits");
 });
 
 test("load helpers round and format percentages for programmed weights", () => {
