@@ -5,10 +5,12 @@ const assert = require("node:assert/strict");
 
 const {
   DEFAULT_PROFILE,
+  DIVISION_LABELS,
   MOVEMENT_LIBRARY,
   PR_METRICS,
   WEEK_META,
   buildGeneratedProgramme,
+  buildRxReadiness,
   buildSession,
   clamp,
   cloneDefaultProfile,
@@ -102,6 +104,19 @@ test("load helpers round and format percentages for programmed weights", () => {
   assert.equal(trimNumber(100), "100");
 });
 
+test("default profile includes Masters 35-39 RX assessment fields", () => {
+  const profile = cloneDefaultProfile();
+
+  assert.equal(profile.age, 36);
+  assert.equal(DIVISION_LABELS[profile.division], "Men Masters 35-39");
+  assert.equal(profile.maxes.deadlift, 180);
+  assert.equal(profile.maxes.strictPress, 60);
+  assert.equal(profile.benchmarks.row2k, "7:30");
+  assert.equal(profile.benchmarks.doubleUnders, 30);
+  assert.ok(PR_METRICS.some((metric) => metric.id === "ringMuscleUp"));
+  assert.ok(PR_METRICS.some((metric) => metric.id === "run5k"));
+});
+
 test("needs-based generator creates complete eight-week programmes", () => {
   const profile = cloneDefaultProfile();
   const plans = buildGeneratedProgramme(
@@ -152,6 +167,70 @@ test("needs-based generator changes bias by goal and clamps options", () => {
   assert.match(JSON.stringify(gymnasticsPlans), /Muscle-up/);
   assert.equal(endurancePlans[0].duration, 60);
   assert.equal(gymnasticsPlans[0].duration, 45);
+});
+
+test("Masters RX generator creates Open prep sessions with separate add-ons", () => {
+  const profile = cloneDefaultProfile();
+  const plans = buildGeneratedProgramme(
+    { goal: "mastersRxOpen", daysPerWeek: 4, weakness: "muscleup", duration: 60 },
+    profile,
+    (seed) => seed
+  );
+
+  assert.equal(plans.length, 32);
+  assert.equal(plans[0].sourceGoal, "mastersRxOpen");
+  assert.match(plans[0].title, /Squat \+ TTB capacity/);
+
+  for (const plan of plans) {
+    assert.equal(plan.generated, true);
+    assert.ok(plan.duration <= 60);
+    assert.equal(customPlanSegments(plan).reduce((sum, segment) => sum + Number(segment.minutes), 0), 60);
+    assert.ok(Array.isArray(plan.addOns), "generated RX plans should expose optional add-ons");
+    assert.match(plan.wod[1], /Stimulus:/);
+    assert.match(plan.wod[2], /Score:/);
+    assert.equal(JSON.stringify(plan).includes("undefined"), false);
+  }
+
+  const serialized = JSON.stringify(plans);
+  assert.match(serialized, /wall balls|shuttle runs|thrusters|bar muscle-ups/);
+  assert.match(serialized, /Optional|add-on|Engine add-on|Skill add-on/i);
+});
+
+test("RX readiness scoring reports weakest categories and missing tests", () => {
+  const profile = cloneDefaultProfile();
+  const readiness = buildRxReadiness({
+    ...profile,
+    maxes: {
+      ...profile.maxes,
+      backSquat: 170,
+      frontSquat: 140,
+      deadlift: 210,
+      strictPress: 75,
+      snatch: 95,
+      cleanJerk: 120,
+      thruster: 90
+    },
+    benchmarks: {
+      ...profile.benchmarks,
+      row1k: "",
+      row2k: "7:15",
+      run5k: "23:00",
+      pullUps: 25,
+      chestToBar: 18,
+      t2b: 25,
+      barMuscleUp: 8,
+      ringMuscleUp: 4,
+      strictHspu: 8,
+      handstandWalk: 15,
+      doubleUnders: 100
+    }
+  });
+
+  assert.equal(readiness.division, "Men Masters 35-39");
+  assert.ok(readiness.categories.some((category) => category.label === "Strength" && category.score >= 100));
+  assert.ok(readiness.categories.some((category) => category.label === "Engine" && category.missing === 1));
+  assert.equal(readiness.weakest.length, 2);
+  assert.match(readiness.recommendation, /Prioritize/);
 });
 
 test("movement library covers gymnastics and weightlifting with video guides", () => {

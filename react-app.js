@@ -10,17 +10,19 @@
   if (!rootElement) return;
 
   if (!api || !syncApi || !ReactRuntime || !ReactDOMRuntime) {
-    rootElement.innerHTML = '<div class="app-shell"><section class="panel"><h1>Forge Hour</h1><p class="muted-copy">React could not load. Check your connection and reload the app.</p></section></div>';
+    rootElement.innerHTML = '<div class="app-shell"><section class="panel"><h1>CrossFit Training Programme</h1><p class="muted-copy">React could not load. Check your connection and reload the app.</p></section></div>';
     return;
   }
 
   const {
+    DIVISION_LABELS,
     GOAL_LABELS,
     PR_METRICS,
     READINESS_LABELS,
     WEEK_META,
     WEAKNESS_LABELS,
     buildGeneratedProgramme,
+    buildRxReadiness,
     buildSession,
     clamp,
     cloneDefaultProfile,
@@ -341,7 +343,7 @@
         h("header", { className: "topbar" },
           h("div", null,
             h("p", { className: "eyebrow" }, "Intermediate CrossFit"),
-            h("h1", null, "Forge Hour")
+            h("h1", null, "CrossFit Training Programme")
           ),
           h("div", { className: "topbar-actions" },
             h("div", { className: "status-pill" }, "Local save"),
@@ -365,7 +367,7 @@
             onViewPlan: () => activateView("programView"),
             onSaveProfile: (profile) => {
               updateAppState((current) => syncBaselinePrsFromProfile({ ...current, profile }));
-              notify("Training maxes saved.");
+              notify("Masters RX assessment saved.");
             },
             onReset: () => {
               if (!window.confirm("Reset profile, custom sessions, logs, and PRs on this device?")) return;
@@ -661,6 +663,7 @@
         )
       ),
       h(ProfilePanel, { profile: appState.profile, onSave: onSaveProfile, onReset }),
+      h(RxReadinessPanel, { profile: appState.profile }),
       accountSyncPanel
     );
   }
@@ -675,22 +678,37 @@
   function ProfilePanel({ profile, onSave, onReset }) {
     const [draft, setDraft] = ReactRuntime.useState(() => ({
       athleteName: profile.athleteName,
-      maxes: { ...profile.maxes }
+      age: profile.age,
+      division: profile.division,
+      bodyweight: profile.bodyweight,
+      maxes: { ...profile.maxes },
+      benchmarks: { ...profile.benchmarks }
     }));
 
     ReactRuntime.useEffect(() => {
-      setDraft({ athleteName: profile.athleteName, maxes: { ...profile.maxes } });
+      setDraft({
+        athleteName: profile.athleteName,
+        age: profile.age,
+        division: profile.division,
+        bodyweight: profile.bodyweight,
+        maxes: { ...profile.maxes },
+        benchmarks: { ...profile.benchmarks }
+      });
     }, [profile]);
 
     function updateMax(key, value) {
       setDraft((current) => ({ ...current, maxes: { ...current.maxes, [key]: value } }));
     }
 
+    function updateBenchmark(key, value) {
+      setDraft((current) => ({ ...current, benchmarks: { ...current.benchmarks, [key]: value } }));
+    }
+
     return h("section", { className: "panel", "aria-labelledby": "profileTitle" },
       h("div", { className: "panel-title" },
         h("div", null,
           h("p", { className: "eyebrow" }, "Profile"),
-          h("h3", { id: "profileTitle" }, "Training maxes")
+          h("h3", { id: "profileTitle" }, "Masters RX assessment")
         ),
         h("button", { className: "ghost-button", id: "resetDemoData", type: "button", onClick: onReset }, "Reset")
       ),
@@ -702,11 +720,33 @@
           onSave({
             ...profile,
             athleteName: String(draft.athleteName || "Intermediate athlete").trim(),
+            age: positiveNumber(draft.age, profile.age),
+            division: String(draft.division || "men35to39"),
+            bodyweight: positiveNumber(draft.bodyweight, profile.bodyweight),
             maxes: {
               backSquat: positiveNumber(draft.maxes.backSquat, profile.maxes.backSquat),
               frontSquat: positiveNumber(draft.maxes.frontSquat, profile.maxes.frontSquat),
+              deadlift: positiveNumber(draft.maxes.deadlift, profile.maxes.deadlift),
+              strictPress: positiveNumber(draft.maxes.strictPress, profile.maxes.strictPress),
+              thruster: positiveNumber(draft.maxes.thruster, profile.maxes.thruster),
               snatch: positiveNumber(draft.maxes.snatch, profile.maxes.snatch),
               cleanJerk: positiveNumber(draft.maxes.cleanJerk, profile.maxes.cleanJerk)
+            },
+            benchmarks: {
+              ...profile.benchmarks,
+              row1k: String(draft.benchmarks.row1k ?? "").trim(),
+              row2k: String(draft.benchmarks.row2k ?? "").trim(),
+              run5k: String(draft.benchmarks.run5k ?? "").trim(),
+              bike10MinCalories: positiveNumber(draft.benchmarks.bike10MinCalories, profile.benchmarks.bike10MinCalories),
+              murph: String(draft.benchmarks.murph ?? "").trim(),
+              t2b: positiveNumber(draft.benchmarks.t2b, profile.benchmarks.t2b),
+              pullUps: positiveNumber(draft.benchmarks.pullUps, profile.benchmarks.pullUps),
+              chestToBar: positiveNumber(draft.benchmarks.chestToBar, profile.benchmarks.chestToBar),
+              barMuscleUp: Number(draft.benchmarks.barMuscleUp) >= 0 ? Number(draft.benchmarks.barMuscleUp) : profile.benchmarks.barMuscleUp,
+              ringMuscleUp: Number(draft.benchmarks.ringMuscleUp) >= 0 ? Number(draft.benchmarks.ringMuscleUp) : profile.benchmarks.ringMuscleUp,
+              strictHspu: Number(draft.benchmarks.strictHspu) >= 0 ? Number(draft.benchmarks.strictHspu) : profile.benchmarks.strictHspu,
+              handstandWalk: Number(draft.benchmarks.handstandWalk) >= 0 ? Number(draft.benchmarks.handstandWalk) : profile.benchmarks.handstandWalk,
+              doubleUnders: Number(draft.benchmarks.doubleUnders) >= 0 ? Number(draft.benchmarks.doubleUnders) : profile.benchmarks.doubleUnders
             }
           });
         }
@@ -714,18 +754,70 @@
         h("label", null, "Athlete",
           h("input", { id: "athleteName", name: "athleteName", type: "text", autoComplete: "name", value: draft.athleteName, onChange: (event) => setDraft((current) => ({ ...current, athleteName: event.target.value })) })
         ),
+        h(NumberInput, { id: "athleteAge", name: "athleteAge", label: "Age", value: draft.age, onChange: (value) => setDraft((current) => ({ ...current, age: value })) }),
+        h("label", null, "Division",
+          h("select", { id: "athleteDivision", name: "athleteDivision", value: draft.division || "men35to39", onChange: (event) => setDraft((current) => ({ ...current, division: event.target.value })) },
+            Object.entries(DIVISION_LABELS).map(([value, label]) => h("option", { key: value, value }, label))
+          )
+        ),
+        h(NumberInput, { id: "bodyweight", name: "bodyweight", label: "Bodyweight kg", value: draft.bodyweight, onChange: (value) => setDraft((current) => ({ ...current, bodyweight: value })) }),
         h(NumberInput, { id: "backSquatMax", name: "backSquatMax", label: "Back squat 1RM", value: draft.maxes.backSquat, onChange: (value) => updateMax("backSquat", value) }),
         h(NumberInput, { id: "frontSquatMax", name: "frontSquatMax", label: "Front squat 1RM", value: draft.maxes.frontSquat, onChange: (value) => updateMax("frontSquat", value) }),
+        h(NumberInput, { id: "deadliftMax", name: "deadliftMax", label: "Deadlift 1RM", value: draft.maxes.deadlift, onChange: (value) => updateMax("deadlift", value) }),
+        h(NumberInput, { id: "strictPressMax", name: "strictPressMax", label: "Strict press 1RM", value: draft.maxes.strictPress, onChange: (value) => updateMax("strictPress", value) }),
+        h(NumberInput, { id: "thrusterMax", name: "thrusterMax", label: "Thruster max", value: draft.maxes.thruster, onChange: (value) => updateMax("thruster", value) }),
         h(NumberInput, { id: "snatchMax", name: "snatchMax", label: "Snatch 1RM", value: draft.maxes.snatch, onChange: (value) => updateMax("snatch", value) }),
         h(NumberInput, { id: "cleanJerkMax", name: "cleanJerkMax", label: "Clean and jerk 1RM", value: draft.maxes.cleanJerk, onChange: (value) => updateMax("cleanJerk", value) }),
-        h("button", { className: "primary-button", type: "submit" }, "Save maxes")
+        h(TextInput, { id: "row1k", label: "1 km row", value: draft.benchmarks.row1k, onChange: (value) => updateBenchmark("row1k", value), placeholder: "3:25" }),
+        h(TextInput, { id: "row2k", label: "2 km row", value: draft.benchmarks.row2k, onChange: (value) => updateBenchmark("row2k", value), placeholder: "7:15" }),
+        h(TextInput, { id: "run5k", label: "5 km run", value: draft.benchmarks.run5k, onChange: (value) => updateBenchmark("run5k", value), placeholder: "23:00" }),
+        h(NumberInput, { id: "bike10MinCalories", name: "bike10MinCalories", label: "10 min bike calories", value: draft.benchmarks.bike10MinCalories, onChange: (value) => updateBenchmark("bike10MinCalories", value) }),
+        h(NumberInput, { id: "pullUps", name: "pullUps", label: "Unbroken pull-ups", value: draft.benchmarks.pullUps, onChange: (value) => updateBenchmark("pullUps", value) }),
+        h(NumberInput, { id: "chestToBar", name: "chestToBar", label: "Unbroken chest-to-bar", value: draft.benchmarks.chestToBar, onChange: (value) => updateBenchmark("chestToBar", value) }),
+        h(NumberInput, { id: "t2b", name: "t2b", label: "Unbroken toes-to-bar", value: draft.benchmarks.t2b, onChange: (value) => updateBenchmark("t2b", value) }),
+        h(NumberInput, { id: "barMuscleUp", name: "barMuscleUp", label: "Unbroken bar muscle-ups", value: draft.benchmarks.barMuscleUp, min: "0", onChange: (value) => updateBenchmark("barMuscleUp", value) }),
+        h(NumberInput, { id: "ringMuscleUp", name: "ringMuscleUp", label: "Unbroken ring muscle-ups", value: draft.benchmarks.ringMuscleUp, min: "0", onChange: (value) => updateBenchmark("ringMuscleUp", value) }),
+        h(NumberInput, { id: "strictHspu", name: "strictHspu", label: "Strict HSPU", value: draft.benchmarks.strictHspu, min: "0", onChange: (value) => updateBenchmark("strictHspu", value) }),
+        h(NumberInput, { id: "handstandWalk", name: "handstandWalk", label: "Handstand walk meters", value: draft.benchmarks.handstandWalk, min: "0", onChange: (value) => updateBenchmark("handstandWalk", value) }),
+        h(NumberInput, { id: "doubleUnders", name: "doubleUnders", label: "Unbroken double-unders", value: draft.benchmarks.doubleUnders, onChange: (value) => updateBenchmark("doubleUnders", value) }),
+        h("button", { className: "primary-button", type: "submit" }, "Save assessment")
       )
     );
   }
 
-  function NumberInput({ id, name, label, value, onChange }) {
+  function NumberInput({ id, name, label, value, min = "1", onChange }) {
     return h("label", null, label,
-      h("input", { id, name, type: "number", min: "1", step: "0.5", inputMode: "decimal", value, onChange: (event) => onChange(event.target.value) })
+      h("input", { id, name, type: "number", min, step: "0.5", inputMode: "decimal", value, onChange: (event) => onChange(event.target.value) })
+    );
+  }
+
+  function TextInput({ id, label, value, onChange, placeholder }) {
+    return h("label", null, label,
+      h("input", { id, name: id, type: "text", value, placeholder, onChange: (event) => onChange(event.target.value) })
+    );
+  }
+
+  function RxReadinessPanel({ profile }) {
+    const readiness = buildRxReadiness(profile);
+    return h("section", { className: "panel", "aria-labelledby": "rxReadinessTitle" },
+      h("div", { className: "panel-title" },
+        h("div", null,
+          h("p", { className: "eyebrow" }, readiness.division),
+          h("h3", { id: "rxReadinessTitle" }, "RX readiness")
+        ),
+        h("span", { className: "metric-pill" }, `Age ${profile.age || 36}`)
+      ),
+      h("div", { className: "stats-grid" },
+        readiness.categories.map((category) => h(StatCard, {
+          key: category.id,
+          value: `${category.score}%`,
+          label: category.missing ? `${category.label} (${category.missing} tests)` : category.label
+        }))
+      ),
+      h("p", { className: "muted-copy" }, readiness.recommendation),
+      h("div", { className: "history-meta" },
+        readiness.weakest.map((category) => h("span", { className: "metric-pill", key: category.id }, `Focus: ${category.label}`))
+      )
     );
   }
 
@@ -771,6 +863,7 @@
         meta,
         h("p", { className: "muted-copy" }, session.focus || "Custom training session"),
         h(SegmentList, { segments: session.segments }),
+        session.addOns && session.addOns.length ? h(AddOnList, { addOns: session.addOns }) : null,
         h("div", { className: "quick-actions" },
           onLog ? h("button", { className: "primary-button", type: "button", onClick: onLog }, "Log session") : null,
           onDelete ? h("button", { className: "danger-button", type: "button", onClick: onDelete }, "Delete") : null
@@ -787,6 +880,16 @@
       ),
       h("ul", null, segment.items.map((item, index) => h("li", { key: `${segment.title}-${index}` }, item)))
     ));
+  }
+
+  function AddOnList({ addOns }) {
+    return h("section", { className: "segment optional-addons" },
+      h("h4", null,
+        h("span", null, "Optional add-ons"),
+        h("span", { className: "metric-pill" }, "10-20 min")
+      ),
+      h("ul", null, addOns.map((item, index) => h("li", { key: `addon-${index}` }, item)))
+    );
   }
 
   function BuilderView({ appState, activeView, onNotify, onGenerate, onAddCustomPlan, onClearCustomPlans, onDeleteCustomPlan, onLogSession }) {
@@ -832,7 +935,8 @@
                 shortTitle: plan.title,
                 title: plan.title,
                 focus: plan.focus,
-                segments: customPlanSegments(plan)
+                segments: customPlanSegments(plan),
+                addOns: plan.addOns || []
               };
               return h(SessionCard, {
                 key: plan.id,
@@ -882,7 +986,8 @@
             h("option", { value: "stronger" }, "Get stronger"),
             h("option", { value: "endurance" }, "More endurance"),
             h("option", { value: "gymnastics" }, "Better gymnastics"),
-            h("option", { value: "balanced" }, "All-round CrossFit")
+            h("option", { value: "balanced" }, "All-round CrossFit"),
+            h("option", { value: "mastersRxOpen" }, "Masters 35-39 RX / Open Prep")
           )
         ),
         h("label", null, "Sessions per week",
@@ -1129,7 +1234,7 @@
             value: selectedDayId,
             onChange: (event) => onLogSelectionChange({ ...logSelection, dayId: event.target.value, week: selectedWeek })
           },
-            h("optgroup", { label: "Forge Hour" },
+            h("optgroup", { label: "CrossFit Training Programme" },
               getProgramDays().map((day) => h("option", { key: day.id, value: day.id }, `${day.weekday} - ${day.shortTitle}`))
             ),
             appState.customPlans.length ? h("optgroup", { label: "My programme" },

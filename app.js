@@ -4,19 +4,32 @@ const STORAGE_KEY = "forge-hour-state-v1";
 
 const DEFAULT_PROFILE = {
   athleteName: "Intermediate athlete",
+  age: 36,
+  division: "men35to39",
+  bodyweight: 85,
   maxes: {
     backSquat: 145,
     frontSquat: 125,
+    deadlift: 180,
+    strictPress: 60,
+    thruster: 90,
     snatch: 75,
     cleanJerk: 100
   },
   benchmarks: {
     row1k: "3:30",
+    row2k: "7:30",
+    run5k: "24:00",
+    bike10MinCalories: 140,
     murph: "68:00",
     t2b: 8,
     pullUps: 10,
     chestToBar: 5,
-    barMuscleUp: 0
+    barMuscleUp: 0,
+    ringMuscleUp: 0,
+    strictHspu: 0,
+    handstandWalk: 0,
+    doubleUnders: 30
   }
 };
 
@@ -66,14 +79,24 @@ const WEEK_META = [
 const PR_METRICS = [
   { id: "backSquat", name: "Back squat", unit: "kg", type: "number", direction: "higher", seed: "maxes.backSquat" },
   { id: "frontSquat", name: "Front squat", unit: "kg", type: "number", direction: "higher", seed: "maxes.frontSquat" },
+  { id: "deadlift", name: "Deadlift", unit: "kg", type: "number", direction: "higher", seed: "maxes.deadlift" },
+  { id: "strictPress", name: "Strict press", unit: "kg", type: "number", direction: "higher", seed: "maxes.strictPress" },
+  { id: "thruster", name: "Thruster", unit: "kg", type: "number", direction: "higher", seed: "maxes.thruster" },
   { id: "snatch", name: "Snatch", unit: "kg", type: "number", direction: "higher", seed: "maxes.snatch" },
   { id: "cleanJerk", name: "Clean and jerk", unit: "kg", type: "number", direction: "higher", seed: "maxes.cleanJerk" },
   { id: "row1k", name: "1 km row", unit: "time", type: "time", direction: "lower", seed: "benchmarks.row1k" },
+  { id: "row2k", name: "2 km row", unit: "time", type: "time", direction: "lower", seed: "benchmarks.row2k" },
+  { id: "run5k", name: "5 km run", unit: "time", type: "time", direction: "lower", seed: "benchmarks.run5k" },
+  { id: "bike10MinCalories", name: "10 min bike calories", unit: "cal", type: "number", direction: "higher", seed: "benchmarks.bike10MinCalories" },
   { id: "murph", name: "Murph", unit: "time", type: "time", direction: "lower", seed: "benchmarks.murph" },
   { id: "t2b", name: "Unbroken toes-to-bar", unit: "reps", type: "number", direction: "higher", seed: "benchmarks.t2b" },
   { id: "pullUps", name: "Unbroken pull-ups", unit: "reps", type: "number", direction: "higher", seed: "benchmarks.pullUps" },
   { id: "chestToBar", name: "Unbroken chest-to-bar", unit: "reps", type: "number", direction: "higher", seed: "benchmarks.chestToBar" },
-  { id: "barMuscleUp", name: "Bar muscle-up", unit: "reps", type: "number", direction: "higher", seed: "benchmarks.barMuscleUp" }
+  { id: "barMuscleUp", name: "Bar muscle-up", unit: "reps", type: "number", direction: "higher", seed: "benchmarks.barMuscleUp" },
+  { id: "ringMuscleUp", name: "Ring muscle-up", unit: "reps", type: "number", direction: "higher", seed: "benchmarks.ringMuscleUp" },
+  { id: "strictHspu", name: "Strict handstand push-up", unit: "reps", type: "number", direction: "higher", seed: "benchmarks.strictHspu" },
+  { id: "handstandWalk", name: "Handstand walk", unit: "m", type: "number", direction: "higher", seed: "benchmarks.handstandWalk" },
+  { id: "doubleUnders", name: "Unbroken double-unders", unit: "reps", type: "number", direction: "higher", seed: "benchmarks.doubleUnders" }
 ];
 
 const READINESS_LABELS = {
@@ -86,7 +109,42 @@ const GOAL_LABELS = {
   stronger: "Get stronger",
   endurance: "More endurance",
   gymnastics: "Better gymnastics",
-  balanced: "All-round CrossFit"
+  balanced: "All-round CrossFit",
+  mastersRxOpen: "Masters 35-39 RX / Open Prep"
+};
+
+const DIVISION_LABELS = {
+  men35to39: "Men Masters 35-39"
+};
+
+const MASTERS_RX_TARGETS = {
+  strength: {
+    backSquat: { label: "Back squat", target: 170, unit: "kg", source: "maxes.backSquat" },
+    frontSquat: { label: "Front squat", target: 140, unit: "kg", source: "maxes.frontSquat" },
+    deadlift: { label: "Deadlift", target: 210, unit: "kg", source: "maxes.deadlift" },
+    strictPress: { label: "Strict press", target: 75, unit: "kg", source: "maxes.strictPress" }
+  },
+  olympic: {
+    snatch: { label: "Snatch", target: 95, unit: "kg", source: "maxes.snatch" },
+    cleanJerk: { label: "Clean and jerk", target: 120, unit: "kg", source: "maxes.cleanJerk" },
+    thruster: { label: "Thruster", target: 90, unit: "kg", source: "maxes.thruster" }
+  },
+  engine: {
+    row1k: { label: "1 km row", target: 205, unit: "time", source: "benchmarks.row1k", direction: "lower" },
+    row2k: { label: "2 km row", target: 435, unit: "time", source: "benchmarks.row2k", direction: "lower" },
+    run5k: { label: "5 km run", target: 1380, unit: "time", source: "benchmarks.run5k", direction: "lower" },
+    bike10MinCalories: { label: "10 min bike", target: 160, unit: "cal", source: "benchmarks.bike10MinCalories" }
+  },
+  gymnastics: {
+    pullUps: { label: "Pull-ups", target: 25, unit: "reps", source: "benchmarks.pullUps" },
+    chestToBar: { label: "Chest-to-bar", target: 18, unit: "reps", source: "benchmarks.chestToBar" },
+    t2b: { label: "Toes-to-bar", target: 25, unit: "reps", source: "benchmarks.t2b" },
+    barMuscleUp: { label: "Bar muscle-ups", target: 8, unit: "reps", source: "benchmarks.barMuscleUp" },
+    ringMuscleUp: { label: "Ring muscle-ups", target: 4, unit: "reps", source: "benchmarks.ringMuscleUp" },
+    strictHspu: { label: "Strict HSPU", target: 8, unit: "reps", source: "benchmarks.strictHspu" },
+    handstandWalk: { label: "Handstand walk", target: 15, unit: "m", source: "benchmarks.handstandWalk" },
+    doubleUnders: { label: "Double-unders", target: 100, unit: "reps", source: "benchmarks.doubleUnders" }
+  }
 };
 
 const WEAKNESS_LABELS = {
@@ -573,7 +631,7 @@ function renderLogSessionOptions() {
   }).join("");
 
   elements.logDay.innerHTML = `
-    <optgroup label="Forge Hour">
+    <optgroup label="CrossFit Training Programme">
       ${mainOptions}
     </optgroup>
     ${customOptions ? `<optgroup label="My programme">${customOptions}</optgroup>` : ""}
@@ -1153,6 +1211,10 @@ function normalizeGeneratorOptions(options) {
 }
 
 function buildGeneratedSession(options, profile, week, day, idFactory) {
+  if (options.goal === "mastersRxOpen") {
+    return buildMastersRxOpenSession(options, profile, week, day, idFactory);
+  }
+
   const phase = getGeneratedWeekPhase(week, options.goal);
   const title = generatedDayTitle(options.goal, day);
   const segmentMinutes = getGeneratedSegmentMinutes(options.duration, options.goal);
@@ -1191,6 +1253,7 @@ function getGeneratedWeekPhase(week, goal) {
 
   if (goal === "endurance") return { ...base, load: Math.max(0.55, base.load - 0.08), front: Math.max(0.6, base.front - 0.08) };
   if (goal === "stronger") return { ...base, load: Math.min(0.92, base.load + 0.03), front: Math.min(0.92, base.front + 0.02) };
+  if (goal === "mastersRxOpen") return { ...base, load: Math.min(0.9, base.load + 0.01), oly: Math.min(0.85, base.oly + 0.02) };
   return base;
 }
 
@@ -1199,7 +1262,8 @@ function generatedDayTitle(goal, day) {
     stronger: ["Squat strength", "Olympic lift strength", "Front squat and pull", "Upper strength plus WOD", "Weakness strength"],
     endurance: ["Aerobic base", "Row intervals", "Threshold mixed", "Longer engine", "Zone 2 plus mobility"],
     gymnastics: ["Pulling volume", "Toes-to-bar and core", "Muscle-up transition", "Inverted skill plus WOD", "Weakness skill"],
-    balanced: ["Squat plus short WOD", "Snatch plus rowing", "Clean and jerk plus pull", "Gymnastics plus long WOD", "Weakness day"]
+    balanced: ["Squat plus short WOD", "Snatch plus rowing", "Clean and jerk plus pull", "Gymnastics plus long WOD", "Weakness day"],
+    mastersRxOpen: ["Squat + TTB capacity", "Snatch/OHS + machine pace", "Clean/front squat + pulling", "Muscle-up/HSPU mixed modal", "RX weakness top-up"]
   };
   return titles[goal][day - 1] || titles.balanced[day - 1];
 }
@@ -1419,7 +1483,8 @@ function generatedBenchmarkName(goal, day) {
     stronger: ["Barbell sprint", "Power intervals", "Heavy triplet", "Upper stamina", "Weakness repeat"],
     endurance: ["Mono engine", "Split control", "Threshold triplet", "Long chipper", "Zone 2 check"],
     gymnastics: ["Bodyweight repeat", "Midline EMOM", "Skill density", "Inverted control", "Weakness repeat"],
-    balanced: ["Mixed baseline", "Row-barbell repeat", "Run-pull triplet", "Cindy-style engine", "Weakness EMOM"]
+    balanced: ["Mixed baseline", "Row-barbell repeat", "Run-pull triplet", "Cindy-style engine", "Weakness EMOM"],
+    mastersRxOpen: ["Wall-ball engine", "OHS shuttle repeat", "Thruster ladder", "Gymnastics chipper", "Masters RX retest"]
   };
   return pick(names[goal] || names.balanced, day - 1);
 }
@@ -1518,6 +1583,221 @@ function weaknessMobility(weakness) {
     t2b: "Lats, hip flexors, hamstrings, and hollow breathing"
   };
   return mobility[weakness];
+}
+
+function buildMastersRxOpenSession(options, profile, week, day, idFactory) {
+  const phase = getGeneratedWeekPhase(week, "mastersRxOpen");
+  const title = generatedDayTitle("mastersRxOpen", day);
+  const segmentMinutes = getGeneratedSegmentMinutes(options.duration, day === 2 ? "endurance" : day === 4 ? "gymnastics" : "balanced");
+  const templates = mastersRxSessionTemplates(profile, week, phase);
+  const selected = templates[day] || templates[1];
+
+  return {
+    id: idFactory(`generated-masters-rx-open-w${week}-d${day}`),
+    week,
+    title: `W${week} D${day}: ${title}`,
+    focus: `Men Masters 35-39 RX prep. ${phase.note} Build Open standards without failed skill reps.`,
+    warmup: selected.warmup,
+    strength: selected.strength,
+    wod: selected.wod,
+    mobility: selected.mobility,
+    addOns: mastersRxAddOns(week, day),
+    duration: options.duration,
+    segmentMinutes,
+    intensity: phase.intensity,
+    generated: true,
+    wodSchemaVersion: WOD_SCHEMA_VERSION,
+    sourceGoal: options.goal,
+    sourceWeakness: options.weakness,
+    createdAt: new Date().toISOString()
+  };
+}
+
+function mastersRxSessionTemplates(profile, week, phase) {
+  const t2b = { 1: 7, 2: 8, 3: 9, 4: 6, 5: 8, 6: 10, 7: 12, 8: 8 }[week];
+  const c2b = { 1: 5, 2: 6, 3: 7, 4: 4, 5: 6, 6: 8, 7: 10, 8: 6 }[week];
+  const bmu = { 1: "transition practice", 2: "singles or low-bar transitions", 3: "2-4 quality singles", 4: "low-volume transitions", 5: "3-6 singles", 6: "EMOM 8: 1-2 reps", 7: "test 8 min quality reps", 8: "benchmark set or transition max" }[week];
+  const wallBallVolume = { 1: 80, 2: 100, 3: 120, 4: 70, 5: 110, 6: 130, 7: 150, 8: 100 }[week];
+
+  return {
+    1: {
+      warmup: ["3 min easy row", "Dynamic hips, ankles, T-spine", "2 rounds: 10 air squats, 8 kip swings, 6 burpees"],
+      strength: [
+        `Back squat ${phase.reps} at ${percent(phase.load)} (${kg(profile.maxes.backSquat, phase.load)})`,
+        `Toes-to-bar EMOM 8: ${t2b} reps, stop before grip or rhythm breaks`
+      ],
+      wod: mastersRxWod(week, 1, profile, wallBallVolume),
+      mobility: ["Ankles, hip flexors, lats", "2 min nasal breathing", "Log wall-ball and TTB break plan"]
+    },
+    2: {
+      warmup: ["Easy bike or row", "Shoulder and overhead squat prep", "PVC snatch balance and tall snatch"],
+      strength: [
+        `Snatch complex 5x(1 hang power + 1 OHS) at ${percent(phase.oly)} (${kg(profile.maxes.snatch, phase.oly)})`,
+        `Overhead squat 4x5 building to confident sets near ${kg(profile.maxes.snatch, Math.min(0.75, phase.oly + 0.05))}`
+      ],
+      wod: mastersRxWod(week, 2, profile, wallBallVolume),
+      mobility: ["Front rack, lats, T-spine extension", "Easy 3 min flush", "Write OHS limiting factor"]
+    },
+    3: {
+      warmup: ["400 m easy run", "Front rack and jerk footwork", "Scap pull-ups and hollow rocks"],
+      strength: [
+        `Clean and jerk 8x1 at ${percent(phase.oly)} (${kg(profile.maxes.cleanJerk, phase.oly)})`,
+        `Front squat ${phase.reps} at ${percent(phase.front)} (${kg(profile.maxes.frontSquat, phase.front)})`,
+        `Chest-to-bar density: 6 sets of ${c2b}, rest as needed`
+      ],
+      wod: mastersRxWod(week, 3, profile, wallBallVolume),
+      mobility: ["Wrists, front rack, pecs", "Easy breathing reset", "Log C2B break strategy"]
+    },
+    4: {
+      warmup: ["Easy bike", "Wrist, shoulder, and hollow/arch prep", "Wall walk line drills"],
+      strength: [
+        `Muscle-up skill: ${bmu}`,
+        `Strict HSPU or deficit pike press 5 submax sets`,
+        `Clean pull 4x3 at ${percent(Math.min(1.15, phase.oly + 0.25))} of clean and jerk (${kg(profile.maxes.cleanJerk, Math.min(1.15, phase.oly + 0.25))})`
+      ],
+      wod: mastersRxWod(week, 4, profile, wallBallVolume),
+      mobility: ["Shoulders, pecs, calves, forearms", "2 min downshift", "Log skill misses and no-rep risks"]
+    },
+    5: {
+      warmup: ["Easy machine", "Weakness prep", "Empty-bar cycling"],
+      strength: ["Pick weakest RX category: 15 min technique density", "Keep every rep competition-standard"],
+      wod: mastersRxWod(week, 5, profile, wallBallVolume),
+      mobility: ["Mobility for weakest category", "Easy flush", "Set next-week focus"]
+    }
+  };
+}
+
+function mastersRxWod(week, day, profile, wallBallVolume) {
+  const cleanLoad = kg(profile.maxes.cleanJerk, week >= 6 ? 0.6 : 0.52);
+  const thrusterLoad = week >= 6 ? "43-61 kg / 95-135 lb" : "43-52 kg / 95-115 lb";
+  const ohsLoad = "52 kg / 115 lb target, scale to unbroken 5s";
+  const patterns = {
+    1: [
+      `AMRAP 12: 20 wall balls, 12 box jump-overs, 8 toes-to-bar. Target ${wallBallVolume}+ wall balls total.`,
+      "Stimulus: Open-style leg and midline repeatability.",
+      "Score: rounds and reps; scale wall-ball breaks before reducing movement standard."
+    ],
+    2: [
+      `For time, 12 min cap: 10 shuttle runs, 20 overhead squats at ${ohsLoad}, 30 burpees over bar, rest 1:00, then reverse.`,
+      "Stimulus: Quarterfinal-style shuttle/OHS/burpee control.",
+      "Score: finish time or reps at cap; preserve below-parallel squats and two-foot bar clearance."
+    ],
+    3: [
+      `12 min ascending ladder: 3-6-9... thrusters at ${thrusterLoad}, chest-to-bar pull-ups; after each round row 150 m.`,
+      "Stimulus: 25.2-style pulling and thruster fatigue.",
+      "Score: last completed round plus reps; scale to chest-to-bar quality before volume."
+    ],
+    4: [
+      `18 min chipper: 50 double-unders, 20 burpees, 15 clean and jerks at ${cleanLoad}, 12 bar muscle-ups or transitions, 50 double-unders, 20 wall walks or strict HSPU.`,
+      "Stimulus: mixed gymnastics under breathing fatigue.",
+      "Score: time or reps; stop skill sets before repeated failed reps."
+    ],
+    5: [
+      "Benchmark 15: 3 rounds for time: 400 m run, 21 wall balls, 12 toes-to-bar, 9 power cleans.",
+      "Stimulus: Masters RX repeat test across engine, squat stamina, grip, and barbell cycling.",
+      "Score: finish time; compare to future 8-week cycles."
+    ]
+  };
+  return patterns[day] || patterns[1];
+}
+
+function mastersRxAddOns(week, day) {
+  const engine = [
+    "Engine add-on: 20 min Zone 2 row/bike/run, conversational pace.",
+    "Engine add-on: 6x2:00 machine hard, 2:00 easy; hold repeatable output.",
+    "Engine add-on: 10x100 m relaxed run strides or 8x30 sec bike sprint, full recovery.",
+    "Engine add-on: 30 min easy Zone 2 if readiness is green."
+  ];
+  const skill = [
+    "Skill add-on: 8 min double-under practice, stop before calf fatigue.",
+    "Skill add-on: EMOM 10 alternating strict HSPU/pike press and hollow hold.",
+    "Skill add-on: 10 min bar muscle-up transition or low-ring turnover practice.",
+    "Skill add-on: 6 sets submax TTB or C2B, perfect rhythm only."
+  ];
+  if (week === 4 || week === 8) {
+    return ["Add-on optional: skip if readiness is amber/red; otherwise 15-20 min easy Zone 2 only."];
+  }
+  return [pick(engine, week + day), pick(skill, week * 2 + day)];
+}
+
+function buildRxReadiness(profile) {
+  const groups = [
+    { id: "strength", label: "Strength", targets: MASTERS_RX_TARGETS.strength },
+    { id: "olympic", label: "Olympic lifting", targets: MASTERS_RX_TARGETS.olympic },
+    { id: "engine", label: "Engine", targets: MASTERS_RX_TARGETS.engine },
+    { id: "gymnastics", label: "Gymnastics", targets: MASTERS_RX_TARGETS.gymnastics }
+  ];
+
+  const categories = groups.map((group) => {
+    const items = Object.entries(group.targets).map(([id, target]) => readinessItem(id, target, profile));
+    const tested = items.filter((item) => item.status !== "missing");
+    const score = tested.length ? Math.round(tested.reduce((sum, item) => sum + item.score, 0) / tested.length) : 0;
+    return {
+      id: group.id,
+      label: group.label,
+      score,
+      missing: items.length - tested.length,
+      items
+    };
+  });
+
+  const openSkillsScore = Math.round((
+    categoryScore(categories, "engine") +
+    categoryScore(categories, "gymnastics") +
+    categoryScore(categories, "olympic")
+  ) / 3);
+  const recoveryScore = recoveryReadinessScore(profile);
+  const fullCategories = [
+    ...categories,
+    { id: "openSkills", label: "Open skills", score: openSkillsScore, missing: 0, items: [] },
+    { id: "recovery", label: "Recovery", score: recoveryScore, missing: 0, items: [] }
+  ];
+  const weakest = [...fullCategories]
+    .filter((category) => category.id !== "recovery")
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 2);
+
+  return {
+    division: DIVISION_LABELS[profile.division] || DIVISION_LABELS.men35to39,
+    categories: fullCategories,
+    weakest,
+    recommendation: readinessRecommendation(weakest)
+  };
+}
+
+function readinessItem(id, target, profile) {
+  const metric = PR_METRICS.find((item) => item.id === id) || { type: target.unit === "time" ? "time" : "number" };
+  const rawValue = valueFromPath(profile, target.source);
+  const value = normalizePrValue(rawValue, metric);
+  if (!Number.isFinite(value) || value <= 0) {
+    return { id, label: target.label, target: target.target, display: "Test needed", score: 0, status: "missing" };
+  }
+  const direction = target.direction || "higher";
+  const ratio = direction === "lower" ? target.target / value : value / target.target;
+  const score = clamp(Math.round(ratio * 100), 0, 125);
+  return {
+    id,
+    label: target.label,
+    target: target.target,
+    display: formatPrValue(value, metric),
+    score,
+    status: score >= 100 ? "ready" : "building"
+  };
+}
+
+function categoryScore(categories, id) {
+  const category = categories.find((item) => item.id === id);
+  return category ? category.score : 0;
+}
+
+function recoveryReadinessScore(profile) {
+  const age = Number(profile.age) || 36;
+  return age >= 35 ? 85 : 90;
+}
+
+function readinessRecommendation(weakest) {
+  if (!weakest.length) return "Log assessment tests to reveal your next RX focus.";
+  return `Prioritize ${weakest.map((item) => item.label.toLowerCase()).join(" and ")} in the next generated cycle.`;
 }
 
 function getProgramDays() {
@@ -1901,13 +2181,16 @@ function registerServiceWorker() {
 
 const FORGE_HOUR_API = {
   DEFAULT_PROFILE,
+  DIVISION_LABELS,
   GOAL_LABELS,
+  MASTERS_RX_TARGETS,
   MOVEMENT_LIBRARY,
   PR_METRICS,
   READINESS_LABELS,
   WEEK_META,
   WEAKNESS_LABELS,
   buildGeneratedProgramme,
+  buildRxReadiness,
   buildSession,
   clamp,
   cloneDefaultProfile,

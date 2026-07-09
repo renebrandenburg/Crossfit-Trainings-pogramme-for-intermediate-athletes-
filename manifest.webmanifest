@@ -1,6 +1,6 @@
 {
-  "name": "Forge Hour",
-  "short_name": "Forge Hour",
+  "name": "CrossFit Training Programme",
+  "short_name": "CrossFit",
   "description": "An 8-week phone-first CrossFit programme generator, movement library, custom builder, and PR tracker for intermediate athletes.",
   "start_url": "./index.html",
   "display": "standalone",

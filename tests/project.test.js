@@ -36,6 +36,8 @@ test("React app contains the main app surfaces and navigation", () => {
   assert.match(app, /logView/);
   assert.match(app, /prView/);
   assert.match(app, /Eight-week cycle/);
+  assert.match(app, /RX readiness/);
+  assert.match(app, /Masters RX assessment/);
   assert.match(app, /nav-button/);
   assert.match(app, /Home/);
   assert.match(app, /PRs/);
@@ -68,6 +70,8 @@ test("builder form has the required fields for a full CrossFit session", () => {
   assert.match(app, /Get stronger/);
   assert.match(app, /More endurance/);
   assert.match(app, /Better gymnastics/);
+  assert.match(app, /Masters 35-39 RX \/ Open Prep/);
+  assert.match(app, /Optional add-ons/);
 });
 
 test("movement library surface exposes search and category filters", () => {
@@ -85,7 +89,7 @@ test("manifest is valid JSON and points to an existing icon", () => {
   const manifest = JSON.parse(read("manifest.webmanifest"));
   const icon = manifest.icons[0];
 
-  assert.equal(manifest.name, "Forge Hour");
+  assert.equal(manifest.name, "CrossFit Training Programme");
   assert.equal(manifest.display, "standalone");
   assert.equal(manifest.orientation, "portrait-primary");
   assert.match(manifest.description, /8-week/);
@@ -96,7 +100,7 @@ test("service worker caches the files needed to run offline", () => {
   const serviceWorker = read("sw.js");
   const assets = ["index.html", "styles.css", "app.js", "supabase-config.js", "supabase-sync.js", "react-app.js", "manifest.webmanifest", "icon.svg"];
 
-  assert.match(serviceWorker, /forge-hour-v8/);
+  assert.match(serviceWorker, /crossfit-training-programme-v1/);
   assert.match(serviceWorker, /react@18\.3\.1\/umd\/react\.production\.min\.js/);
   assert.match(serviceWorker, /react-dom@18\.3\.1\/umd\/react-dom\.production\.min\.js/);
   assert.match(serviceWorker, /@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/);
@@ -112,6 +116,8 @@ test("project documentation describes the current feature set", () => {
 
   assert.match(readme, /Eight-week progression cycle/);
   assert.match(readme, /Needs-based programme generator/);
+  assert.match(readme, /Masters 35-39 RX\/Open prep generator/);
+  assert.match(readme, /RX readiness dashboard/);
   assert.match(readme, /WOD variation/);
   assert.match(readme, /Manual training programme builder/);
   assert.match(readme, /Movement library/);

@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "forge-hour-v8";
+const CACHE_NAME = "crossfit-training-programme-v1";
 const LOCAL_ASSETS = [
   "./",
   "./index.html",

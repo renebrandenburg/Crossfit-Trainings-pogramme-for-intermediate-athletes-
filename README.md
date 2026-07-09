@@ -1,4 +1,4 @@
-# Forge Hour
+# CrossFit Training Programme
 
 A phone-first CrossFit training programme and PR tracker for intermediate athletes.
 
@@ -7,11 +7,13 @@ A phone-first CrossFit training programme and PR tracker for intermediate athlet
 - Four-day CrossFit programme capped at 60 minutes per session.
 - Eight-week progression cycle with recalculated loads from the athlete's 1RMs.
 - Needs-based programme generator for strength, endurance, gymnastics, or all-round goals.
+- Masters 35-39 RX/Open prep generator with readiness targets, assessment fields, and optional engine or skill add-ons.
 - WOD variation across time domains and formats: AMRAP, intervals, for-time, EMOM, ladder, repeat sets, chipper, and benchmark.
 - Manual training programme builder for adding your own sessions.
 - Movement library for gymnastics and weightlifting skills with cues, progressions, scaling, and video guide links.
 - Workout logging for readiness, RPE, strength or skill results, WOD score, notes, and mobility.
 - PR tracker for major lifts, rowing, Murph, and gymnastics benchmarks.
+- RX readiness dashboard for strength, Olympic lifting, engine, gymnastics, Open skills, and recovery focus areas.
 - React-powered phone-first UI mounted into a static app shell.
 - Light, dark, and system theme setting saved locally.
 - Optional Supabase Postgres sync for workout logs and PR records.

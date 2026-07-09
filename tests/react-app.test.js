@@ -149,6 +149,11 @@ test("React Testing Library renders the dashboard and bottom navigation", async 
 
   try {
     assert.ok(await ui.findByRole("heading", { name: "Training dashboard" }));
+    assert.ok(ui.getByRole("heading", { name: "Masters RX assessment" }));
+    assert.ok(ui.getByRole("heading", { name: "RX readiness" }));
+    assert.ok(ui.getAllByText("Men Masters 35-39").length >= 1);
+    assert.ok(ui.getByLabelText("Deadlift 1RM"));
+    assert.ok(ui.getByLabelText("Unbroken ring muscle-ups"));
     assert.ok(ui.getByText("Sessions logged"));
     assert.ok(ui.getByRole("button", { name: "Home" }));
     assert.ok(ui.getByRole("button", { name: "Plan" }));
@@ -156,6 +161,52 @@ test("React Testing Library renders the dashboard and bottom navigation", async 
     assert.ok(ui.getByRole("button", { name: "Learn" }));
     assert.ok(ui.getByRole("button", { name: "Log" }));
     assert.ok(ui.getByRole("button", { name: "PRs" }));
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library keeps cleared time benchmarks as test-needed values", async () => {
+  const { cleanup, fireEvent, ui, waitFor } = mountApp();
+
+  try {
+    assert.ok(await ui.findByRole("heading", { name: "Masters RX assessment" }));
+
+    fireEvent.change(ui.getByLabelText("1 km row"), { target: { value: "" } });
+    fireEvent.change(ui.getByLabelText("2 km row"), { target: { value: "" } });
+    fireEvent.change(ui.getByLabelText("5 km run"), { target: { value: "" } });
+    fireEvent.click(ui.getByRole("button", { name: "Save assessment" }));
+
+    await waitFor(() => {
+      const saved = JSON.parse(window.localStorage.getItem("forge-hour-state-v1"));
+      assert.equal(saved.profile.benchmarks.row1k, "");
+      assert.equal(saved.profile.benchmarks.row2k, "");
+      assert.equal(saved.profile.benchmarks.run5k, "");
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library generates a Masters 35-39 RX Open prep programme", async () => {
+  const { cleanup, fireEvent, ui, waitFor } = mountApp();
+
+  try {
+    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    assert.ok(await ui.findByRole("heading", { name: "Programme builder" }));
+
+    fireEvent.change(ui.getByLabelText("Main goal"), {
+      target: { value: "mastersRxOpen" }
+    });
+    fireEvent.click(ui.getByRole("button", { name: "Generate 8-week programme" }));
+
+    await waitFor(() => assert.ok(ui.getAllByRole("heading", { name: /Squat \+ TTB capacity/ }).length >= 8));
+    assert.ok(ui.getAllByText("Optional add-ons").length > 0);
+    assert.ok(ui.getAllByText(/Men Masters 35-39 RX prep/).length > 0);
+
+    const saved = JSON.parse(window.localStorage.getItem("forge-hour-state-v1"));
+    assert.equal(saved.customPlans.filter((plan) => plan.sourceGoal === "mastersRxOpen").length, 32);
+    assert.ok(saved.customPlans.every((plan) => !plan.addOns || Array.isArray(plan.addOns)));
   } finally {
     cleanup();
   }
