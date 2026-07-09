@@ -25,8 +25,10 @@ function createMatchMedia(matches = false) {
     addListener: (listener) => listeners.add(listener),
     removeListener: (listener) => listeners.delete(listener),
     dispatch: (nextMatches) => {
-      listeners.forEach((listener) => listener({ matches: nextMatches, media: query }));
-    }
+      listeners.forEach((listener) =>
+        listener({ matches: nextMatches, media: query }),
+      );
+    },
   });
 }
 
@@ -34,7 +36,7 @@ function createMockSupabase({ session = null, remote = {}, calls = [] } = {}) {
   const data = {
     workout_logs: remote.workout_logs || [],
     pr_attempts: remote.pr_attempts || [],
-    personal_records: remote.personal_records || []
+    personal_records: remote.personal_records || [],
   };
 
   function ok(value) {
@@ -44,7 +46,9 @@ function createMockSupabase({ session = null, remote = {}, calls = [] } = {}) {
   const client = {
     auth: {
       getSession: () => ok({ session }),
-      onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => undefined } } }),
+      onAuthStateChange: () => ({
+        data: { subscription: { unsubscribe: () => undefined } },
+      }),
       signInWithOtp: (payload) => {
         calls.push({ type: "signInWithOtp", payload });
         return ok({});
@@ -52,13 +56,13 @@ function createMockSupabase({ session = null, remote = {}, calls = [] } = {}) {
       signOut: () => {
         calls.push({ type: "signOut" });
         return ok({});
-      }
+      },
     },
     from: (table) => ({
       select: () => {
         if (table === "personal_records") return ok(data[table]);
         return {
-          order: () => ok(data[table])
+          order: () => ok(data[table]),
         };
       },
       upsert: (payload) => {
@@ -69,37 +73,48 @@ function createMockSupabase({ session = null, remote = {}, calls = [] } = {}) {
         neq: (column, value) => {
           calls.push({ type: "delete", table, column, value });
           return ok([]);
-        }
-      })
-    })
+        },
+      }),
+    }),
   };
 
   return {
     client,
     supabase: {
-      createClient: () => client
-    }
+      createClient: () => client,
+    },
   };
 }
 
-function mountApp({ prefersDark = false, supabaseMock = null, supabaseConfig = true } = {}) {
-  const dom = new JSDOM("<!doctype html><html><head><meta name=\"theme-color\" content=\"#10120f\"></head><body><div id=\"root\"></div></body></html>", {
-    pretendToBeVisual: true,
-    url: "http://localhost/"
-  });
+function mountApp({
+  prefersDark = false,
+  supabaseMock = null,
+  supabaseConfig = true,
+} = {}) {
+  const dom = new JSDOM(
+    '<!doctype html><html><head><meta name="theme-color" content="#10120f"></head><body><div id="root"></div></body></html>',
+    {
+      pretendToBeVisual: true,
+      url: "http://localhost/",
+    },
+  );
 
   global.window = dom.window;
   global.document = dom.window.document;
   Object.defineProperty(global, "navigator", {
     configurable: true,
-    value: dom.window.navigator
+    value: dom.window.navigator,
   });
   global.HTMLElement = dom.window.HTMLElement;
   global.Node = dom.window.Node;
   global.MutationObserver = dom.window.MutationObserver;
   global.FormData = dom.window.FormData;
-  global.requestAnimationFrame = dom.window.requestAnimationFrame.bind(dom.window);
-  global.cancelAnimationFrame = dom.window.cancelAnimationFrame.bind(dom.window);
+  global.requestAnimationFrame = dom.window.requestAnimationFrame.bind(
+    dom.window,
+  );
+  global.cancelAnimationFrame = dom.window.cancelAnimationFrame.bind(
+    dom.window,
+  );
 
   dom.window.confirm = () => true;
   dom.window.scrollTo = () => undefined;
@@ -108,10 +123,11 @@ function mountApp({ prefersDark = false, supabaseMock = null, supabaseConfig = t
   dom.window.ReactDOM = require("react-dom/client");
   if (supabaseMock) {
     dom.window.supabase = supabaseMock.supabase;
-    if (supabaseConfig) dom.window.ForgeHourSupabaseConfig = {
-      url: "https://example.supabase.co",
-      anonKey: "public-anon-key"
-    };
+    if (supabaseConfig)
+      dom.window.ForgeHourSupabaseConfig = {
+        url: "https://example.supabase.co",
+        anonKey: "public-anon-key",
+      };
   }
 
   freshRequire("../app.js");
@@ -140,7 +156,7 @@ function mountApp({ prefersDark = false, supabaseMock = null, supabaseConfig = t
       delete global.FormData;
       delete global.requestAnimationFrame;
       delete global.cancelAnimationFrame;
-    }
+    },
   };
 }
 
@@ -172,7 +188,9 @@ test("React Testing Library keeps cleared time benchmarks as test-needed values"
   const { cleanup, fireEvent, ui, waitFor } = mountApp();
 
   try {
-    assert.ok(await ui.findByRole("heading", { name: "Masters RX assessment" }));
+    assert.ok(
+      await ui.findByRole("heading", { name: "Masters RX assessment" }),
+    );
 
     fireEvent.change(ui.getByLabelText("1 km row"), { target: { value: " " } });
     fireEvent.change(ui.getByLabelText("2 km row"), { target: { value: " " } });
@@ -180,7 +198,9 @@ test("React Testing Library keeps cleared time benchmarks as test-needed values"
     fireEvent.click(ui.getByRole("button", { name: "Save assessment" }));
 
     await waitFor(() => {
-      const saved = JSON.parse(window.localStorage.getItem("forge-hour-state-v1"));
+      const saved = JSON.parse(
+        window.localStorage.getItem("forge-hour-state-v1"),
+      );
       assert.equal(saved.profile.benchmarks.row1k, "");
       assert.equal(saved.profile.benchmarks.row2k, "");
       assert.equal(saved.profile.benchmarks.run5k, "");
@@ -199,17 +219,34 @@ test("React Testing Library generates a Masters 35-39 RX Open prep programme", a
     assert.ok(await ui.findByRole("heading", { name: "Programme builder" }));
 
     fireEvent.change(ui.getByLabelText("Main goal"), {
-      target: { value: "mastersRxOpen" }
+      target: { value: "mastersRxOpen" },
     });
-    fireEvent.click(ui.getByRole("button", { name: "Generate 8-week programme" }));
+    fireEvent.click(
+      ui.getByRole("button", { name: "Generate 8-week programme" }),
+    );
 
-    await waitFor(() => assert.ok(ui.getAllByRole("heading", { name: /Squat \+ TTB capacity/ }).length >= 8));
+    await waitFor(() =>
+      assert.ok(
+        ui.getAllByRole("heading", { name: /Squat \+ TTB capacity/ }).length >=
+          8,
+      ),
+    );
     assert.ok(ui.getAllByText("Optional add-ons").length > 0);
     assert.ok(ui.getAllByText(/Men Masters 35-39 RX prep/).length > 0);
 
-    const saved = JSON.parse(window.localStorage.getItem("forge-hour-state-v1"));
-    assert.equal(saved.customPlans.filter((plan) => plan.sourceGoal === "mastersRxOpen").length, 32);
-    assert.ok(saved.customPlans.every((plan) => !plan.addOns || Array.isArray(plan.addOns)));
+    const saved = JSON.parse(
+      window.localStorage.getItem("forge-hour-state-v1"),
+    );
+    assert.equal(
+      saved.customPlans.filter((plan) => plan.sourceGoal === "mastersRxOpen")
+        .length,
+      32,
+    );
+    assert.ok(
+      saved.customPlans.every(
+        (plan) => !plan.addOns || Array.isArray(plan.addOns),
+      ),
+    );
   } finally {
     cleanup();
   }
@@ -224,17 +261,28 @@ test("React Testing Library records workout timer splits into a saved log", asyn
     const openTimer = nextSession.querySelector(".timer-panel button");
     fireEvent.click(openTimer);
 
-    const start = Array.from(nextSession.querySelectorAll("button")).find((button) => button.textContent === "Start");
+    const start = Array.from(nextSession.querySelectorAll("button")).find(
+      (button) => button.textContent === "Start",
+    );
     fireEvent.click(start);
 
-    await waitFor(() => {
-      const split = Array.from(nextSession.querySelectorAll("button")).find((button) => button.textContent === "Split");
-      assert.equal(split.disabled, false);
-    }, { timeout: 2500 });
+    await waitFor(
+      () => {
+        const split = Array.from(nextSession.querySelectorAll("button")).find(
+          (button) => button.textContent === "Split",
+        );
+        assert.equal(split.disabled, false);
+      },
+      { timeout: 2500 },
+    );
 
-    const split = Array.from(nextSession.querySelectorAll("button")).find((button) => button.textContent === "Split");
+    const split = Array.from(nextSession.querySelectorAll("button")).find(
+      (button) => button.textContent === "Split",
+    );
     fireEvent.click(split);
-    const finish = Array.from(nextSession.querySelectorAll("button")).find((button) => button.textContent === "Finish and log");
+    const finish = Array.from(nextSession.querySelectorAll("button")).find(
+      (button) => button.textContent === "Finish and log",
+    );
     fireEvent.click(finish);
 
     assert.ok(await ui.findByRole("heading", { name: "Log workout" }));
@@ -242,8 +290,14 @@ test("React Testing Library records workout timer splits into a saved log", asyn
     fireEvent.click(ui.getByRole("button", { name: "Save workout log" }));
 
     await waitFor(() => {
-      const saved = JSON.parse(window.localStorage.getItem("forge-hour-state-v1"));
-      assert.ok(["amrap", "emom", "forTime", "interval", "tabata", "rest"].includes(saved.logs[0].timerResult.mode));
+      const saved = JSON.parse(
+        window.localStorage.getItem("forge-hour-state-v1"),
+      );
+      assert.ok(
+        ["amrap", "emom", "forTime", "interval", "tabata", "rest"].includes(
+          saved.logs[0].timerResult.mode,
+        ),
+      );
       assert.equal(saved.logs[0].timerResult.splits.length, 1);
       assert.match(saved.logs[0].wodScore, /splits/);
     });
@@ -260,24 +314,26 @@ test("React Testing Library saves a manual training session", async () => {
     assert.ok(await ui.findByRole("heading", { name: "Programme builder" }));
 
     fireEvent.change(ui.getByLabelText("Day or title"), {
-      target: { value: "Friday engine + skill" }
+      target: { value: "Friday engine + skill" },
     });
     fireEvent.change(ui.getByLabelText("Focus"), {
-      target: { value: "Engine and pull-up volume" }
+      target: { value: "Engine and pull-up volume" },
     });
     fireEvent.change(ui.getByLabelText("Warm-up"), {
-      target: { value: "8 min easy bike\nDynamic shoulders" }
+      target: { value: "8 min easy bike\nDynamic shoulders" },
     });
     fireEvent.change(ui.getByLabelText("Strength or skill"), {
-      target: { value: "EMOM 10: 2 strict pull-ups + 6 kip swings" }
+      target: { value: "EMOM 10: 2 strict pull-ups + 6 kip swings" },
     });
     fireEvent.change(ui.getByLabelText("WOD"), {
-      target: { value: "AMRAP 14: 12 cal row, 10 DB snatches, 8 burpees" }
+      target: { value: "AMRAP 14: 12 cal row, 10 DB snatches, 8 burpees" },
     });
 
     fireEvent.click(ui.getByRole("button", { name: "Save training session" }));
 
-    await waitFor(() => assert.ok(ui.getByRole("heading", { name: "Friday engine + skill" })));
+    await waitFor(() =>
+      assert.ok(ui.getByRole("heading", { name: "Friday engine + skill" })),
+    );
     assert.ok(ui.getByText("Engine and pull-up volume"));
     assert.ok(ui.getByText("AMRAP 14: 12 cal row, 10 DB snatches, 8 burpees"));
   } finally {
@@ -293,11 +349,14 @@ test("React Testing Library filters the movement library", async () => {
     assert.ok(await ui.findByRole("heading", { name: "Learn the skills" }));
 
     fireEvent.change(ui.getByLabelText("Movement category"), {
-      target: { value: "Weightlifting" }
+      target: { value: "Weightlifting" },
     });
-    fireEvent.change(ui.getByPlaceholderText("Bar muscle-up, snatch, rope climb"), {
-      target: { value: "snatch" }
-    });
+    fireEvent.change(
+      ui.getByPlaceholderText("Bar muscle-up, snatch, rope climb"),
+      {
+        target: { value: "snatch" },
+      },
+    );
 
     await waitFor(() => assert.ok(ui.getByRole("heading", { name: "Snatch" })));
     assert.equal(ui.queryByRole("heading", { name: "Bar muscle-up" }), null);
@@ -315,18 +374,36 @@ test("React Testing Library persists and applies the theme preference", async ()
 
     fireEvent.change(themeSelect, { target: { value: "dark" } });
 
-    await waitFor(() => assert.equal(document.documentElement.dataset.theme, "dark"));
-    assert.equal(document.querySelector('meta[name="theme-color"]').getAttribute("content"), "#070907");
+    await waitFor(() =>
+      assert.equal(document.documentElement.dataset.theme, "dark"),
+    );
+    assert.equal(
+      document
+        .querySelector('meta[name="theme-color"]')
+        .getAttribute("content"),
+      "#070907",
+    );
 
-    const savedDarkState = JSON.parse(window.localStorage.getItem("forge-hour-state-v1"));
+    const savedDarkState = JSON.parse(
+      window.localStorage.getItem("forge-hour-state-v1"),
+    );
     assert.equal(savedDarkState.themePreference, "dark");
 
     fireEvent.change(themeSelect, { target: { value: "light" } });
 
-    await waitFor(() => assert.equal(document.documentElement.dataset.theme, "light"));
-    assert.equal(document.querySelector('meta[name="theme-color"]').getAttribute("content"), "#10120f");
+    await waitFor(() =>
+      assert.equal(document.documentElement.dataset.theme, "light"),
+    );
+    assert.equal(
+      document
+        .querySelector('meta[name="theme-color"]')
+        .getAttribute("content"),
+      "#10120f",
+    );
 
-    const savedLightState = JSON.parse(window.localStorage.getItem("forge-hour-state-v1"));
+    const savedLightState = JSON.parse(
+      window.localStorage.getItem("forge-hour-state-v1"),
+    );
     assert.equal(savedLightState.themePreference, "light");
   } finally {
     cleanup();
@@ -339,7 +416,9 @@ test("React Testing Library uses system preference by default", async () => {
   try {
     const themeSelect = await ui.findByLabelText("Theme preference");
     assert.equal(themeSelect.value, "system");
-    await waitFor(() => assert.equal(document.documentElement.dataset.theme, "dark"));
+    await waitFor(() =>
+      assert.equal(document.documentElement.dataset.theme, "dark"),
+    );
   } finally {
     cleanup();
   }
@@ -373,29 +452,33 @@ test("React Testing Library loads remote Supabase scores for a signed-in user", 
   const supabaseMock = createMockSupabase({
     session: { user: { id: "user-1", email: "athlete@example.com" } },
     remote: {
-      workout_logs: [{
-        id: "remote-log",
-        date: "2026-07-08",
-        week: 1,
-        day_id: "day1",
-        day_title: "Back squat + T2B",
-        readiness: "green",
-        rpe: "8",
-        strength_result: "Remote squat",
-        wod_score: "5 rounds",
-        notes: "Remote note",
-        mobility_done: true,
-        created_at: "2026-07-08T10:00:00.000Z"
-      }],
+      workout_logs: [
+        {
+          id: "remote-log",
+          date: "2026-07-08",
+          week: 1,
+          day_id: "day1",
+          day_title: "Back squat + T2B",
+          readiness: "green",
+          rpe: "8",
+          strength_result: "Remote squat",
+          wod_score: "5 rounds",
+          notes: "Remote note",
+          mobility_done: true,
+          created_at: "2026-07-08T10:00:00.000Z",
+        },
+      ],
       pr_attempts: [],
-      personal_records: [{
-        metric_id: "backSquat",
-        value: 150,
-        display: "150 kg",
-        date: "2026-07-08",
-        notes: "Remote PR"
-      }]
-    }
+      personal_records: [
+        {
+          metric_id: "backSquat",
+          value: 150,
+          display: "150 kg",
+          date: "2026-07-08",
+          notes: "Remote PR",
+        },
+      ],
+    },
   });
   const { cleanup, fireEvent, ui } = mountApp({ supabaseMock });
 
@@ -414,7 +497,7 @@ test("React Testing Library saves workout logs through Supabase when signed in",
   const calls = [];
   const supabaseMock = createMockSupabase({
     session: { user: { id: "user-1", email: "athlete@example.com" } },
-    calls
+    calls,
   });
   const { cleanup, fireEvent, ui, waitFor } = mountApp({ supabaseMock });
 
@@ -422,12 +505,14 @@ test("React Testing Library saves workout logs through Supabase when signed in",
     assert.ok(await ui.findByText("Scores are syncing with Supabase."));
     fireEvent.click(ui.getByRole("button", { name: "Log" }));
     fireEvent.change(ui.getByLabelText("WOD score"), {
-      target: { value: "4 rounds + 8 reps" }
+      target: { value: "4 rounds + 8 reps" },
     });
     fireEvent.click(ui.getByRole("button", { name: "Save workout log" }));
 
     await waitFor(() => {
-      const insert = calls.find((call) => call.type === "upsert" && call.table === "workout_logs");
+      const insert = calls.find(
+        (call) => call.type === "upsert" && call.table === "workout_logs",
+      );
       assert.ok(insert);
       assert.equal(insert.payload.user_id, "user-1");
       assert.equal(insert.payload.wod_score, "4 rounds + 8 reps");

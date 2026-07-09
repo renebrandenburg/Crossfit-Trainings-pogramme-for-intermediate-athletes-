@@ -30,11 +30,14 @@ const {
   roundToNearest,
   splitLines,
   timerDisplaySeconds,
-  trimNumber
+  trimNumber,
 } = require("../app.js");
 
 function totalMinutes(session) {
-  return session.segments.reduce((sum, segment) => sum + Number(segment.minutes), 0);
+  return session.segments.reduce(
+    (sum, segment) => sum + Number(segment.minutes),
+    0,
+  );
 }
 
 function wodSegment(session) {
@@ -42,7 +45,9 @@ function wodSegment(session) {
 }
 
 function daysAgo(days) {
-  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
 }
 
 function daysAgoIso(days) {
@@ -51,7 +56,10 @@ function daysAgoIso(days) {
 
 test("programme exposes an eight-week cycle", () => {
   assert.equal(WEEK_META.length, 8);
-  assert.deepEqual(WEEK_META.map((week) => week.week), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(
+    WEEK_META.map((week) => week.week),
+    [1, 2, 3, 4, 5, 6, 7, 8],
+  );
   assert.match(WEEK_META[7].title, /Week 8/);
 });
 
@@ -70,8 +78,15 @@ test("built-in programme has four complete sessions per week capped at one hour"
       assert.ok(session.shortTitle.length > 0);
       assert.ok(session.focus.length > 0);
       assert.ok(session.segments.length >= 4);
-      assert.ok(totalMinutes(session) <= 60, `${session.shortTitle} week ${week.week} exceeds 60 minutes`);
-      assert.equal(serialized.includes("undefined"), false, `${session.shortTitle} week ${week.week} contains undefined text`);
+      assert.ok(
+        totalMinutes(session) <= 60,
+        `${session.shortTitle} week ${week.week} exceeds 60 minutes`,
+      );
+      assert.equal(
+        serialized.includes("undefined"),
+        false,
+        `${session.shortTitle} week ${week.week} contains undefined text`,
+      );
     }
   }
 });
@@ -101,9 +116,16 @@ test("built-in WODs vary by week and expose stimulus, score, and scaling", () =>
       return segment.items[0];
     });
 
-    assert.equal(new Set(wods).size, 8, `${day.id} should not repeat the same WOD across weeks`);
+    assert.equal(
+      new Set(wods).size,
+      8,
+      `${day.id} should not repeat the same WOD across weeks`,
+    );
     assert.match(wods.join(" "), /AMRAP/);
-    assert.match(wods.join(" "), /Every 3 min|rounds for time|EMOM|ascending ladder|sets, rest|For time|Benchmark/);
+    assert.match(
+      wods.join(" "),
+      /Every 3 min|rounds for time|EMOM|ascending ladder|sets, rest|For time|Benchmark/,
+    );
   }
 });
 
@@ -114,24 +136,45 @@ test("timer helpers infer CrossFit workout formats and format results", () => {
 
   assert.equal(inferred.mode, "amrap");
   assert.equal(inferred.plannedSeconds, 720);
-  assert.equal(inferTimerFromText("EMOM 16: min 1 row, min 2 rest").mode, "emom");
+  assert.equal(
+    inferTimerFromText("EMOM 16: min 1 row, min 2 rest").mode,
+    "emom",
+  );
   assert.deepEqual(
     {
       mode: inferTimerFromText("Every 3 min x 5: 15 cal row, 8 burpees").mode,
-      plannedSeconds: inferTimerFromText("Every 3 min x 5: 15 cal row, 8 burpees").plannedSeconds,
-      intervalSeconds: inferTimerFromText("Every 3 min x 5: 15 cal row, 8 burpees").intervalSeconds,
-      rounds: inferTimerFromText("Every 3 min x 5: 15 cal row, 8 burpees").rounds
+      plannedSeconds: inferTimerFromText(
+        "Every 3 min x 5: 15 cal row, 8 burpees",
+      ).plannedSeconds,
+      intervalSeconds: inferTimerFromText(
+        "Every 3 min x 5: 15 cal row, 8 burpees",
+      ).intervalSeconds,
+      rounds: inferTimerFromText("Every 3 min x 5: 15 cal row, 8 burpees")
+        .rounds,
     },
-    { mode: "interval", plannedSeconds: 900, intervalSeconds: 180, rounds: 5 }
+    { mode: "interval", plannedSeconds: 900, intervalSeconds: 180, rounds: 5 },
   );
-  assert.equal(inferTimerFromText("4 rounds for time, 15 min cap: row and wall balls").mode, "forTime");
+  assert.equal(
+    inferTimerFromText("4 rounds for time, 15 min cap: row and wall balls")
+      .mode,
+    "forTime",
+  );
   assert.equal(inferTimerFromText("Tabata air squats").plannedSeconds, 240);
-  assert.equal(inferTimerFromText("5 sets, rest 1:00 between sets").mode, "rest");
-  assert.equal(inferTimerFromText("5 sets, rest 1:00 between sets").plannedSeconds, 300);
+  assert.equal(
+    inferTimerFromText("5 sets, rest 1:00 between sets").mode,
+    "rest",
+  );
+  assert.equal(
+    inferTimerFromText("5 sets, rest 1:00 between sets").plannedSeconds,
+    300,
+  );
   assert.equal(timerDisplaySeconds("amrap", 900, 900), 0);
   assert.equal(timerDisplaySeconds("amrap", 900, 960), 0);
   assert.equal(timerDisplaySeconds("forTime", 900, 960), 960);
-  assert.equal(formatTimerResult({ mode: "amrap", elapsedSeconds: 724, splits: [{}, {}] }), "AMRAP 12:04, 2 splits");
+  assert.equal(
+    formatTimerResult({ mode: "amrap", elapsedSeconds: 724, splits: [{}, {}] }),
+    "AMRAP 12:04, 2 splits",
+  );
 });
 
 test("load helpers round and format percentages for programmed weights", () => {
@@ -161,24 +204,35 @@ test("needs-based generator creates complete eight-week programmes", () => {
   const plans = buildGeneratedProgramme(
     { goal: "stronger", daysPerWeek: 4, weakness: "pulling", duration: 60 },
     profile,
-    (seed) => seed
+    (seed) => seed,
   );
 
   assert.equal(plans.length, 32);
-  assert.deepEqual([...new Set(plans.map((plan) => plan.week))], [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(
+    [...new Set(plans.map((plan) => plan.week))],
+    [1, 2, 3, 4, 5, 6, 7, 8],
+  );
 
   for (const plan of plans) {
     assert.equal(plan.generated, true);
     assert.equal(plan.sourceGoal, "stronger");
     assert.equal(plan.sourceWeakness, "pulling");
     assert.ok(plan.duration <= 60);
-    assert.equal(customPlanSegments(plan).reduce((sum, segment) => sum + Number(segment.minutes), 0), 60);
+    assert.equal(
+      customPlanSegments(plan).reduce(
+        (sum, segment) => sum + Number(segment.minutes),
+        0,
+      ),
+      60,
+    );
     assert.match(plan.wod[1], /Stimulus:/);
     assert.match(plan.wod[2], /Score:/);
     assert.equal(JSON.stringify(plan).includes("undefined"), false);
   }
 
-  const dayOneWods = plans.filter((plan) => plan.title.includes("D1")).map((plan) => plan.wod[0]);
+  const dayOneWods = plans
+    .filter((plan) => plan.title.includes("D1"))
+    .map((plan) => plan.wod[0]);
   assert.equal(new Set(dayOneWods).size, 8);
   assert.match(dayOneWods.join(" "), /AMRAP/);
   assert.match(dayOneWods.join(" "), /Every 3 min/);
@@ -192,12 +246,12 @@ test("needs-based generator changes bias by goal and clamps options", () => {
   const endurancePlans = buildGeneratedProgramme(
     { goal: "endurance", daysPerWeek: 9, weakness: "rowing", duration: 90 },
     profile,
-    (seed) => seed
+    (seed) => seed,
   );
   const gymnasticsPlans = buildGeneratedProgramme(
     { goal: "gymnastics", daysPerWeek: 3, weakness: "muscleup", duration: 45 },
     profile,
-    (seed) => seed
+    (seed) => seed,
   );
 
   assert.equal(endurancePlans.length, 40);
@@ -211,9 +265,14 @@ test("needs-based generator changes bias by goal and clamps options", () => {
 test("Masters RX generator creates Open prep sessions with separate add-ons", () => {
   const profile = cloneDefaultProfile();
   const plans = buildGeneratedProgramme(
-    { goal: "mastersRxOpen", daysPerWeek: 4, weakness: "muscleup", duration: 60 },
+    {
+      goal: "mastersRxOpen",
+      daysPerWeek: 4,
+      weakness: "muscleup",
+      duration: 60,
+    },
     profile,
-    (seed) => seed
+    (seed) => seed,
   );
 
   assert.equal(plans.length, 32);
@@ -223,8 +282,17 @@ test("Masters RX generator creates Open prep sessions with separate add-ons", ()
   for (const plan of plans) {
     assert.equal(plan.generated, true);
     assert.ok(plan.duration <= 60);
-    assert.equal(customPlanSegments(plan).reduce((sum, segment) => sum + Number(segment.minutes), 0), 60);
-    assert.ok(Array.isArray(plan.addOns), "generated RX plans should expose optional add-ons");
+    assert.equal(
+      customPlanSegments(plan).reduce(
+        (sum, segment) => sum + Number(segment.minutes),
+        0,
+      ),
+      60,
+    );
+    assert.ok(
+      Array.isArray(plan.addOns),
+      "generated RX plans should expose optional add-ons",
+    );
     assert.match(plan.wod[1], /Stimulus:/);
     assert.match(plan.wod[2], /Score:/);
     assert.equal(JSON.stringify(plan).includes("undefined"), false);
@@ -247,7 +315,7 @@ test("RX readiness scoring reports RX Level, weakest categories, and missing tes
       strictPress: 75,
       snatch: 95,
       cleanJerk: 120,
-      thruster: 90
+      thruster: 90,
     },
     benchmarks: {
       ...profile.benchmarks,
@@ -261,13 +329,13 @@ test("RX readiness scoring reports RX Level, weakest categories, and missing tes
       ringMuscleUp: 4,
       strictHspu: 8,
       handstandWalk: 15,
-      doubleUnders: 100
-    }
+      doubleUnders: 100,
+    },
   };
   const readiness = buildRxReadiness(strongProfile, [
     { date: daysAgo(1), readiness: "green", rpe: "7", mobilityDone: true },
     { date: daysAgo(3), readiness: "green", rpe: "7.5", mobilityDone: true },
-    { date: daysAgo(5), readiness: "amber", rpe: "8", mobilityDone: true }
+    { date: daysAgo(5), readiness: "amber", rpe: "8", mobilityDone: true },
   ]);
   const incomplete = buildRxReadiness({
     ...profile,
@@ -279,18 +347,38 @@ test("RX readiness scoring reports RX Level, weakest categories, and missing tes
       pullUps: 1,
       chestToBar: 1,
       t2b: 1,
-      doubleUnders: 5
-    }
+      doubleUnders: 5,
+    },
   });
 
   assert.equal(readiness.division, "Men Masters 35-39");
   assert.ok(readiness.rxLevel > incomplete.rxLevel);
   assert.ok(readiness.rxLevel <= 100);
-  assert.ok(readiness.categories.some((category) => category.label === "Strength" && category.score >= 100));
-  assert.ok(readiness.categories.some((category) => category.label === "Engine" && category.missing === 1));
-  assert.ok(readiness.categories.some((category) => category.label === "Engine" && /1 km row test needed/.test(category.summary)));
-  assert.ok(readiness.categories.some((category) => category.label === "Consistency"));
-  assert.ok(readiness.missingTests.some((item) => item.label === "1 km row" && item.categoryLabel === "Engine"));
+  assert.ok(
+    readiness.categories.some(
+      (category) => category.label === "Strength" && category.score >= 100,
+    ),
+  );
+  assert.ok(
+    readiness.categories.some(
+      (category) => category.label === "Engine" && category.missing === 1,
+    ),
+  );
+  assert.ok(
+    readiness.categories.some(
+      (category) =>
+        category.label === "Engine" &&
+        /1 km row test needed/.test(category.summary),
+    ),
+  );
+  assert.ok(
+    readiness.categories.some((category) => category.label === "Consistency"),
+  );
+  assert.ok(
+    readiness.missingTests.some(
+      (item) => item.label === "1 km row" && item.categoryLabel === "Engine",
+    ),
+  );
   assert.equal(readiness.weakest.length, 2);
   assert.match(readiness.recommendation, /Prioritize/);
   assert.match(readiness.recommendation, /Test 1 km row/);
@@ -303,46 +391,78 @@ test("RX readiness consistency score uses recent workout logs", () => {
     date: daysAgo(index * 2),
     readiness: "green",
     rpe: "7",
-    mobilityDone: true
+    mobilityDone: true,
   }));
   logs.push({
     date: "not-a-date",
     createdAt: daysAgoIso(2),
     readiness: "green",
     rpe: "7",
-    mobilityDone: true
+    mobilityDone: true,
   });
   const active = buildRxReadiness(profile, logs);
-  const quietConsistency = quiet.categories.find((category) => category.id === "consistency");
-  const activeConsistency = active.categories.find((category) => category.id === "consistency");
+  const quietConsistency = quiet.categories.find(
+    (category) => category.id === "consistency",
+  );
+  const activeConsistency = active.categories.find(
+    (category) => category.id === "consistency",
+  );
 
   assert.equal(quietConsistency.score, 0);
   assert.equal(activeConsistency.score, 100);
-  assert.equal(activeConsistency.summary, "12/12 sessions logged in the last 28 days.");
+  assert.equal(
+    activeConsistency.summary,
+    "12/12 sessions logged in the last 28 days.",
+  );
   assert.ok(active.rxLevel > quiet.rxLevel);
 });
 
 test("movement library covers gymnastics and weightlifting with video guides", () => {
-  const categories = new Set(MOVEMENT_LIBRARY.map((movement) => movement.category));
+  const categories = new Set(
+    MOVEMENT_LIBRARY.map((movement) => movement.category),
+  );
   const ids = new Set(MOVEMENT_LIBRARY.map((movement) => movement.id));
 
   assert.ok(MOVEMENT_LIBRARY.length >= 20);
   assert.equal(ids.size, MOVEMENT_LIBRARY.length);
   assert.ok(categories.has("Gymnastics"));
   assert.ok(categories.has("Weightlifting"));
-  assert.ok(MOVEMENT_LIBRARY.some((movement) => movement.name === "Bar muscle-up"));
+  assert.ok(
+    MOVEMENT_LIBRARY.some((movement) => movement.name === "Bar muscle-up"),
+  );
   assert.ok(MOVEMENT_LIBRARY.some((movement) => movement.name === "Snatch"));
-  assert.ok(MOVEMENT_LIBRARY.some((movement) => movement.name === "Clean and jerk"));
+  assert.ok(
+    MOVEMENT_LIBRARY.some((movement) => movement.name === "Clean and jerk"),
+  );
 
   for (const movement of MOVEMENT_LIBRARY) {
-    assert.ok(movement.cues.length >= 3, `${movement.name} should have coaching cues`);
-    assert.ok(movement.progressions.length >= 4, `${movement.name} should have progressions`);
-    assert.match(movement.videoUrl, /^https:\/\/www\.youtube\.com\/@CrossFit\/search/);
+    assert.ok(
+      movement.cues.length >= 3,
+      `${movement.name} should have coaching cues`,
+    );
+    assert.ok(
+      movement.progressions.length >= 4,
+      `${movement.name} should have progressions`,
+    );
+    assert.match(
+      movement.videoUrl,
+      /^https:\/\/www\.youtube\.com\/@CrossFit\/search/,
+    );
     assert.match(movement.sourceUrl, /^https:\/\/www\.crossfit\.com\//);
   }
 
-  assert.equal(filterMovementLibrary("Gymnastics", "bar muscle").map((movement) => movement.id).includes("bar-muscle-up"), true);
-  assert.equal(filterMovementLibrary("Weightlifting", "snatch").some((movement) => movement.id === "snatch"), true);
+  assert.equal(
+    filterMovementLibrary("Gymnastics", "bar muscle")
+      .map((movement) => movement.id)
+      .includes("bar-muscle-up"),
+    true,
+  );
+  assert.equal(
+    filterMovementLibrary("Weightlifting", "snatch").some(
+      (movement) => movement.id === "snatch",
+    ),
+    true,
+  );
   assert.equal(filterMovementLibrary("Gymnastics", "snatch").length, 0);
 });
 
@@ -358,14 +478,14 @@ test("generated programme migration refreshes old WOD schema without changing ID
       sourceWeakness: "pulling",
       duration: 60,
       wod: ["AMRAP 12: same old thing"],
-      createdAt: "2026-01-01T00:00:00.000Z"
+      createdAt: "2026-01-01T00:00:00.000Z",
     },
     {
       id: "manual-1",
       title: "Manual session",
       generated: false,
-      wod: ["Keep this exact custom WOD"]
-    }
+      wod: ["Keep this exact custom WOD"],
+    },
   ];
 
   const migration = migrateGeneratedProgrammePlans(oldPlans, profile);
@@ -384,13 +504,16 @@ test("custom programme helpers turn phone text areas into renderable segments", 
     warmup: splitLines("8 min easy row\n\nDynamic shoulders "),
     strength: splitLines("EMOM 10: pull-up skill"),
     wod: splitLines("AMRAP 12: row, DB snatch, burpee"),
-    mobility: []
+    mobility: [],
   };
 
   const segments = customPlanSegments(plan);
 
   assert.deepEqual(plan.warmup, ["8 min easy row", "Dynamic shoulders"]);
-  assert.deepEqual(segments.map((segment) => segment.title), ["Warm-up", "Strength and skill", "WOD"]);
+  assert.deepEqual(
+    segments.map((segment) => segment.title),
+    ["Warm-up", "Strength and skill", "WOD"],
+  );
   assert.equal(segments[0].items.length, 2);
 });
 

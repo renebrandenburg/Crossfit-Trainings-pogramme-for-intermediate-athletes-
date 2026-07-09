@@ -21,8 +21,12 @@
   }
 
   function unsyncedById(localRecords = [], remoteRecords = []) {
-    const remoteIds = new Set(remoteRecords.map((record) => record && record.id).filter(Boolean));
-    return localRecords.filter((record) => record && record.id && !remoteIds.has(record.id));
+    const remoteIds = new Set(
+      remoteRecords.map((record) => record && record.id).filter(Boolean),
+    );
+    return localRecords.filter(
+      (record) => record && record.id && !remoteIds.has(record.id),
+    );
   }
 
   function logToRow(log, userId) {
@@ -40,7 +44,7 @@
       timer_result: log.timerResult || null,
       notes: log.notes || null,
       mobility_done: Boolean(log.mobilityDone),
-      created_at: log.createdAt
+      created_at: log.createdAt,
     };
   }
 
@@ -58,7 +62,7 @@
       timerResult: row.timer_result || null,
       notes: row.notes || "",
       mobilityDone: Boolean(row.mobility_done),
-      createdAt: row.created_at
+      createdAt: row.created_at,
     };
   }
 
@@ -73,7 +77,7 @@
       date: attempt.date,
       notes: attempt.notes || null,
       is_pr: Boolean(attempt.isPr),
-      created_at: attempt.createdAt
+      created_at: attempt.createdAt,
     };
   }
 
@@ -87,7 +91,7 @@
       date: row.date,
       notes: row.notes || "",
       isPr: Boolean(row.is_pr),
-      createdAt: row.created_at
+      createdAt: row.created_at,
     };
   }
 
@@ -99,7 +103,7 @@
       display: record.display,
       date: record.date,
       notes: record.notes || null,
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
     };
   }
 
@@ -109,7 +113,7 @@
       value: Number(row.value),
       display: row.display,
       date: row.date,
-      notes: row.notes || ""
+      notes: row.notes || "",
     };
   }
 
@@ -133,65 +137,113 @@
         return assertNoError(result).session || null;
       },
       onAuthStateChange(callback) {
-        const result = client.auth.onAuthStateChange((event, session) => callback(event, session));
+        const result = client.auth.onAuthStateChange((event, session) =>
+          callback(event, session),
+        );
         return () => result.data.subscription.unsubscribe();
       },
       async signIn(email, redirectTo) {
-        await assertNoError(await client.auth.signInWithOtp({
-          email,
-          options: { emailRedirectTo: redirectTo }
-        }));
+        await assertNoError(
+          await client.auth.signInWithOtp({
+            email,
+            options: { emailRedirectTo: redirectTo },
+          }),
+        );
       },
       async signOut() {
         await assertNoError(await client.auth.signOut());
       },
       async loadUserData() {
         const [logsResult, attemptsResult, prsResult] = await Promise.all([
-          client.from("workout_logs").select("*").order("created_at", { ascending: false }),
-          client.from("pr_attempts").select("*").order("created_at", { ascending: false }),
-          client.from("personal_records").select("*")
+          client
+            .from("workout_logs")
+            .select("*")
+            .order("created_at", { ascending: false }),
+          client
+            .from("pr_attempts")
+            .select("*")
+            .order("created_at", { ascending: false }),
+          client.from("personal_records").select("*"),
         ]);
 
         return {
           logs: assertNoError(logsResult).map(rowToLog),
           prAttempts: assertNoError(attemptsResult).map(rowToPrAttempt),
-          prs: rowsToPrs(assertNoError(prsResult))
+          prs: rowsToPrs(assertNoError(prsResult)),
         };
       },
       async saveLog(log, userId) {
-        await assertNoError(await client.from("workout_logs").upsert(logToRow(log, userId)));
+        await assertNoError(
+          await client.from("workout_logs").upsert(logToRow(log, userId)),
+        );
       },
       async clearLogs() {
-        await assertNoError(await client.from("workout_logs").delete().neq("id", ""));
+        await assertNoError(
+          await client.from("workout_logs").delete().neq("id", ""),
+        );
       },
       async savePrAttempt(attempt, currentPrs, userId) {
-        await assertNoError(await client.from("pr_attempts").upsert(prAttemptToRow(attempt, userId)));
+        await assertNoError(
+          await client
+            .from("pr_attempts")
+            .upsert(prAttemptToRow(attempt, userId)),
+        );
         if (attempt.isPr && currentPrs[attempt.metricId]) {
-          await assertNoError(await client.from("personal_records").upsert(personalRecordToRow(attempt.metricId, currentPrs[attempt.metricId], userId)));
+          await assertNoError(
+            await client
+              .from("personal_records")
+              .upsert(
+                personalRecordToRow(
+                  attempt.metricId,
+                  currentPrs[attempt.metricId],
+                  userId,
+                ),
+              ),
+          );
         }
       },
       async uploadLocalScores(state, userId, remoteState) {
         const logs = unsyncedById(state.logs, remoteState.logs);
         const attempts = unsyncedById(state.prAttempts, remoteState.prAttempts);
         const remotePrs = remoteState.prs || {};
-        const prs = Object.entries(state.prs || {}).filter(([metricId]) => !remotePrs[metricId]);
+        const prs = Object.entries(state.prs || {}).filter(
+          ([metricId]) => !remotePrs[metricId],
+        );
 
         if (logs.length) {
-          await assertNoError(await client.from("workout_logs").upsert(logs.map((log) => logToRow(log, userId))));
+          await assertNoError(
+            await client
+              .from("workout_logs")
+              .upsert(logs.map((log) => logToRow(log, userId))),
+          );
         }
         if (attempts.length) {
-          await assertNoError(await client.from("pr_attempts").upsert(attempts.map((attempt) => prAttemptToRow(attempt, userId))));
+          await assertNoError(
+            await client
+              .from("pr_attempts")
+              .upsert(
+                attempts.map((attempt) => prAttemptToRow(attempt, userId)),
+              ),
+          );
         }
         if (prs.length) {
-          await assertNoError(await client.from("personal_records").upsert(prs.map(([metricId, record]) => personalRecordToRow(metricId, record, userId))));
+          await assertNoError(
+            await client
+              .from("personal_records")
+              .upsert(
+                prs.map(([metricId, record]) =>
+                  personalRecordToRow(metricId, record, userId),
+                ),
+              ),
+          );
         }
 
         return {
           logs: logs.length,
           prAttempts: attempts.length,
-          prs: prs.length
+          prs: prs.length,
         };
-      }
+      },
     };
   }
 
@@ -206,7 +258,7 @@
     rowToPersonalRecord,
     rowToPrAttempt,
     rowsToPrs,
-    unsyncedById
+    unsyncedById,
   };
 
   global.ForgeHourSync = api;

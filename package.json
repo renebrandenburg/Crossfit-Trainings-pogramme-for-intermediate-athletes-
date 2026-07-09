@@ -4,11 +4,23 @@
   "private": true,
   "description": "Phone-first CrossFit programme, custom builder, and PR tracker.",
   "scripts": {
+    "check": "npm run lint && npm run format:check && npm test",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "prepare": "husky",
     "test": "node --test"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@testing-library/react": "^16.3.2",
+    "eslint": "^10.6.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.7.0",
+    "husky": "^9.1.7",
     "jsdom": "^29.1.1",
+    "prettier": "^3.9.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   }

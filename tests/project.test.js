@@ -14,13 +14,22 @@ function read(file) {
 test("HTML mounts the React app and references the required assets", () => {
   const html = read("index.html");
 
-  assert.match(html, /<link rel="manifest" href="\.\/manifest\.webmanifest">/);
-  assert.match(html, /<link rel="stylesheet" href="\.\/styles\.css">/);
+  assert.match(
+    html,
+    /<link rel="manifest" href="\.\/manifest\.webmanifest"\s*\/?>/,
+  );
+  assert.match(html, /<link rel="stylesheet" href="\.\/styles\.css"\s*\/?>/);
   assert.match(html, /id="root"/);
   assert.match(html, /react@18\.3\.1\/umd\/react\.production\.min\.js/);
   assert.match(html, /react-dom@18\.3\.1\/umd\/react-dom\.production\.min\.js/);
-  assert.match(html, /@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/);
-  assert.match(html, /cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/);
+  assert.match(
+    html,
+    /@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/,
+  );
+  assert.match(
+    html,
+    /cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/,
+  );
   assert.match(html, /<script src="\.\/supabase-config\.js" defer><\/script>/);
   assert.match(html, /<script src="\.\/app\.js" defer><\/script>/);
   assert.match(html, /<script src="\.\/supabase-sync\.js" defer><\/script>/);
@@ -61,7 +70,7 @@ test("builder form has the required fields for a full CrossFit session", () => {
     "customPlanWod",
     "customPlanMobility",
     "customPlanDuration",
-    "customPlanIntensity"
+    "customPlanIntensity",
   ];
 
   for (const id of requiredIds) {
@@ -99,13 +108,34 @@ test("manifest is valid JSON and points to an existing icon", () => {
 
 test("service worker caches the files needed to run offline", () => {
   const serviceWorker = read("sw.js");
-  const assets = ["index.html", "styles.css", "app.js", "supabase-config.js", "supabase-sync.js", "react-app.js", "manifest.webmanifest", "icon.svg"];
+  const assets = [
+    "index.html",
+    "styles.css",
+    "app.js",
+    "supabase-config.js",
+    "supabase-sync.js",
+    "react-app.js",
+    "manifest.webmanifest",
+    "icon.svg",
+  ];
 
   assert.match(serviceWorker, /crossfit-training-programme-v4/);
-  assert.match(serviceWorker, /react@18\.3\.1\/umd\/react\.production\.min\.js/);
-  assert.match(serviceWorker, /react-dom@18\.3\.1\/umd\/react-dom\.production\.min\.js/);
-  assert.match(serviceWorker, /@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/);
-  assert.match(serviceWorker, /cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/);
+  assert.match(
+    serviceWorker,
+    /react@18\.3\.1\/umd\/react\.production\.min\.js/,
+  );
+  assert.match(
+    serviceWorker,
+    /react-dom@18\.3\.1\/umd\/react-dom\.production\.min\.js/,
+  );
+  assert.match(
+    serviceWorker,
+    /@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/,
+  );
+  assert.match(
+    serviceWorker,
+    /cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/,
+  );
 
   for (const asset of assets) {
     assert.match(serviceWorker, new RegExp(`"\\./${asset}"`));
@@ -129,20 +159,23 @@ test("project documentation describes the current feature set", () => {
   assert.match(readme, /GitHub Pages/);
 });
 
-test("GitHub Pages workflow tests and publishes the static app", () => {
+test("GitHub Pages workflow checks and publishes the static app", () => {
   const workflow = read(".github/workflows/pages.yml");
 
   assert.match(workflow, /Deploy to GitHub Pages/);
   assert.match(workflow, /branches:/);
   assert.match(workflow, /master/);
   assert.match(workflow, /main/);
-  assert.match(workflow, /npm test/);
+  assert.match(workflow, /npm run check/);
   assert.match(workflow, /actions\/checkout@v7/);
   assert.match(workflow, /actions\/setup-node@v6/);
   assert.match(workflow, /actions\/configure-pages@v6/);
   assert.match(workflow, /actions\/upload-pages-artifact@v5/);
   assert.match(workflow, /actions\/deploy-pages@v5/);
-  assert.match(workflow, /cp index\.html styles\.css app\.js supabase-config\.js supabase-sync\.js react-app\.js manifest\.webmanifest sw\.js icon\.svg dist\//);
+  assert.match(
+    workflow,
+    /cp index\.html styles\.css app\.js supabase-config\.js supabase-sync\.js react-app\.js manifest\.webmanifest sw\.js icon\.svg dist\//,
+  );
 });
 
 test("Supabase schema scopes policies to authenticated owners", () => {
@@ -151,9 +184,24 @@ test("Supabase schema scopes policies to authenticated owners", () => {
 
   assert.equal(policyCount, 12);
   assert.equal((schema.match(/to authenticated/g) || []).length, policyCount);
-  assert.equal((schema.match(/auth\.uid\(\) is not null and auth\.uid\(\) = user_id/g) || []).length, 15);
-  assert.match(schema, /alter table public\.workout_logs enable row level security/);
+  assert.equal(
+    (
+      schema.match(/auth\.uid\(\) is not null and auth\.uid\(\) = user_id/g) ||
+      []
+    ).length,
+    15,
+  );
+  assert.match(
+    schema,
+    /alter table public\.workout_logs enable row level security/,
+  );
   assert.match(schema, /timer_result jsonb/);
-  assert.match(schema, /alter table public\.pr_attempts enable row level security/);
-  assert.match(schema, /alter table public\.personal_records enable row level security/);
+  assert.match(
+    schema,
+    /alter table public\.pr_attempts enable row level security/,
+  );
+  assert.match(
+    schema,
+    /alter table public\.personal_records enable row level security/,
+  );
 });

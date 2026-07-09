@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Test and coverage output
+coverage/
+.nyc_output/
+
+# Build and generated output
+dist/
+build/
+
+# Local temporary files
+tmp/
+temp/
+
+# Local agent/plugin metadata
+.agents/
+.codex/
+AGENTS.md
+skills-lock.json
