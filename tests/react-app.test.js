@@ -90,6 +90,7 @@ function mountApp({
   prefersDark = false,
   supabaseMock = null,
   supabaseConfig = true,
+  recordingSupport = false,
 } = {}) {
   const dom = new JSDOM(
     '<!doctype html><html><head><meta name="theme-color" content="#10120f"></head><body><div id="root"></div></body></html>',
@@ -119,6 +120,7 @@ function mountApp({
   dom.window.confirm = () => true;
   dom.window.scrollTo = () => undefined;
   dom.window.matchMedia = createMatchMedia(prefersDark);
+  if (recordingSupport) installRecordingMocks(dom.window);
   dom.window.React = require("react");
   dom.window.ReactDOM = require("react-dom/client");
   if (supabaseMock) {
@@ -160,6 +162,94 @@ function mountApp({
   };
 }
 
+function installRecordingMocks(browserWindow) {
+  const cameraTracks = [
+    { kind: "video", stop: () => undefined },
+    { kind: "audio", stop: () => undefined },
+  ];
+  const cameraStream = {
+    getTracks: () => cameraTracks,
+    getAudioTracks: () =>
+      cameraTracks.filter((track) => track.kind === "audio"),
+  };
+  const canvasTrack = { kind: "video", stop: () => undefined };
+  const canvasStream = {
+    addTrack: () => undefined,
+    getVideoTracks: () => [canvasTrack],
+  };
+  const canvasContext = {
+    drawImage: () => undefined,
+    fillRect: () => undefined,
+    fillText: () => undefined,
+    measureText: (value) => ({ width: String(value).length * 8 }),
+    restore: () => undefined,
+    save: () => undefined,
+    set fillStyle(value) {},
+    set font(value) {},
+    set textAlign(value) {},
+  };
+  const temporaryChunks = [];
+  const temporaryWritable = {
+    write: async (chunk) => temporaryChunks.push(chunk),
+    close: async () => undefined,
+    abort: async () => undefined,
+  };
+  const temporaryFileHandle = {
+    createWritable: async () => temporaryWritable,
+    getFile: async () =>
+      new browserWindow.Blob(temporaryChunks, { type: "video/mp4" }),
+  };
+  const temporaryRoot = {
+    getFileHandle: async () => temporaryFileHandle,
+    removeEntry: async () => undefined,
+  };
+
+  Object.defineProperty(browserWindow.navigator, "mediaDevices", {
+    configurable: true,
+    value: { getUserMedia: async () => cameraStream },
+  });
+  Object.defineProperty(browserWindow.navigator, "storage", {
+    configurable: true,
+    value: { getDirectory: async () => temporaryRoot },
+  });
+  browserWindow.HTMLMediaElement.prototype.play = () => Promise.resolve();
+  browserWindow.HTMLCanvasElement.prototype.getContext = () => canvasContext;
+  browserWindow.HTMLCanvasElement.prototype.captureStream = () => canvasStream;
+  browserWindow.URL.createObjectURL = () => "blob:competition-proof";
+  browserWindow.URL.revokeObjectURL = () => undefined;
+
+  class MockMediaRecorder {
+    static isTypeSupported(mimeType) {
+      return mimeType.startsWith("video/mp4");
+    }
+
+    constructor(stream, options = {}) {
+      this.stream = stream;
+      this.mimeType = options.mimeType || "video/mp4";
+      this.state = "inactive";
+      browserWindow.__mockMediaRecorder = this;
+    }
+
+    start() {
+      this.state = "recording";
+    }
+
+    stop() {
+      this.state = "inactive";
+      if (this.ondataavailable) {
+        this.ondataavailable({
+          data: new browserWindow.Blob(["proof-video"], {
+            type: this.mimeType,
+          }),
+        });
+      }
+      if (this.onstop) this.onstop();
+    }
+  }
+
+  browserWindow.MediaRecorder = MockMediaRecorder;
+}
+
 test("React Testing Library renders the dashboard and bottom navigation", async () => {
   const { cleanup, ui } = mountApp();
 
@@ -177,8 +267,15 @@ test("React Testing Library renders the dashboard and bottom navigation", async 
     assert.ok(ui.getByRole("button", { name: "Plan" }));
     assert.ok(ui.getByRole("button", { name: "Build" }));
     assert.ok(ui.getByRole("button", { name: "Learn" }));
+    assert.ok(ui.getByRole("button", { name: "Proof" }));
     assert.ok(ui.getByRole("button", { name: "Log" }));
     assert.ok(ui.getByRole("button", { name: "PRs" }));
+    assert.equal(
+      Array.from(
+        document.querySelectorAll("#nextSession .timer-panel button"),
+      ).some((button) => button.textContent === "Competition proof"),
+      false,
+    );
   } finally {
     cleanup();
   }
@@ -300,6 +397,147 @@ test("React Testing Library records workout timer splits into a saved log", asyn
       );
       assert.equal(saved.logs[0].timerResult.splits.length, 1);
       assert.match(saved.logs[0].wodScore, /splits/);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library explains when competition recording is unsupported", async () => {
+  const { cleanup, fireEvent, ui } = mountApp();
+
+  try {
+    assert.ok(await ui.findByRole("heading", { name: "Training dashboard" }));
+    fireEvent.click(ui.getByRole("button", { name: "Proof" }));
+    assert.ok(await ui.findByRole("heading", { name: "Competition proof" }));
+    fireEvent.click(ui.getByRole("button", { name: "Open camera" }));
+
+    assert.ok(await ui.findByRole("dialog"));
+    assert.match(
+      ui.getByRole("alert").textContent,
+      /not supported in this browser/i,
+    );
+    assert.ok(ui.getByRole("button", { name: "Retry camera" }));
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library records competition proof metadata into a workout log", async () => {
+  const { cleanup, fireEvent, ui, waitFor } = mountApp({
+    recordingSupport: true,
+  });
+
+  try {
+    assert.ok(await ui.findByRole("heading", { name: "Training dashboard" }));
+    fireEvent.click(ui.getByRole("button", { name: "Proof" }));
+    assert.ok(await ui.findByRole("heading", { name: "Competition proof" }));
+    fireEvent.change(ui.getByLabelText("Workout source"), {
+      target: { value: "custom" },
+    });
+    fireEvent.change(ui.getByLabelText("Workout name"), {
+      target: { value: "Open Test 1" },
+    });
+    fireEvent.change(ui.getByLabelText("Workout details"), {
+      target: { value: "AMRAP 12: 10 burpees, 20 air squats" },
+    });
+    fireEvent.change(ui.getByLabelText("Timer mode"), {
+      target: { value: "amrap" },
+    });
+    fireEvent.change(ui.getByLabelText("Duration or time cap (minutes)"), {
+      target: { value: "12" },
+    });
+    fireEvent.change(ui.getByLabelText("Countdown (seconds)"), {
+      target: { value: "0" },
+    });
+    fireEvent.click(ui.getByRole("button", { name: "Open camera" }));
+    const start = await ui.findByRole("button", { name: "Start recording" });
+    fireEvent.click(start);
+
+    const finish = await ui.findByRole(
+      "button",
+      { name: "Finish recording" },
+      { timeout: 4500 },
+    );
+    fireEvent.click(finish);
+
+    const saveVideo = await ui.findByRole("link", { name: "Save video" });
+    assert.equal(
+      ui.getByRole("button", { name: "Save or share before continuing" })
+        .disabled,
+      true,
+    );
+    saveVideo.addEventListener("click", (event) => event.preventDefault());
+    fireEvent.click(saveVideo);
+    fireEvent.click(
+      await ui.findByRole("button", { name: "Continue to workout log" }),
+    );
+
+    assert.ok(await ui.findByRole("heading", { name: "Log workout" }));
+    assert.ok(
+      ui.getByText(/Competition proof recorded with embedded timer overlay/),
+    );
+    fireEvent.click(ui.getByRole("button", { name: "Save workout log" }));
+
+    await waitFor(() => {
+      const saved = JSON.parse(
+        window.localStorage.getItem("forge-hour-state-v1"),
+      );
+      assert.equal(saved.logs[0].competitionProof.recorded, true);
+      assert.equal(saved.logs[0].competitionProof.overlayEmbedded, true);
+      assert.equal(saved.logs[0].competitionProof.interrupted, false);
+      assert.equal(saved.logs[0].competitionProof.temporaryStorage, "opfs");
+      assert.ok(saved.logs[0].competitionProof.fileName.endsWith(".mp4"));
+      assert.ok(saved.logs[0].competitionProof.exportedAt);
+      assert.equal(saved.logs[0].dayTitle, "Open Test 1");
+      assert.equal(saved.logs[0].timerResult.mode, "amrap");
+      assert.equal(saved.logs[0].timerResult.plannedSeconds, 720);
+      assert.equal(saved.logs[0].timerResult.status, "completed");
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library recovers an unexpectedly stopped proof recording", async () => {
+  const { cleanup, fireEvent, ui, waitFor } = mountApp({
+    recordingSupport: true,
+  });
+
+  try {
+    assert.ok(await ui.findByRole("heading", { name: "Training dashboard" }));
+    fireEvent.click(ui.getByRole("button", { name: "Proof" }));
+    assert.ok(await ui.findByRole("heading", { name: "Competition proof" }));
+    fireEvent.click(ui.getByRole("button", { name: "Open camera" }));
+    fireEvent.click(
+      await ui.findByRole("button", { name: "Start 3-second countdown" }),
+    );
+    await ui.findByRole(
+      "button",
+      { name: "Finish recording" },
+      { timeout: 4500 },
+    );
+
+    window.__mockMediaRecorder.stop();
+
+    const saveVideo = await ui.findByRole("link", { name: "Save video" });
+    assert.ok(ui.getByText(/1 recording interruption marked/));
+    saveVideo.addEventListener("click", (event) => event.preventDefault());
+    fireEvent.click(saveVideo);
+    fireEvent.click(
+      await ui.findByRole("button", { name: "Continue to workout log" }),
+    );
+    fireEvent.click(ui.getByRole("button", { name: "Save workout log" }));
+
+    await waitFor(() => {
+      const saved = JSON.parse(
+        window.localStorage.getItem("forge-hour-state-v1"),
+      );
+      assert.equal(saved.logs[0].competitionProof.interrupted, true);
+      assert.match(
+        saved.logs[0].competitionProof.interruptions[0].reason,
+        /stopped unexpectedly/i,
+      );
     });
   } finally {
     cleanup();

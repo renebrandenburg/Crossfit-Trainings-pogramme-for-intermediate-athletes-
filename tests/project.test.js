@@ -44,6 +44,7 @@ test("React app contains the main app surfaces and navigation", () => {
   assert.match(app, /builderView/);
   assert.match(app, /learnView/);
   assert.match(app, /logView/);
+  assert.match(app, /proofView/);
   assert.match(app, /prView/);
   assert.match(app, /Eight-week cycle/);
   assert.match(app, /RX readiness/);
@@ -51,6 +52,7 @@ test("React app contains the main app surfaces and navigation", () => {
   assert.match(app, /nav-button/);
   assert.match(app, /Home/);
   assert.match(app, /PRs/);
+  assert.match(app, /Competition proof/);
 });
 
 test("builder form has the required fields for a full CrossFit session", () => {
@@ -101,7 +103,7 @@ test("manifest is valid JSON and points to an existing icon", () => {
 
   assert.equal(manifest.name, "CrossFit Training Programme");
   assert.equal(manifest.display, "standalone");
-  assert.equal(manifest.orientation, "portrait-primary");
+  assert.equal(manifest.orientation, "any");
   assert.match(manifest.description, /8-week/);
   assert.ok(fs.existsSync(path.join(ROOT, icon.src.replace("./", ""))));
 });
@@ -119,7 +121,7 @@ test("service worker caches the files needed to run offline", () => {
     "icon.svg",
   ];
 
-  assert.match(serviceWorker, /crossfit-training-programme-v4/);
+  assert.match(serviceWorker, /crossfit-training-programme-v6/);
   assert.match(
     serviceWorker,
     /react@18\.3\.1\/umd\/react\.production\.min\.js/,
@@ -196,6 +198,7 @@ test("Supabase schema scopes policies to authenticated owners", () => {
     /alter table public\.workout_logs enable row level security/,
   );
   assert.match(schema, /timer_result jsonb/);
+  assert.match(schema, /competition_proof jsonb/);
   assert.match(
     schema,
     /alter table public\.pr_attempts enable row level security/,

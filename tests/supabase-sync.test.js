@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  createSupabaseStore,
   logToRow,
   mergeById,
   mergePrs,
@@ -41,6 +42,32 @@ test("Supabase sync helpers merge remote records without duplicates", () => {
   );
 });
 
+test("Supabase sync preserves local proof metadata until the remote schema catches up", () => {
+  const local = [
+    {
+      id: "proof-log",
+      createdAt: "2026-07-11T10:00:00.000Z",
+      competitionProof: { proofId: "proof-1", recorded: true },
+    },
+  ];
+  const remote = [
+    {
+      id: "proof-log",
+      createdAt: "2026-07-11T10:00:00.000Z",
+      competitionProof: null,
+    },
+  ];
+
+  const merged = mergeById(local, remote);
+  const pending = unsyncedById(local, remote);
+
+  assert.equal(merged[0].competitionProof.proofId, "proof-1");
+  assert.deepEqual(
+    pending.map((record) => record.id),
+    ["proof-log"],
+  );
+});
+
 test("Supabase sync helpers map workout logs to database rows and back", () => {
   const log = {
     id: "log-1",
@@ -58,6 +85,14 @@ test("Supabase sync helpers map workout logs to database rows and back", () => {
       plannedSeconds: 720,
       splits: [{ label: "Round 1", elapsedSeconds: 95 }],
     },
+    competitionProof: {
+      version: 1,
+      proofId: "proof-1",
+      recorded: true,
+      durationSeconds: 724,
+      interrupted: false,
+      overlayEmbedded: true,
+    },
     notes: "Good pacing",
     mobilityDone: true,
     createdAt: "2026-07-08T10:00:00.000Z",
@@ -69,7 +104,55 @@ test("Supabase sync helpers map workout logs to database rows and back", () => {
   assert.equal(row.day_id, "day1");
   assert.equal(row.wod_score, "4 rounds");
   assert.equal(row.timer_result.mode, "amrap");
+  assert.equal(row.competition_proof.proofId, "proof-1");
   assert.deepEqual(rowToLog(row), log);
+
+  const ordinaryRow = logToRow(
+    { ...log, id: "log-2", competitionProof: null },
+    "user-1",
+  );
+  assert.equal("competition_proof" in ordinaryRow, false);
+});
+
+test("Supabase sync falls back safely when competition_proof is not migrated", async () => {
+  const calls = [];
+  const client = {
+    from: () => ({
+      upsert: async (payload) => {
+        calls.push(payload);
+        if (calls.length === 1) {
+          return {
+            data: null,
+            error: {
+              code: "PGRST204",
+              message:
+                "Could not find the 'competition_proof' column in the schema cache",
+            },
+          };
+        }
+        return { data: payload, error: null };
+      },
+    }),
+  };
+  const store = createSupabaseStore(client);
+  const result = await store.saveLog(
+    {
+      id: "proof-log",
+      date: "2026-07-11",
+      week: 1,
+      dayId: "day1",
+      dayTitle: "Competition WOD",
+      readiness: "green",
+      competitionProof: { recorded: true, proofId: "proof-1" },
+      createdAt: "2026-07-11T10:00:00.000Z",
+    },
+    "user-1",
+  );
+
+  assert.equal(result.competitionProofSynced, false);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].competition_proof.proofId, "proof-1");
+  assert.equal("competition_proof" in calls[1], false);
 });
 
 test("Supabase sync helpers map PR attempts and personal records", () => {

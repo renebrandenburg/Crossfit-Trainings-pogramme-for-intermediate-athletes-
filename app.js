@@ -933,7 +933,7 @@ const MOVEMENT_LIBRARY = [
   },
 ];
 
-const WOD_SCHEMA_VERSION = 2;
+const WOD_SCHEMA_VERSION = 3;
 
 const canUseDOM = typeof document !== "undefined";
 const state = loadState();
@@ -2739,37 +2739,225 @@ function mastersRxSessionTemplates(profile, week, phase) {
 
 function mastersRxWod(week, day, profile, wallBallVolume) {
   const cleanLoad = kg(profile.maxes.cleanJerk, week >= 6 ? 0.6 : 0.52);
+  const lightCleanLoad = kg(profile.maxes.cleanJerk, week >= 6 ? 0.55 : 0.5);
   const thrusterLoad =
     week >= 6 ? "43-61 kg / 95-135 lb" : "43-52 kg / 95-115 lb";
   const ohsLoad = "52 kg / 115 lb target, scale to unbroken 5s";
+  const wallBalls = `${wallBallVolume}+ wall balls total`;
   const patterns = {
-    1: [
-      `AMRAP 12: 20 wall balls, 12 box jump-overs, 8 toes-to-bar. Target ${wallBallVolume}+ wall balls total.`,
-      "Stimulus: Open-style leg and midline repeatability.",
-      "Score: rounds and reps; scale wall-ball breaks before reducing movement standard.",
-    ],
-    2: [
-      `For time, 12 min cap: 10 shuttle runs, 20 overhead squats at ${ohsLoad}, 30 burpees over bar, rest 1:00, then reverse.`,
-      "Stimulus: Quarterfinal-style shuttle/OHS/burpee control.",
-      "Score: finish time or reps at cap; preserve below-parallel squats and two-foot bar clearance.",
-    ],
-    3: [
-      `12 min ascending ladder: 3-6-9... thrusters at ${thrusterLoad}, chest-to-bar pull-ups; after each round row 150 m.`,
-      "Stimulus: 25.2-style pulling and thruster fatigue.",
-      "Score: last completed round plus reps; scale to chest-to-bar quality before volume.",
-    ],
-    4: [
-      `18 min chipper: 50 double-unders, 20 burpees, 15 clean and jerks at ${cleanLoad}, 12 bar muscle-ups or transitions, 50 double-unders, 20 wall walks or strict HSPU.`,
-      "Stimulus: mixed gymnastics under breathing fatigue.",
-      "Score: time or reps; stop skill sets before repeated failed reps.",
-    ],
-    5: [
-      "Benchmark 15: 3 rounds for time: 400 m run, 21 wall balls, 12 toes-to-bar, 9 power cleans.",
-      "Stimulus: Masters RX repeat test across engine, squat stamina, grip, and barbell cycling.",
-      "Score: finish time; compare to future 8-week cycles.",
-    ],
+    1: {
+      1: [
+        `AMRAP 12: 20 wall balls, 12 box jump-overs, 8 toes-to-bar. Target ${wallBalls}.`,
+        "Stimulus: Open-style leg and midline repeatability.",
+        "Score: rounds and reps; scale wall-ball breaks before reducing movement standard.",
+      ],
+      2: [
+        "Every 3 min x 4: 18 wall balls, 10 box jump-overs, 8 toes-to-bar; rest remaining time.",
+        "Stimulus: repeatable wall-ball and TTB sets with visible recovery.",
+        "Score: slowest interval split; scale to finish each set with at least 30 sec rest.",
+      ],
+      3: [
+        "For time, 14 min cap: 3 rounds of 30 wall balls, 15 toes-to-bar, 12 box jump-overs.",
+        "Stimulus: bigger sets under grip fatigue without turning TTB into failed reps.",
+        "Score: finish time or reps at cap; keep a planned TTB break pattern.",
+      ],
+      4: [
+        "EMOM 16: min 1 16 wall balls, min 2 8 toes-to-bar, min 3 10 box step-overs, min 4 easy machine.",
+        "Stimulus: deload skill conditioning with clean movement standards.",
+        "Score: quality completed; no failed gymnastics reps.",
+      ],
+      5: [
+        "13 min ascending ladder: 5-10-15... wall balls and toes-to-bar; after each round complete 8 box jump-overs.",
+        "Stimulus: second-wave density for squat stamina and midline rhythm.",
+        "Score: last completed round plus reps; scale TTB before losing kip timing.",
+      ],
+      6: [
+        "5 sets, rest 1:00 between sets: 24 wall balls, 12 toes-to-bar, 10 box jump-overs.",
+        "Stimulus: hard repeat efforts with wall-ball volume under control.",
+        "Score: total working time; no set should fade more than 10 percent.",
+      ],
+      7: [
+        "For time, 15 min cap: 50 wall balls, 40 box jump-overs, 30 toes-to-bar, 20 wall balls, 10 toes-to-bar.",
+        "Stimulus: peak-week chipper; controlled opening pace, strong final TTB sets.",
+        "Score: finish time or reps at cap; preserve full-depth wall balls.",
+      ],
+      8: [
+        `Benchmark Wall-ball engine, 15 min cap: 3 rounds for time: 400 m run, 21 wall balls, 12 toes-to-bar, 9 power cleans at ${lightCleanLoad}.`,
+        "Stimulus: repeat test across engine, squat stamina, grip, and barbell cycling.",
+        "Score: finish time; compare to future 8-week cycles.",
+      ],
+    },
+    2: {
+      1: [
+        `For time, 12 min cap: 10 shuttle runs, 20 overhead squats at ${ohsLoad}, 30 burpees over bar, rest 1:00, then reverse.`,
+        "Stimulus: Quarterfinal-style shuttle/OHS/burpee control.",
+        "Score: finish time or reps at cap; preserve below-parallel squats and two-foot bar clearance.",
+      ],
+      2: [
+        `Every 3 min x 4: 12 shuttle runs, 12 overhead squats at ${ohsLoad}, 10 burpees over bar; rest remaining time.`,
+        "Stimulus: repeatable overhead positions while breathing hard.",
+        "Score: slowest interval split; reduce load before overhead squats break.",
+      ],
+      3: [
+        `AMRAP 13: 6 power snatches at ${lightCleanLoad}, 8 overhead squats at ${ohsLoad}, 10 shuttle runs.`,
+        "Stimulus: cycling light-to-moderate barbell reps with steady footwork.",
+        "Score: rounds and reps; scale to unbroken overhead squat sets.",
+      ],
+      4: [
+        `EMOM 16: min 1 8 overhead squats at ${ohsLoad}, min 2 10 shuttle runs, min 3 8 burpees over bar, min 4 rest.`,
+        "Stimulus: deload practice for standards, breathing, and bar path.",
+        "Score: quality completed; stop before shoulder position collapses.",
+      ],
+      5: [
+        `14 min ascending ladder: 3-6-9... power snatches and overhead squats at ${lightCleanLoad}; after each round complete 6 shuttle runs.`,
+        "Stimulus: second-wave overhead density with short shuttle interruptions.",
+        "Score: last completed round plus reps; keep snatches crisp.",
+      ],
+      6: [
+        `5 sets, rest 1:00 between sets: 10 shuttle runs, 10 overhead squats at ${ohsLoad}, 8 burpees over bar.`,
+        "Stimulus: hard repeat efforts with competition-standard squats.",
+        "Score: total working time; scale to keep every set under control.",
+      ],
+      7: [
+        `For time, 15 min cap: 21-15-9 overhead squats at ${ohsLoad} and burpees over bar; complete 10 shuttle runs after each round.`,
+        "Stimulus: peak-week overhead and burpee stamina.",
+        "Score: finish time or reps at cap; below-parallel squats count only.",
+      ],
+      8: [
+        `Benchmark OHS shuttle repeat, 12 min cap: 2 rounds of 10 shuttle runs, 15 overhead squats at ${ohsLoad}, 20 burpees over bar.`,
+        "Stimulus: retest overhead control under shuttle fatigue.",
+        "Score: finish time or reps at cap; compare standards exactly next cycle.",
+      ],
+    },
+    3: {
+      1: [
+        `12 min ascending ladder: 3-6-9... thrusters at ${thrusterLoad}, chest-to-bar pull-ups; after each round row 150 m.`,
+        "Stimulus: 25.2-style pulling and thruster fatigue.",
+        "Score: last completed round plus reps; scale to chest-to-bar quality before volume.",
+      ],
+      2: [
+        `Every 3 min x 4: 9 thrusters at ${thrusterLoad}, 9 chest-to-bar pull-ups, row 150 m; rest remaining time.`,
+        "Stimulus: fast repeat sets with honest pull-up standards.",
+        "Score: slowest interval split; scale to keep transitions sharp.",
+      ],
+      3: [
+        `AMRAP 13: 12 thrusters at ${thrusterLoad}, 12 chest-to-bar pull-ups, 12/9 cal row.`,
+        "Stimulus: medium Open-style triplet with grip and breathing pressure.",
+        "Score: rounds and reps; break before grip failure.",
+      ],
+      4: [
+        `EMOM 16: min 1 8 thrusters at ${thrusterLoad}, min 2 6 chest-to-bar pull-ups, min 3 12/9 cal row, min 4 rest.`,
+        "Stimulus: deload quality volume with repeatable reps.",
+        "Score: quality completed; no missed chest-to-bar reps.",
+      ],
+      5: [
+        `For time, 14 min cap: 21-15-9 thrusters at ${thrusterLoad} and chest-to-bar pull-ups; row 150 m after each round.`,
+        "Stimulus: second-wave classic couplet with rowing interference.",
+        "Score: finish time or reps at cap; choose a repeatable pulling break plan.",
+      ],
+      6: [
+        `5 sets, rest 1:00 between sets: 10 thrusters at ${thrusterLoad}, 8 chest-to-bar pull-ups, 10/8 cal row.`,
+        "Stimulus: hard repeat efforts; barbell and pulling should stay unbroken or planned.",
+        "Score: total working time; scale load before extending rest.",
+      ],
+      7: [
+        `15 min ascending ladder: 4-8-12... thrusters at ${thrusterLoad} and chest-to-bar pull-ups; after each round complete 4 bar muscle-ups or transitions.`,
+        "Stimulus: peak-week pulling under thruster fatigue.",
+        "Score: last completed round plus reps; protect movement standards.",
+      ],
+      8: [
+        `Benchmark Thruster ladder, 12 min cap: 15-12-9 thrusters at ${thrusterLoad}, chest-to-bar pull-ups, then max cal row in remaining time.`,
+        "Stimulus: retest pulling and thrusters with a measurable engine finish.",
+        "Score: finish time plus calories, or reps at cap.",
+      ],
+    },
+    4: {
+      1: [
+        `18 min chipper: 50 double-unders, 20 burpees, 15 clean and jerks at ${cleanLoad}, 12 bar muscle-ups or transitions, 50 double-unders, 20 wall walks or strict HSPU.`,
+        "Stimulus: mixed gymnastics under breathing fatigue.",
+        "Score: time or reps; stop skill sets before repeated failed reps.",
+      ],
+      2: [
+        `AMRAP 16: 4 bar muscle-ups or transitions, 8 clean and jerks at ${cleanLoad}, 12 strict HSPU or pike presses, 50 double-unders.`,
+        "Stimulus: repeatable high-skill rounds without failed gymnastics reps.",
+        "Score: rounds and reps; scale skills before reducing intensity.",
+      ],
+      3: [
+        `Every 4 min x 4: 50 double-unders, 10 clean and jerks at ${cleanLoad}, 6 bar muscle-ups or transitions, 8 strict HSPU or pike presses; rest remaining time.`,
+        "Stimulus: high-skill intervals with enough rest to keep standards.",
+        "Score: slowest interval split; cap skill attempts before misses stack up.",
+      ],
+      4: [
+        `EMOM 16: min 1 35 double-unders, min 2 6 clean and jerks at ${lightCleanLoad}, min 3 3 bar muscle-ups or transitions, min 4 handstand hold or pike press.`,
+        "Stimulus: deload skill exposure while breathing stays controlled.",
+        "Score: quality completed; no failed reps.",
+      ],
+      5: [
+        `For time, 16 min cap: 75 double-unders, 21 clean and jerks at ${cleanLoad}, 15 bar muscle-ups or transitions, 15 wall walks or strict HSPU, 75 double-unders.`,
+        "Stimulus: second-wave chipper with higher skill density.",
+        "Score: finish time or reps at cap; keep gymnastics sets submaximal.",
+      ],
+      6: [
+        `5 sets, rest 1:00 between sets: 40 double-unders, 8 clean and jerks at ${cleanLoad}, 4 bar muscle-ups or transitions, 6 strict HSPU or pike presses.`,
+        "Stimulus: hard repeat efforts with clean reps under fatigue.",
+        "Score: total working time; scale to keep each set moving.",
+      ],
+      7: [
+        `AMRAP 18: 10 clean and jerks at ${cleanLoad}, 8 bar muscle-ups or transitions, 12 wall walks or strict HSPU, 60 double-unders.`,
+        "Stimulus: peak-week mixed modal skill stamina.",
+        "Score: rounds and reps; stop before repeated no-reps.",
+      ],
+      8: [
+        `Benchmark Gymnastics chipper, 18 min cap: 50 double-unders, 20 burpees, 15 clean and jerks at ${cleanLoad}, 12 bar muscle-ups or transitions, 50 double-unders, 20 wall walks or strict HSPU.`,
+        "Stimulus: retest mixed gymnastics under breathing fatigue.",
+        "Score: time or reps; compare exact standards next cycle.",
+      ],
+    },
+    5: {
+      1: [
+        `AMRAP 12: 10 shuttle runs, 12 wall balls, 8 chest-to-bar pull-ups, 6 power cleans at ${lightCleanLoad}.`,
+        "Stimulus: weakness top-up across common Open standards.",
+        "Score: rounds and reps; choose one movement to scale before the clock starts.",
+      ],
+      2: [
+        "Every 3 min x 4: 200 m run, 10 toes-to-bar, 8 burpees to target; rest remaining time.",
+        "Stimulus: repeatable engine and midline work without redline pacing.",
+        "Score: slowest interval split; keep every run repeatable.",
+      ],
+      3: [
+        `For time, 13 min cap: 30 wall balls, 20 chest-to-bar pull-ups, 10 power cleans at ${cleanLoad}, 20 chest-to-bar pull-ups, 30 wall balls.`,
+        "Stimulus: grip and squat stamina with a barbell pinch point.",
+        "Score: finish time or reps at cap; scale pulling volume to stay moving.",
+      ],
+      4: [
+        "EMOM 16: min 1 easy machine, min 2 8 toes-to-bar, min 3 12 wall balls, min 4 mobility or rest.",
+        "Stimulus: deload weakness practice with repeatable standards.",
+        "Score: quality completed; leave fresher than you started.",
+      ],
+      5: [
+        `14 min ascending ladder: 3-6-9... power cleans at ${lightCleanLoad} and burpees over bar; after each round complete 20 double-unders.`,
+        "Stimulus: second-wave barbell cycling and breathing density.",
+        "Score: last completed round plus reps; stay smooth on the barbell.",
+      ],
+      6: [
+        "5 sets, rest 1:00 between sets: 12/9 cal bike, 10 toes-to-bar, 12 wall balls.",
+        "Stimulus: hard repeat efforts for the athlete's weakest RX category.",
+        "Score: total working time; scale reps to avoid failed TTB.",
+      ],
+      7: [
+        `For time, 15 min cap: 400 m run, 30 wall balls, 20 toes-to-bar, 10 power cleans at ${cleanLoad}, 20 toes-to-bar, 30 wall balls.`,
+        "Stimulus: peak-week weakness chipper with measured barbell fatigue.",
+        "Score: finish time or reps at cap; hold one planned break strategy.",
+      ],
+      8: [
+        `Benchmark Masters RX retest, 15 min cap: 3 rounds for time: 400 m run, 21 wall balls, 12 toes-to-bar, 9 power cleans at ${lightCleanLoad}.`,
+        "Stimulus: repeat test across engine, squat stamina, grip, and barbell cycling.",
+        "Score: finish time; compare to future 8-week cycles.",
+      ],
+    },
   };
-  return patterns[day] || patterns[1];
+  const dayPatterns = patterns[day] || patterns[1];
+  return dayPatterns[week] || dayPatterns[1];
 }
 
 function mastersRxAddOns(week, day) {

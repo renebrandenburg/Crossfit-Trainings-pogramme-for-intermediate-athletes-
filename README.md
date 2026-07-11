@@ -12,12 +12,33 @@ A phone-first CrossFit training programme and PR tracker for intermediate athlet
 - Manual training programme builder for adding your own sessions.
 - Movement library for gymnastics and weightlifting skills with cues, progressions, scaling, and video guide links.
 - Workout logging for readiness, RPE, strength or skill results, WOD score, notes, and mobility.
+- iPhone Competition Proof recording with a synchronized timer overlay, local video preview, and save/share controls.
 - PR tracker for major lifts, rowing, Murph, and gymnastics benchmarks.
 - RX readiness dashboard for strength, Olympic lifting, engine, gymnastics, Open skills, and recovery focus areas.
 - React-powered phone-first UI mounted into a static app shell.
 - Light, dark, and system theme setting saved locally.
 - Optional Supabase Postgres sync for workout logs and PR records.
 - Local-first storage in the browser with a simple PWA manifest and offline cache.
+
+## Competition Proof recording
+
+Open the **Proof** tab, choose a programmed or saved session or enter a custom
+competition workout, then configure the timer mode, duration or time cap,
+interval length, and countdown. Opening the camera requests the rear camera and
+microphone and starts the configured timer and video together. On supported
+browsers, the athlete, workout, timer, round, and recording state are embedded
+into the exported video. Review the result before saving or sharing it from the
+iPhone, then continue to the workout log to store the timer and proof metadata.
+
+Recording requires a current iPhone browser, camera and microphone permission,
+and an HTTPS deployment such as GitHub Pages. Keep the app in the foreground and
+disable Auto-Lock for long workouts. Backgrounding or locking the phone is
+marked as an interruption. Recording chunks use temporary private browser file
+storage when available and are deleted after export or discard. Browsers without
+that capability use a lower-resolution in-memory fallback and show a warning.
+Videos are never uploaded to Supabase or added to the offline cache. Browser
+proof recording is not an official competition certification or an automatic
+submission to an event platform.
 
 ## Run locally
 
@@ -60,6 +81,10 @@ remain local to the browser.
    deployment.
 7. Serve or deploy the app, then use the Database sync panel to email a sign-in
    link and upload existing local scores.
+
+Run the updated `supabase-schema.sql` again on an existing project to add the
+nullable `competition_proof` metadata column. The script uses idempotent
+`add column if not exists` statements and does not create video storage.
 
 ## Host on GitHub Pages
 

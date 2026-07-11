@@ -361,9 +361,15 @@
     );
 
     const finishTimerToLog = ReactRuntime.useCallback(
-      (session, timerResult) => {
+      (session, timerResult, competitionProof = null) => {
         const week = clamp(Number(session.week) || appState.selectedWeek, 1, 8);
-        setPendingTimerResult({ ...timerResult, dayId: session.id, week });
+        setPendingTimerResult({
+          ...timerResult,
+          competitionProof,
+          sessionSnapshot: session,
+          dayId: session.id,
+          week,
+        });
         setLogSelection({ dayId: session.id, week });
         updateAppState((current) => ({ ...current, selectedWeek: week }));
         activateView("logView");
@@ -570,12 +576,17 @@
                   );
                   const remoteData = await remoteStore.loadUserData();
                   mergeRemoteState(remoteData);
+                  const proofPending = uploaded.competitionProofPending || 0;
                   setSyncStatus({
                     state: "signed-in",
-                    message: "Local scores synced to Supabase.",
+                    message: proofPending
+                      ? "Scores synced. Competition proof metadata stays local until the Supabase schema is updated."
+                      : "Local scores synced to Supabase.",
                   });
                   notify(
-                    `Synced ${uploaded.logs + uploaded.prAttempts + uploaded.prs} local records.`,
+                    proofPending
+                      ? `Synced local records; ${proofPending} proof record${proofPending === 1 ? "" : "s"} still need the Supabase schema update.`
+                      : `Synced ${uploaded.logs + uploaded.prAttempts + uploaded.prs} local records.`,
                   );
                 } catch (error) {
                   console.warn("Could not sync local scores.", error);
@@ -649,6 +660,11 @@
             onTimerFinish: finishTimerToLog,
           }),
           h(LearnView, { activeView }),
+          h(ProofView, {
+            appState,
+            activeView,
+            onFinish: finishTimerToLog,
+          }),
           h(LogView, {
             appState,
             activeView,
@@ -670,17 +686,25 @@
               if (remoteStore && remoteUser) {
                 return remoteStore
                   .saveLog(log, remoteUser.id)
-                  .then(() => {
+                  .then((syncResult) => {
+                    const remoteLog =
+                      syncResult?.competitionProofSynced === false
+                        ? { ...log, competitionProof: null }
+                        : log;
                     setRemoteSnapshot((current) => ({
                       ...current,
-                      logs: mergeById(current.logs, [log]),
+                      logs: mergeById(current.logs, [remoteLog]),
                     }));
                     updateAppState((current) => ({
                       ...current,
                       logs: mergeById(current.logs, [log]),
                     }));
                     clearMatchingTimer();
-                    notify("Workout log saved.");
+                    notify(
+                      syncResult?.competitionProofSynced === false
+                        ? "Workout saved. Proof metadata stays local until the Supabase schema is updated."
+                        : "Workout log saved.",
+                    );
                   })
                   .catch((error) => {
                     console.warn(
@@ -1043,7 +1067,10 @@
               "View plan",
             ),
           ),
-          h(WorkoutTimer, { session, onFinish: onTimerFinish }),
+          h(WorkoutTimer, {
+            session,
+            onFinish: onTimerFinish,
+          }),
         ),
       ),
       h(ProfilePanel, {
@@ -1522,6 +1549,9 @@
     onTimerFinish,
   }) {
     const week = WEEK_META.find((item) => item.week === appState.selectedWeek);
+    const generatedPlans = appState.customPlans.filter(
+      (plan) => plan.generated && Number(plan.week) === appState.selectedWeek,
+    );
 
     return h(
       "section",
@@ -1572,6 +1602,77 @@
           });
         }),
       ),
+      generatedPlans.length
+        ? h(
+            "section",
+            {
+              className: "programme-section",
+              "aria-labelledby": "generatedProgrammeTitle",
+            },
+            h(
+              "div",
+              { className: "section-heading programme-subheading" },
+              h(
+                "div",
+                null,
+                h("p", { className: "eyebrow" }, "Generated"),
+                h(
+                  "h3",
+                  { id: "generatedProgrammeTitle" },
+                  `Generated programme - Week ${appState.selectedWeek}`,
+                ),
+              ),
+            ),
+            h(
+              "div",
+              { className: "day-list", id: "generatedProgramList" },
+              generatedPlans.map((plan) => {
+                const logged = isCustomPlanLogged(appState.logs, plan);
+                return h(SessionCard, {
+                  key: plan.id,
+                  session: customPlanToSession(plan),
+                  tag: logged ? "Logged" : `${plan.duration} min`,
+                  meta: customPlanMeta(plan, logged),
+                  onLog: () => onLogSession(plan.id, plan.week),
+                  onTimerFinish,
+                });
+              }),
+            ),
+          )
+        : null,
+    );
+  }
+
+  function customPlanToSession(plan) {
+    return {
+      id: plan.id,
+      week: plan.week,
+      weekday: `Week ${plan.week}`,
+      shortTitle: plan.title,
+      title: plan.title,
+      focus: plan.focus,
+      segments: customPlanSegments(plan),
+      addOns: plan.addOns || [],
+    };
+  }
+
+  function isCustomPlanLogged(logs, plan) {
+    return logs.some((log) => log.dayId === plan.id);
+  }
+
+  function customPlanMeta(plan, logged) {
+    return h(
+      "div",
+      { className: "history-meta" },
+      h("span", { className: "metric-pill" }, plan.intensity || "Moderate"),
+      plan.generated
+        ? h(
+            "span",
+            { className: "metric-pill" },
+            GOAL_LABELS[plan.sourceGoal] || "Generated",
+          )
+        : null,
+      logged ? h("span", { className: "metric-pill" }, "Logged") : null,
     );
   }
 
@@ -1824,6 +1925,1285 @@
     );
   }
 
+  function ProofView({ appState, activeView, onFinish }) {
+    const programmeSessions = getProgramDays().map((day) =>
+      buildSession(day.id, appState.selectedWeek, appState.profile),
+    );
+    const savedSessions = appState.customPlans.map(customPlanToSession);
+    const allSessions = [...programmeSessions, ...savedSessions];
+    const initialSession = allSessions[0];
+    const customSessionId = ReactRuntime.useRef(`competition-${createId()}`);
+    const [sourceId, setSourceId] = ReactRuntime.useState(
+      initialSession?.id || "custom",
+    );
+    const [draft, setDraft] = ReactRuntime.useState(() =>
+      proofDraftFromSession(initialSession),
+    );
+
+    ReactRuntime.useEffect(() => {
+      if (!getProgramDays().some((day) => day.id === sourceId)) return;
+      const refreshedSession = programmeSessions.find(
+        (session) => session.id === sourceId,
+      );
+      if (refreshedSession) setDraft(proofDraftFromSession(refreshedSession));
+    }, [appState.selectedWeek]);
+
+    const selectedSession = allSessions.find(
+      (session) => session.id === sourceId,
+    );
+    const session = proofSessionFromDraft(
+      selectedSession,
+      draft,
+      appState.selectedWeek,
+      customSessionId.current,
+    );
+    const config = proofTimerConfig(draft);
+    const canRecord = Boolean(draft.title.trim() && draft.workout.trim());
+
+    function updateDraft(key, value) {
+      setDraft((current) => ({ ...current, [key]: value }));
+    }
+
+    function selectSource(nextSourceId) {
+      setSourceId(nextSourceId);
+      if (nextSourceId === "custom") {
+        setDraft({
+          title: "Competition workout",
+          workout: "",
+          mode: "forTime",
+          durationMinutes: 20,
+          intervalSeconds: 60,
+          countdownSeconds: 3,
+        });
+        return;
+      }
+      setDraft(
+        proofDraftFromSession(
+          allSessions.find((item) => item.id === nextSourceId),
+        ),
+      );
+    }
+
+    return h(
+      "section",
+      {
+        id: "proofView",
+        className: viewClass("proofView", activeView),
+        "aria-labelledby": "proofSetupTitle",
+      },
+      h(
+        "div",
+        { className: "section-heading" },
+        h(
+          "div",
+          null,
+          h("p", { className: "eyebrow" }, "Competition"),
+          h("h2", { id: "proofSetupTitle" }, "Competition proof"),
+        ),
+      ),
+      h(
+        "form",
+        {
+          className: "panel proof-setup-form",
+          onSubmit: (event) => event.preventDefault(),
+        },
+        h(
+          "label",
+          null,
+          "Workout source",
+          h(
+            "select",
+            {
+              value: sourceId,
+              onChange: (event) => selectSource(event.target.value),
+            },
+            h("option", { value: "custom" }, "Custom competition workout"),
+            h(
+              "optgroup",
+              { label: `Programme - Week ${appState.selectedWeek}` },
+              programmeSessions.map((item) =>
+                h(
+                  "option",
+                  { key: item.id, value: item.id },
+                  `${item.weekday} - ${item.shortTitle}`,
+                ),
+              ),
+            ),
+            savedSessions.length
+              ? h(
+                  "optgroup",
+                  { label: "Saved workouts" },
+                  savedSessions.map((item) =>
+                    h(
+                      "option",
+                      { key: item.id, value: item.id },
+                      `Week ${item.week} - ${item.shortTitle}`,
+                    ),
+                  ),
+                )
+              : null,
+          ),
+        ),
+        h(
+          "label",
+          null,
+          "Workout name",
+          h("input", {
+            type: "text",
+            required: true,
+            value: draft.title,
+            onChange: (event) => updateDraft("title", event.target.value),
+          }),
+        ),
+        h(
+          "label",
+          null,
+          "Workout details",
+          h("textarea", {
+            rows: "4",
+            required: true,
+            value: draft.workout,
+            onChange: (event) => updateDraft("workout", event.target.value),
+          }),
+        ),
+        h(
+          "div",
+          { className: "form-row" },
+          h(
+            "label",
+            null,
+            "Timer mode",
+            h(
+              "select",
+              {
+                value: draft.mode,
+                onChange: (event) => updateDraft("mode", event.target.value),
+              },
+              h("option", { value: "forTime" }, "For time / time cap"),
+              h("option", { value: "amrap" }, "AMRAP"),
+              h("option", { value: "emom" }, "EMOM"),
+              h("option", { value: "interval" }, "Intervals"),
+            ),
+          ),
+          h(
+            "label",
+            null,
+            "Duration or time cap (minutes)",
+            h("input", {
+              type: "number",
+              min: "1",
+              max: "180",
+              step: "1",
+              inputMode: "numeric",
+              value: draft.durationMinutes,
+              onChange: (event) =>
+                updateDraft("durationMinutes", event.target.value),
+            }),
+          ),
+        ),
+        h(
+          "div",
+          { className: "form-row" },
+          draft.mode === "interval"
+            ? h(
+                "label",
+                null,
+                "Interval length (seconds)",
+                h("input", {
+                  type: "number",
+                  min: "10",
+                  max: "3600",
+                  step: "5",
+                  inputMode: "numeric",
+                  value: draft.intervalSeconds,
+                  onChange: (event) =>
+                    updateDraft("intervalSeconds", event.target.value),
+                }),
+              )
+            : null,
+          h(
+            "label",
+            null,
+            "Countdown (seconds)",
+            h("input", {
+              type: "number",
+              min: "0",
+              max: "10",
+              step: "1",
+              inputMode: "numeric",
+              value: draft.countdownSeconds,
+              onChange: (event) =>
+                updateDraft("countdownSeconds", event.target.value),
+            }),
+          ),
+        ),
+        h(
+          "div",
+          { className: "proof-config-actions" },
+          h(
+            "div",
+            { className: "history-meta" },
+            h("span", { className: "metric-pill" }, config.label),
+            h(
+              "span",
+              { className: "metric-pill" },
+              formatTimerSeconds(config.plannedSeconds),
+            ),
+          ),
+          h(CompetitionProofRecorder, {
+            athleteName: appState.profile.athleteName,
+            buttonLabel: "Open camera",
+            config,
+            disabled: !canRecord,
+            session,
+            onFinish,
+          }),
+        ),
+      ),
+    );
+  }
+
+  function proofDraftFromSession(session) {
+    const timer = session ? inferWorkoutTimer(session) : null;
+    const supportedMode = ["forTime", "amrap", "emom", "interval"].includes(
+      timer?.mode,
+    )
+      ? timer.mode
+      : "forTime";
+    return {
+      title: session?.shortTitle || session?.title || "Competition workout",
+      workout: timer?.workout || "",
+      mode: supportedMode,
+      durationMinutes: Math.max(
+        1,
+        Math.round(Number(timer?.plannedSeconds || 1200) / 60),
+      ),
+      intervalSeconds: Number(timer?.intervalSeconds) || 60,
+      countdownSeconds: 3,
+    };
+  }
+
+  function proofSessionFromDraft(
+    selectedSession,
+    draft,
+    selectedWeek,
+    customSessionId,
+  ) {
+    const duration = clamp(Number(draft.durationMinutes) || 20, 1, 180);
+    const title = draft.title.trim() || "Competition workout";
+    return {
+      ...(selectedSession || {}),
+      id: selectedSession?.id || customSessionId,
+      week: selectedSession?.week || selectedWeek,
+      weekday: selectedSession?.weekday || "Competition",
+      shortTitle: title,
+      title,
+      focus: "Competition proof",
+      segments: [
+        {
+          title: "WOD",
+          minutes: String(duration),
+          items: [draft.workout.trim()],
+        },
+      ],
+    };
+  }
+
+  function proofTimerConfig(draft) {
+    const mode = ["forTime", "amrap", "emom", "interval"].includes(draft.mode)
+      ? draft.mode
+      : "forTime";
+    const durationMinutes = clamp(Number(draft.durationMinutes) || 20, 1, 180);
+    const plannedSeconds = durationMinutes * 60;
+    const intervalSeconds =
+      mode === "emom"
+        ? 60
+        : mode === "interval"
+          ? clamp(Number(draft.intervalSeconds) || 60, 10, 3600)
+          : null;
+    const labels = {
+      amrap: "AMRAP",
+      emom: "EMOM",
+      forTime: "For time",
+      interval: "Intervals",
+    };
+    return {
+      mode,
+      label: labels[mode],
+      source: "competition-proof",
+      workout: draft.workout.trim(),
+      plannedSeconds,
+      intervalSeconds,
+      rounds: intervalSeconds
+        ? Math.max(1, Math.ceil(plannedSeconds / intervalSeconds))
+        : null,
+      countdownSeconds: clamp(Number(draft.countdownSeconds) || 0, 0, 10),
+    };
+  }
+
+  function CompetitionProofRecorder({
+    athleteName = "Intermediate athlete",
+    buttonLabel = "Competition proof",
+    config,
+    disabled = false,
+    session,
+    onFinish,
+  }) {
+    const [isOpen, setIsOpen] = ReactRuntime.useState(false);
+    const [phase, setPhase] = ReactRuntime.useState("idle");
+    const [error, setError] = ReactRuntime.useState("");
+    const [streamReady, setStreamReady] = ReactRuntime.useState(false);
+    const [countdown, setCountdown] = ReactRuntime.useState(null);
+    const [startedAtMs, setStartedAtMs] = ReactRuntime.useState(null);
+    const [tick, setTick] = ReactRuntime.useState(Date.now());
+    const [splits, setSplits] = ReactRuntime.useState([]);
+    const [interruptions, setInterruptions] = ReactRuntime.useState([]);
+    const [videoBlob, setVideoBlob] = ReactRuntime.useState(null);
+    const [videoUrl, setVideoUrl] = ReactRuntime.useState("");
+    const [overlayEmbedded, setOverlayEmbedded] = ReactRuntime.useState(false);
+    const [finalResult, setFinalResult] = ReactRuntime.useState(null);
+    const [exportConfirmed, setExportConfirmed] = ReactRuntime.useState(false);
+    const [temporaryStorageMode, setTemporaryStorageMode] =
+      ReactRuntime.useState("");
+    const previewRef = ReactRuntime.useRef(null);
+    const canvasRef = ReactRuntime.useRef(null);
+    const streamRef = ReactRuntime.useRef(null);
+    const recorderRef = ReactRuntime.useRef(null);
+    const compositeStreamRef = ReactRuntime.useRef(null);
+    const chunkSinkRef = ReactRuntime.useRef(null);
+    const countdownTimerRef = ReactRuntime.useRef(null);
+    const interruptionsRef = ReactRuntime.useRef([]);
+    const proofUiRef = ReactRuntime.useRef({});
+    const videoUrlRef = ReactRuntime.useRef("");
+    const startedAtRef = ReactRuntime.useRef(null);
+    const splitsRef = ReactRuntime.useRef([]);
+    const overlayEmbeddedRef = ReactRuntime.useRef(false);
+    const pendingResultRef = ReactRuntime.useRef(null);
+
+    const elapsed = startedAtMs
+      ? phase === "review" && finalResult
+        ? finalResult.timerResult.elapsedSeconds
+        : Math.max(0, Math.floor((tick - startedAtMs) / 1000))
+      : 0;
+    const displayTime = formatTimerSeconds(
+      timerDisplaySeconds(config.mode, config.plannedSeconds, elapsed),
+    );
+    const currentRound = config.intervalSeconds
+      ? Math.min(
+          config.rounds || 999,
+          Math.floor(elapsed / config.intervalSeconds) + 1,
+        )
+      : null;
+
+    proofUiRef.current = {
+      athleteName,
+      displayTime,
+      phase,
+      roundLabel: currentRound ? `Round ${currentRound}` : config.label,
+      workout: config.workout,
+    };
+
+    ReactRuntime.useEffect(() => {
+      if (phase !== "recording") return undefined;
+      const interval = window.setInterval(() => setTick(Date.now()), 250);
+      return () => window.clearInterval(interval);
+    }, [phase]);
+
+    ReactRuntime.useEffect(() => {
+      if (!isOpen || !streamReady) return undefined;
+      const video = previewRef.current;
+      const canvas = canvasRef.current;
+      if (!video || !canvas) return undefined;
+      const context = canvas.getContext("2d");
+      if (!context) return undefined;
+      let frameId;
+
+      const drawFrame = () => {
+        const width = video.videoWidth || 720;
+        const height = video.videoHeight || 1280;
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+        }
+        if (video.readyState >= 2) {
+          context.drawImage(video, 0, 0, width, height);
+          drawProofOverlay(context, width, height, proofUiRef.current);
+        }
+        frameId = window.requestAnimationFrame(drawFrame);
+      };
+
+      drawFrame();
+      return () => window.cancelAnimationFrame(frameId);
+    }, [isOpen, streamReady]);
+
+    ReactRuntime.useEffect(() => {
+      if (!isOpen) return undefined;
+
+      const markBackgrounded = () => {
+        if (document.hidden && recorderRef.current?.state === "recording") {
+          markInterruption("App backgrounded or screen locked");
+        }
+      };
+      const warnBeforeUnload = (event) => {
+        if (recorderRef.current?.state !== "recording") return;
+        event.preventDefault();
+        event.returnValue = "";
+      };
+
+      document.addEventListener("visibilitychange", markBackgrounded);
+      window.addEventListener("beforeunload", warnBeforeUnload);
+      return () => {
+        document.removeEventListener("visibilitychange", markBackgrounded);
+        window.removeEventListener("beforeunload", warnBeforeUnload);
+      };
+    }, [isOpen]);
+
+    ReactRuntime.useEffect(() => {
+      return () => {
+        window.clearTimeout(countdownTimerRef.current);
+        discardProofRecorder(recorderRef);
+        discardProofChunkSink(chunkSinkRef.current);
+        stopMediaStream(streamRef.current);
+        stopCompositeStream(compositeStreamRef.current);
+        if (videoUrlRef.current)
+          window.URL.revokeObjectURL(videoUrlRef.current);
+      };
+    }, []);
+
+    function markInterruption(reason) {
+      const interruption = {
+        reason,
+        at: new Date().toISOString(),
+      };
+      interruptionsRef.current = [...interruptionsRef.current, interruption];
+      setInterruptions(interruptionsRef.current);
+    }
+
+    async function openProofMode() {
+      setIsOpen(true);
+      await requestCamera();
+    }
+
+    async function requestCamera() {
+      discardProofRecorder(recorderRef);
+      discardProofChunkSink(chunkSinkRef.current);
+      chunkSinkRef.current = null;
+      stopMediaStream(streamRef.current);
+      stopCompositeStream(compositeStreamRef.current);
+      streamRef.current = null;
+      compositeStreamRef.current = null;
+      setError("");
+      setPhase("loading");
+      setStreamReady(false);
+
+      if (!supportsCompetitionRecording()) {
+        setError(
+          "Competition recording is not supported in this browser. Use current iPhone Safari over HTTPS.",
+        );
+        setPhase("error");
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+          },
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 24, max: 30 },
+          },
+        });
+        streamRef.current = stream;
+        setStreamReady(true);
+        setPhase("ready");
+        window.requestAnimationFrame(() => {
+          if (!previewRef.current) return;
+          previewRef.current.srcObject = stream;
+          const playResult = previewRef.current.play();
+          if (playResult && typeof playResult.catch === "function") {
+            playResult.catch(() => undefined);
+          }
+        });
+      } catch (cameraError) {
+        setError(proofCameraErrorMessage(cameraError));
+        setPhase("error");
+      }
+    }
+
+    function startProofCountdown() {
+      setError("");
+      setSplits([]);
+      setFinalResult(null);
+      setVideoBlob(null);
+      setExportConfirmed(false);
+      interruptionsRef.current = [];
+      setInterruptions([]);
+      splitsRef.current = [];
+      pendingResultRef.current = null;
+      let remaining = clamp(Number(config.countdownSeconds) || 0, 0, 10);
+      if (!remaining) {
+        setCountdown(null);
+        beginProofRecording();
+        return;
+      }
+      setPhase("countdown");
+      setCountdown(remaining);
+
+      const advance = () => {
+        remaining -= 1;
+        if (remaining > 0) {
+          setCountdown(remaining);
+          countdownTimerRef.current = window.setTimeout(advance, 1000);
+          return;
+        }
+        setCountdown(null);
+        beginProofRecording();
+      };
+      countdownTimerRef.current = window.setTimeout(advance, 1000);
+    }
+
+    async function beginProofRecording() {
+      const cameraStream = streamRef.current;
+      if (!cameraStream) {
+        setError("Camera stream was lost. Reopen proof mode and try again.");
+        setPhase("error");
+        return;
+      }
+
+      let recordingStream = cameraStream;
+      let embedsOverlay = false;
+      const canvas = canvasRef.current;
+
+      if (canvas && typeof canvas.captureStream === "function") {
+        const compositeStream = canvas.captureStream(30);
+        cameraStream
+          .getAudioTracks()
+          .forEach((track) => compositeStream.addTrack(track));
+        compositeStreamRef.current = compositeStream;
+        recordingStream = compositeStream;
+        embedsOverlay = true;
+      }
+
+      try {
+        const mimeType = preferredProofMimeType();
+        chunkSinkRef.current = await createProofChunkSink(mimeType);
+        setTemporaryStorageMode(chunkSinkRef.current.mode);
+        const recorder = new window.MediaRecorder(
+          recordingStream,
+          mimeType
+            ? {
+                mimeType,
+                videoBitsPerSecond: 2500000,
+                audioBitsPerSecond: 128000,
+              }
+            : undefined,
+        );
+        recorderRef.current = recorder;
+        setOverlayEmbedded(embedsOverlay);
+        overlayEmbeddedRef.current = embedsOverlay;
+        recorder.ondataavailable = (event) => {
+          if (event.data && event.data.size) {
+            chunkSinkRef.current?.write(event.data);
+          }
+        };
+        recorder.onerror = () => {
+          markInterruption("Recorder error");
+          setError(
+            "The recording stopped unexpectedly. Review camera access and available storage.",
+          );
+          setPhase("error");
+        };
+        recorder.onstop = () => completeProofVideo(recorder);
+
+        const started = Date.now();
+        recorder.start(1000);
+        startedAtRef.current = started;
+        setStartedAtMs(started);
+        setTick(started);
+        setPhase("recording");
+      } catch {
+        discardProofChunkSink(chunkSinkRef.current);
+        chunkSinkRef.current = null;
+        stopCompositeStream(compositeStreamRef.current);
+        compositeStreamRef.current = null;
+        setError(
+          "This browser could not start video recording. Check storage space and update iOS before retrying.",
+        );
+        setPhase("error");
+      }
+    }
+
+    function addProofSplit() {
+      const nextSplits = [
+        ...splitsRef.current,
+        {
+          label: `Split ${splitsRef.current.length + 1}`,
+          elapsedSeconds: elapsed,
+        },
+      ];
+      splitsRef.current = nextSplits;
+      setSplits(nextSplits);
+    }
+
+    function finishProofRecording() {
+      const recorder = recorderRef.current;
+      if (!recorder || recorder.state !== "recording") {
+        setError(
+          "The recorder is no longer active. Close proof mode and try again.",
+        );
+        setPhase("error");
+        return;
+      }
+
+      const result = buildProofResult();
+      pendingResultRef.current = result;
+      setFinalResult(result);
+      setPhase("finishing");
+      recorder.stop();
+    }
+
+    function buildProofResult(unexpectedStopReason = "") {
+      if (unexpectedStopReason) markInterruption(unexpectedStopReason);
+      const completedAt = new Date().toISOString();
+      const started = startedAtRef.current || Date.now();
+      const elapsedSeconds = Math.max(
+        1,
+        Math.floor((Date.now() - started) / 1000),
+      );
+      const timerResult = {
+        mode: config.mode,
+        source: config.source,
+        workout: config.workout,
+        startedAt: new Date(started).toISOString(),
+        completedAt,
+        elapsedSeconds,
+        plannedSeconds: config.plannedSeconds,
+        rounds: config.rounds,
+        intervalSeconds: config.intervalSeconds,
+        splits: splitsRef.current,
+        status: "completed",
+      };
+      return {
+        timerResult,
+        competitionProof: {
+          version: 1,
+          proofId: createId(),
+          recorded: true,
+          athleteName,
+          workoutTitle: session.shortTitle || session.title,
+          startedAt: timerResult.startedAt,
+          completedAt,
+          durationSeconds: elapsedSeconds,
+          interrupted: interruptionsRef.current.length > 0,
+          interruptions: interruptionsRef.current,
+          overlayEmbedded: overlayEmbeddedRef.current,
+          temporaryStorage: chunkSinkRef.current?.mode || "memory",
+        },
+      };
+    }
+
+    async function completeProofVideo(recorder) {
+      const mimeType =
+        recorder.mimeType || preferredProofMimeType() || "video/mp4";
+      const result =
+        pendingResultRef.current ||
+        buildProofResult("Recorder stopped unexpectedly");
+      pendingResultRef.current = result;
+      stopCompositeStream(compositeStreamRef.current);
+      compositeStreamRef.current = null;
+      stopMediaStream(streamRef.current);
+      streamRef.current = null;
+      setStreamReady(false);
+
+      let blob;
+      try {
+        blob = await chunkSinkRef.current?.finish();
+      } catch {
+        blob = null;
+      }
+
+      if (!blob || !blob.size) {
+        setError(
+          "The video file was empty. Free device storage and record again.",
+        );
+        setPhase("error");
+        return;
+      }
+
+      if (videoUrl) window.URL.revokeObjectURL(videoUrl);
+      const nextUrl = window.URL.createObjectURL(blob);
+      videoUrlRef.current = nextUrl;
+      setVideoBlob(blob);
+      setVideoUrl(nextUrl);
+      setFinalResult({
+        ...result,
+        competitionProof: {
+          ...result.competitionProof,
+          mimeType,
+          fileName: proofFileName(session, mimeType),
+        },
+      });
+      setPhase("review");
+    }
+
+    async function shareProofVideo() {
+      if (!videoBlob || !finalResult) return;
+      const fileName =
+        finalResult.competitionProof.fileName ||
+        proofFileName(session, videoBlob.type);
+      const file = new window.File([videoBlob], fileName, {
+        type: videoBlob.type,
+      });
+
+      if (
+        typeof navigator.share !== "function" ||
+        (typeof navigator.canShare === "function" &&
+          !navigator.canShare({ files: [file] }))
+      ) {
+        setError("Direct sharing is unavailable. Use Save video instead.");
+        return;
+      }
+
+      try {
+        await navigator.share({
+          files: [file],
+          title: `${session.shortTitle || session.title} competition proof`,
+        });
+        setExportConfirmed(true);
+      } catch (shareError) {
+        if (shareError?.name !== "AbortError") {
+          setError("The video could not be shared. Use Save video instead.");
+        }
+      }
+    }
+
+    function finishProofToLog() {
+      if (!finalResult || !exportConfirmed) return;
+      const { timerResult, competitionProof } = finalResult;
+      closeProofMode(true);
+      if (onFinish)
+        onFinish(session, timerResult, {
+          ...competitionProof,
+          exportedAt: new Date().toISOString(),
+        });
+    }
+
+    async function retakeProof() {
+      if (videoUrl) window.URL.revokeObjectURL(videoUrl);
+      videoUrlRef.current = "";
+      setVideoUrl("");
+      setVideoBlob(null);
+      setFinalResult(null);
+      setExportConfirmed(false);
+      setTemporaryStorageMode("");
+      setStartedAtMs(null);
+      setSplits([]);
+      splitsRef.current = [];
+      pendingResultRef.current = null;
+      await requestCamera();
+    }
+
+    function closeProofMode(force = false) {
+      const hasUnsavedVideo = ["recording", "finishing", "review"].includes(
+        phase,
+      );
+      if (
+        !force &&
+        hasUnsavedVideo &&
+        !window.confirm("Close and discard this competition recording?")
+      ) {
+        return;
+      }
+
+      window.clearTimeout(countdownTimerRef.current);
+      discardProofRecorder(recorderRef);
+      discardProofChunkSink(chunkSinkRef.current);
+      chunkSinkRef.current = null;
+      stopCompositeStream(compositeStreamRef.current);
+      stopMediaStream(streamRef.current);
+      compositeStreamRef.current = null;
+      streamRef.current = null;
+      if (videoUrl) window.URL.revokeObjectURL(videoUrl);
+      videoUrlRef.current = "";
+      setIsOpen(false);
+      setPhase("idle");
+      setError("");
+      setVideoUrl("");
+      setVideoBlob(null);
+      setFinalResult(null);
+      setExportConfirmed(false);
+      setStartedAtMs(null);
+      setCountdown(null);
+      setSplits([]);
+      setStreamReady(false);
+    }
+
+    const proofFile = finalResult?.competitionProof?.fileName;
+
+    return h(
+      ReactRuntime.Fragment,
+      null,
+      h(
+        "button",
+        {
+          className: "primary-button",
+          type: "button",
+          onClick: openProofMode,
+          disabled,
+        },
+        buttonLabel,
+      ),
+      isOpen
+        ? h(
+            "section",
+            {
+              className: "proof-modal",
+              role: "dialog",
+              "aria-modal": "true",
+              "aria-labelledby": "proofTitle",
+            },
+            h(
+              "header",
+              { className: "proof-header" },
+              h(
+                "div",
+                null,
+                h("p", { className: "eyebrow" }, "Competition proof"),
+                h(
+                  "h2",
+                  { id: "proofTitle" },
+                  session.shortTitle || session.title,
+                ),
+              ),
+              h(
+                "button",
+                {
+                  className: "proof-close",
+                  type: "button",
+                  onClick: () => closeProofMode(false),
+                  "aria-label": "Close proof mode",
+                },
+                "Close",
+              ),
+            ),
+            h(
+              "div",
+              { className: "proof-stage" },
+              phase === "review" && videoUrl
+                ? h("video", {
+                    className: "proof-video",
+                    src: videoUrl,
+                    controls: true,
+                    playsInline: true,
+                  })
+                : h("video", {
+                    className: "proof-video",
+                    ref: previewRef,
+                    autoPlay: true,
+                    muted: true,
+                    playsInline: true,
+                  }),
+              h("canvas", {
+                className: "proof-canvas",
+                ref: canvasRef,
+                "aria-hidden": "true",
+              }),
+              phase !== "review"
+                ? h(
+                    "div",
+                    { className: "proof-overlay" },
+                    h(
+                      "div",
+                      { className: "proof-overlay-top" },
+                      h("strong", null, athleteName),
+                      h(
+                        "span",
+                        { className: `proof-recording-state is-${phase}` },
+                        phase === "recording" ? "REC" : config.label,
+                      ),
+                    ),
+                    h(
+                      "div",
+                      { className: "proof-overlay-bottom" },
+                      h(
+                        "span",
+                        null,
+                        currentRound ? `Round ${currentRound}` : config.label,
+                      ),
+                      h("strong", null, countdown || displayTime),
+                    ),
+                  )
+                : null,
+            ),
+            h(
+              "div",
+              { className: "proof-details" },
+              h("p", null, config.workout),
+              error
+                ? h("p", { className: "proof-error", role: "alert" }, error)
+                : null,
+              phase === "ready" && !overlayEmbedded
+                ? h(
+                    "p",
+                    { className: "muted-copy" },
+                    "The timer overlay will be embedded when this browser supports canvas recording.",
+                  )
+                : null,
+              interruptions.length
+                ? h(
+                    "p",
+                    { className: "proof-warning" },
+                    `${interruptions.length} recording interruption${interruptions.length === 1 ? "" : "s"} marked.`,
+                  )
+                : null,
+              phase === "recording" && temporaryStorageMode === "memory"
+                ? h(
+                    "p",
+                    { className: "proof-warning" },
+                    "Temporary file storage is unavailable. This video is buffered in memory; keep the recording short and export it immediately.",
+                  )
+                : null,
+              splits.length
+                ? h(
+                    "p",
+                    { className: "muted-copy" },
+                    `${splits.length} split${splits.length === 1 ? "" : "s"} captured.`,
+                  )
+                : null,
+              h(
+                "div",
+                { className: "proof-actions" },
+                phase === "loading"
+                  ? h("span", { className: "metric-pill" }, "Opening camera")
+                  : null,
+                phase === "ready"
+                  ? h(
+                      "button",
+                      {
+                        className: "primary-button",
+                        type: "button",
+                        onClick: startProofCountdown,
+                      },
+                      config.countdownSeconds
+                        ? `Start ${config.countdownSeconds}-second countdown`
+                        : "Start recording",
+                    )
+                  : null,
+                phase === "countdown"
+                  ? h("strong", { className: "proof-countdown" }, countdown)
+                  : null,
+                phase === "recording"
+                  ? h(
+                      ReactRuntime.Fragment,
+                      null,
+                      h(
+                        "button",
+                        {
+                          className: "ghost-button",
+                          type: "button",
+                          onClick: addProofSplit,
+                        },
+                        "Split",
+                      ),
+                      h(
+                        "button",
+                        {
+                          className: "primary-button",
+                          type: "button",
+                          onClick: finishProofRecording,
+                        },
+                        "Finish recording",
+                      ),
+                    )
+                  : null,
+                phase === "finishing"
+                  ? h("span", { className: "metric-pill" }, "Preparing video")
+                  : null,
+                phase === "review"
+                  ? h(
+                      ReactRuntime.Fragment,
+                      null,
+                      typeof navigator.share === "function"
+                        ? h(
+                            "button",
+                            {
+                              className: "ghost-button",
+                              type: "button",
+                              onClick: shareProofVideo,
+                            },
+                            "Share video",
+                          )
+                        : null,
+                      h(
+                        "a",
+                        {
+                          className: "ghost-button proof-download",
+                          href: videoUrl,
+                          download: proofFile,
+                          onClick: () => setExportConfirmed(true),
+                        },
+                        "Save video",
+                      ),
+                      h(
+                        "button",
+                        {
+                          className: "ghost-button",
+                          type: "button",
+                          onClick: retakeProof,
+                        },
+                        "Retake",
+                      ),
+                      h(
+                        "button",
+                        {
+                          className: "primary-button",
+                          type: "button",
+                          onClick: finishProofToLog,
+                          disabled: !exportConfirmed,
+                        },
+                        exportConfirmed
+                          ? "Continue to workout log"
+                          : "Save or share before continuing",
+                      ),
+                    )
+                  : null,
+                phase === "error"
+                  ? h(
+                      "button",
+                      {
+                        className: "primary-button",
+                        type: "button",
+                        onClick: requestCamera,
+                      },
+                      "Retry camera",
+                    )
+                  : null,
+              ),
+            ),
+          )
+        : null,
+    );
+  }
+
+  function supportsCompetitionRecording() {
+    return Boolean(
+      navigator.mediaDevices &&
+      typeof navigator.mediaDevices.getUserMedia === "function" &&
+      typeof window.MediaRecorder === "function",
+    );
+  }
+
+  function preferredProofMimeType() {
+    if (typeof window.MediaRecorder !== "function") return "";
+    const mimeTypes = [
+      "video/mp4;codecs=h264,aac",
+      "video/mp4",
+      "video/webm;codecs=vp9,opus",
+      "video/webm;codecs=vp8,opus",
+      "video/webm",
+    ];
+    if (typeof window.MediaRecorder.isTypeSupported !== "function") return "";
+    return (
+      mimeTypes.find((mimeType) =>
+        window.MediaRecorder.isTypeSupported(mimeType),
+      ) || ""
+    );
+  }
+
+  function proofCameraErrorMessage(error) {
+    if (error?.name === "NotAllowedError") {
+      return "Camera or microphone access was denied. Allow both permissions in Safari settings and retry.";
+    }
+    if (error?.name === "NotFoundError") {
+      return "No available camera or microphone was found on this device.";
+    }
+    if (error?.name === "NotReadableError") {
+      return "The camera is already in use by another app. Close it and retry.";
+    }
+    return "The camera could not be opened. Use HTTPS, check permissions, and retry.";
+  }
+
+  function stopMediaStream(stream) {
+    if (!stream || typeof stream.getTracks !== "function") return;
+    stream.getTracks().forEach((track) => track.stop());
+  }
+
+  function discardProofRecorder(recorderRef) {
+    const recorder = recorderRef.current;
+    if (!recorder) return;
+    recorder.ondataavailable = null;
+    recorder.onerror = null;
+    recorder.onstop = null;
+    if (recorder.state !== "inactive") {
+      try {
+        recorder.stop();
+      } catch {
+        // The browser already stopped the recorder.
+      }
+    }
+    recorderRef.current = null;
+  }
+
+  async function createProofChunkSink(mimeType) {
+    if (
+      !navigator.storage ||
+      typeof navigator.storage.getDirectory !== "function"
+    ) {
+      return createMemoryProofChunkSink(mimeType);
+    }
+
+    try {
+      const root = await navigator.storage.getDirectory();
+      const fileName = `forge-hour-proof-${createId()}.tmp`;
+      const fileHandle = await root.getFileHandle(fileName, { create: true });
+      const writable = await fileHandle.createWritable();
+      let writeChain = Promise.resolve();
+      let closed = false;
+
+      return {
+        mode: "opfs",
+        write(chunk) {
+          writeChain = writeChain.then(() => writable.write(chunk));
+        },
+        async finish() {
+          await writeChain;
+          if (!closed) {
+            await writable.close();
+            closed = true;
+          }
+          const file = await fileHandle.getFile();
+          return file.slice(0, file.size, mimeType || file.type);
+        },
+        async discard() {
+          try {
+            await writeChain;
+            if (!closed) {
+              if (typeof writable.abort === "function") {
+                await writable.abort();
+              } else {
+                await writable.close();
+              }
+              closed = true;
+            }
+          } finally {
+            await root.removeEntry(fileName).catch(() => undefined);
+          }
+        },
+      };
+    } catch {
+      return createMemoryProofChunkSink(mimeType);
+    }
+  }
+
+  function createMemoryProofChunkSink(mimeType) {
+    let chunks = [];
+    return {
+      mode: "memory",
+      write(chunk) {
+        chunks.push(chunk);
+      },
+      async finish() {
+        const blob = new Blob(chunks, { type: mimeType || "video/mp4" });
+        chunks = [];
+        return blob;
+      },
+      async discard() {
+        chunks = [];
+      },
+    };
+  }
+
+  function discardProofChunkSink(sink) {
+    if (!sink || typeof sink.discard !== "function") return;
+    Promise.resolve(sink.discard()).catch(() => undefined);
+  }
+
+  function stopCompositeStream(stream) {
+    if (!stream || typeof stream.getVideoTracks !== "function") return;
+    stream.getVideoTracks().forEach((track) => track.stop());
+  }
+
+  function proofFileName(session, mimeType) {
+    const title = String(session.shortTitle || session.title || "workout")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 48);
+    const extension = String(mimeType).includes("webm") ? "webm" : "mp4";
+    return `competition-proof-${todayInputValue()}-${title || "workout"}.${extension}`;
+  }
+
+  function drawProofOverlay(context, width, height, details) {
+    const unit = Math.max(16, Math.round(Math.min(width, height) * 0.026));
+    const padding = unit;
+    const footerHeight = unit * 6.8;
+    context.save();
+    context.fillStyle = "rgba(0, 0, 0, 0.72)";
+    context.fillRect(0, height - footerHeight, width, footerHeight);
+    context.fillStyle = "#ffffff";
+    context.font = `700 ${unit}px system-ui, sans-serif`;
+    context.fillText(
+      details.athleteName,
+      padding,
+      height - footerHeight + unit * 1.45,
+    );
+    context.font = `600 ${Math.round(unit * 0.8)}px system-ui, sans-serif`;
+    drawWrappedCanvasText(
+      context,
+      details.workout,
+      padding,
+      height - footerHeight + unit * 2.55,
+      width - padding * 2,
+      unit * 0.95,
+      2,
+    );
+    context.font = `800 ${Math.round(unit * 2.25)}px ui-monospace, monospace`;
+    context.fillText(details.displayTime, padding, height - unit * 0.75);
+    context.textAlign = "right";
+    context.font = `700 ${unit}px system-ui, sans-serif`;
+    context.fillStyle = details.phase === "recording" ? "#ff5b4d" : "#ffffff";
+    context.fillText(
+      details.phase === "recording"
+        ? `REC  ${details.roundLabel}`
+        : details.roundLabel,
+      width - padding,
+      height - unit,
+    );
+    context.restore();
+  }
+
+  function drawWrappedCanvasText(
+    context,
+    text,
+    x,
+    y,
+    maxWidth,
+    lineHeight,
+    maxLines,
+  ) {
+    const words = String(text || "").split(/\s+/);
+    let line = "";
+    let lineNumber = 0;
+    for (const word of words) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (context.measureText(candidate).width <= maxWidth) {
+        line = candidate;
+        continue;
+      }
+      context.fillText(line, x, y + lineNumber * lineHeight);
+      lineNumber += 1;
+      if (lineNumber >= maxLines) return;
+      line = word;
+    }
+    if (line && lineNumber < maxLines) {
+      context.fillText(line, x, y + lineNumber * lineHeight);
+    }
+  }
+
   function timerStateLabel(running, completed) {
     if (completed) return "Finished";
     return running ? "Running" : "Ready";
@@ -1840,7 +3220,8 @@
   }
 
   function stripPendingTimerContext(timerResult) {
-    const { dayId, week, ...result } = timerResult;
+    const { competitionProof, dayId, sessionSnapshot, week, ...result } =
+      timerResult;
     return result;
   }
 
@@ -1956,42 +3337,12 @@
           { id: "customProgramList", className: "custom-list" },
           appState.customPlans.length
             ? appState.customPlans.map((plan) => {
-                const logged = appState.logs.some(
-                  (log) => log.dayId === plan.id,
-                );
-                const session = {
-                  id: plan.id,
-                  week: plan.week,
-                  weekday: `Week ${plan.week}`,
-                  shortTitle: plan.title,
-                  title: plan.title,
-                  focus: plan.focus,
-                  segments: customPlanSegments(plan),
-                  addOns: plan.addOns || [],
-                };
+                const logged = isCustomPlanLogged(appState.logs, plan);
                 return h(SessionCard, {
                   key: plan.id,
-                  session,
+                  session: customPlanToSession(plan),
                   tag: `${plan.duration} min`,
-                  meta: h(
-                    "div",
-                    { className: "history-meta" },
-                    h(
-                      "span",
-                      { className: "metric-pill" },
-                      plan.intensity || "Moderate",
-                    ),
-                    plan.generated
-                      ? h(
-                          "span",
-                          { className: "metric-pill" },
-                          GOAL_LABELS[plan.sourceGoal] || "Generated",
-                        )
-                      : null,
-                    logged
-                      ? h("span", { className: "metric-pill" }, "Logged")
-                      : null,
-                  ),
+                  meta: customPlanMeta(plan, logged),
                   onLog: () => onLogSession(plan.id, plan.week),
                   onTimerFinish,
                   onDelete: () => onDeleteCustomPlan(plan.id),
@@ -2529,11 +3880,15 @@
           onSubmit: async (event) => {
             event.preventDefault();
             const data = new FormData(event.currentTarget);
-            const day = findTrainingSessionForState(
+            const storedDay = findTrainingSessionForState(
               String(data.get("logDay")),
               Number(data.get("logWeek")),
               appState,
             );
+            const day =
+              matchingTimer?.sessionSnapshot?.id === String(data.get("logDay"))
+                ? matchingTimer.sessionSnapshot
+                : storedDay;
 
             if (!day) {
               onNotify("Choose a valid session to log.");
@@ -2554,6 +3909,7 @@
               strengthResult: String(data.get("strengthResult") || "").trim(),
               wodScore: String(data.get("wodScore") || "").trim(),
               timerResult,
+              competitionProof: matchingTimer?.competitionProof || null,
               notes: String(data.get("logNotes") || "").trim(),
               mobilityDone: Boolean(data.get("mobilityDone")),
               createdAt: new Date().toISOString(),
@@ -2647,6 +4003,22 @@
                   ),
                 )
               : null,
+            matchingTimer?.sessionSnapshot &&
+              !findTrainingSessionForState(
+                matchingTimer.sessionSnapshot.id,
+                selectedWeek,
+                appState,
+              )
+              ? h(
+                  "optgroup",
+                  { label: "Competition proof" },
+                  h(
+                    "option",
+                    { value: matchingTimer.sessionSnapshot.id },
+                    matchingTimer.sessionSnapshot.shortTitle,
+                  ),
+                )
+              : null,
           ),
         ),
         h(
@@ -2712,6 +4084,15 @@
               },
               h("h3", null, "Timer result ready"),
               h("p", null, timerSummary),
+              matchingTimer.competitionProof
+                ? h(
+                    "p",
+                    { className: "proof-log-status" },
+                    matchingTimer.competitionProof.overlayEmbedded
+                      ? "Competition proof recorded with embedded timer overlay."
+                      : "Competition proof recorded; timer overlay was not embedded by this browser.",
+                  )
+                : null,
               matchingTimer.splits && matchingTimer.splits.length
                 ? h(
                     "ol",
@@ -2810,6 +4191,15 @@
       ),
       log.timerResult
         ? h("p", null, `Timer: ${formatTimerResult(log.timerResult)}`)
+        : null,
+      log.competitionProof
+        ? h(
+            "p",
+            { className: "proof-log-status" },
+            `Competition proof recorded (${formatTimerSeconds(log.competitionProof.durationSeconds)})${
+              log.competitionProof.interrupted ? " - interruption marked" : ""
+            }. Video remains on the athlete's device.`,
+          )
         : null,
       log.notes ? h("p", null, log.notes) : null,
       h(
@@ -3054,6 +4444,7 @@
       ["programView", "Plan"],
       ["builderView", "Build"],
       ["learnView", "Learn"],
+      ["proofView", "Proof"],
       ["logView", "Log"],
       ["prView", "PRs"],
     ];

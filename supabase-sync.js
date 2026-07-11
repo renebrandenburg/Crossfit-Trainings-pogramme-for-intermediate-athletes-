@@ -11,7 +11,16 @@
       if (record && record.id) merged.set(record.id, record);
     });
     remoteRecords.forEach((record) => {
-      if (record && record.id) merged.set(record.id, record);
+      if (!record || !record.id) return;
+      const localRecord = merged.get(record.id);
+      if (localRecord?.competitionProof && !record.competitionProof) {
+        merged.set(record.id, {
+          ...record,
+          competitionProof: localRecord.competitionProof,
+        });
+        return;
+      }
+      merged.set(record.id, record);
     });
     return Array.from(merged.values()).sort(byNewestCreatedAt);
   }
@@ -21,16 +30,23 @@
   }
 
   function unsyncedById(localRecords = [], remoteRecords = []) {
-    const remoteIds = new Set(
-      remoteRecords.map((record) => record && record.id).filter(Boolean),
+    const remoteById = new Map(
+      remoteRecords
+        .filter((record) => record && record.id)
+        .map((record) => [record.id, record]),
     );
     return localRecords.filter(
-      (record) => record && record.id && !remoteIds.has(record.id),
+      (record) =>
+        record &&
+        record.id &&
+        (!remoteById.has(record.id) ||
+          (record.competitionProof &&
+            !remoteById.get(record.id).competitionProof)),
     );
   }
 
   function logToRow(log, userId) {
-    return {
+    const row = {
       id: log.id,
       user_id: userId,
       date: log.date,
@@ -46,6 +62,22 @@
       mobility_done: Boolean(log.mobilityDone),
       created_at: log.createdAt,
     };
+    if (log.competitionProof) row.competition_proof = log.competitionProof;
+    return row;
+  }
+
+  function withoutCompetitionProof(row) {
+    const legacyRow = { ...row };
+    delete legacyRow.competition_proof;
+    return legacyRow;
+  }
+
+  function isMissingCompetitionProofColumn(error) {
+    return Boolean(
+      error &&
+      /competition_proof/i.test(String(error.message || "")) &&
+      ["42703", "PGRST204"].includes(String(error.code || "")),
+    );
   }
 
   function rowToLog(row) {
@@ -60,6 +92,7 @@
       strengthResult: row.strength_result || "",
       wodScore: row.wod_score || "",
       timerResult: row.timer_result || null,
+      competitionProof: row.competition_proof || null,
       notes: row.notes || "",
       mobilityDone: Boolean(row.mobility_done),
       createdAt: row.created_at,
@@ -173,9 +206,17 @@
         };
       },
       async saveLog(log, userId) {
-        await assertNoError(
-          await client.from("workout_logs").upsert(logToRow(log, userId)),
-        );
+        const row = logToRow(log, userId);
+        let result = await client.from("workout_logs").upsert(row);
+        let competitionProofSynced = true;
+        if (result.error && isMissingCompetitionProofColumn(result.error)) {
+          result = await client
+            .from("workout_logs")
+            .upsert(withoutCompetitionProof(row));
+          competitionProofSynced = false;
+        }
+        assertNoError(result);
+        return { competitionProofSynced };
       },
       async clearLogs() {
         await assertNoError(
@@ -209,13 +250,20 @@
         const prs = Object.entries(state.prs || {}).filter(
           ([metricId]) => !remotePrs[metricId],
         );
+        let competitionProofPending = 0;
 
         if (logs.length) {
-          await assertNoError(
-            await client
+          const rows = logs.map((log) => logToRow(log, userId));
+          let result = await client.from("workout_logs").upsert(rows);
+          if (result.error && isMissingCompetitionProofColumn(result.error)) {
+            competitionProofPending = rows.filter(
+              (row) => row.competition_proof,
+            ).length;
+            result = await client
               .from("workout_logs")
-              .upsert(logs.map((log) => logToRow(log, userId))),
-          );
+              .upsert(rows.map(withoutCompetitionProof));
+          }
+          assertNoError(result);
         }
         if (attempts.length) {
           await assertNoError(
@@ -242,6 +290,7 @@
           logs: logs.length,
           prAttempts: attempts.length,
           prs: prs.length,
+          competitionProofPending,
         };
       },
     };

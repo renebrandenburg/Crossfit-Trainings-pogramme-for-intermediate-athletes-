@@ -493,7 +493,7 @@ test("generated programme migration refreshes old WOD schema without changing ID
   assert.equal(migration.migrated, true);
   assert.equal(migration.plans[0].id, "generated-stronger-w2-d3");
   assert.equal(migration.plans[0].createdAt, "2026-01-01T00:00:00.000Z");
-  assert.equal(migration.plans[0].wodSchemaVersion, 2);
+  assert.equal(migration.plans[0].wodSchemaVersion, 3);
   assert.match(migration.plans[0].wod[1], /Stimulus:/);
   assert.match(migration.plans[0].wod[2], /Score:/);
   assert.equal(migration.plans[1], oldPlans[1]);
