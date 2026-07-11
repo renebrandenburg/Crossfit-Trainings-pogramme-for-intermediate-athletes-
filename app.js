@@ -933,7 +933,7 @@ const MOVEMENT_LIBRARY = [
   },
 ];
 
-const WOD_SCHEMA_VERSION = 3;
+const WOD_SCHEMA_VERSION = 4;
 
 const canUseDOM = typeof document !== "undefined";
 const state = loadState();
@@ -2119,12 +2119,11 @@ function buildWodPattern(week, goal, day, cap, movement) {
   const intervals = Math.max(3, Math.floor(cap / 3));
   const repeatSets = Math.max(3, Math.floor(cap / 4));
   const rounds = cap >= 16 ? 5 : cap >= 13 ? 4 : 3;
-  const calories = goal === "endurance" ? "14/11 cal" : "10/8 cal";
   const benchmarkName = generatedBenchmarkName(goal, day);
 
   const patterns = {
     1: {
-      workout: `AMRAP ${Math.min(cap, 12)}: ${movement.weight}, ${calories} ${movement.mono}, ${movement.gym}`,
+      workout: `AMRAP ${Math.min(cap, 12)}: ${movement.weight}, ${movement.monoAmrap}, ${movement.gym}`,
       stimulus:
         "short-to-medium mixed piece; unbroken early rounds, quick transitions",
       score: "total rounds and reps",
@@ -2396,6 +2395,7 @@ function generatedWodMovementPool(goal, weakness, day, week, profile) {
 
   return {
     mono,
+    monoAmrap: monoAmrap(mono, goal),
     monoInterval: monoInterval(mono, goal),
     shortMono: shortMono(mono),
     gym,
@@ -2406,6 +2406,14 @@ function generatedWodMovementPool(goal, weakness, day, week, profile) {
     chipper: generatedChipper(goal, weaknessMove, mono, gym, weight),
     benchmark: generatedBenchmark(goal, day, mono, gym, weight, weaknessMove),
   };
+}
+
+function monoAmrap(mono, goal) {
+  const calories = goal === "endurance" ? "14/11 cal" : "10/8 cal";
+  if (["row", "bike", "ski"].includes(mono)) return `${calories} ${mono}`;
+  if (mono === "run") return goal === "endurance" ? "200 m run" : "100 m run";
+  if (mono === "shuttle run") return "8 shuttle runs";
+  return goal === "endurance" ? "40 double unders" : "30 double unders";
 }
 
 function generatedChipper(goal, weaknessMove, mono, gym, weight) {

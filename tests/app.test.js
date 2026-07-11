@@ -262,6 +262,26 @@ test("needs-based generator changes bias by goal and clamps options", () => {
   assert.equal(gymnasticsPlans[0].duration, 45);
 });
 
+test("generated WODs use calories only for machines", () => {
+  const profile = cloneDefaultProfile();
+  const plans = ["stronger", "endurance", "gymnastics", "balanced"].flatMap(
+    (goal) =>
+      buildGeneratedProgramme(
+        { goal, daysPerWeek: 5, weakness: "pulling", duration: 60 },
+        profile,
+        (seed) => `${goal}-${seed}`,
+      ),
+  );
+  const workouts = plans.map((plan) => plan.wod[0]).join(" ");
+
+  assert.doesNotMatch(
+    workouts,
+    /\d+(?:\/\d+)? cal (?:double unders|run|shuttle runs?)/i,
+  );
+  assert.match(workouts, /30 double unders/);
+  assert.match(workouts, /10\/8 cal (?:row|bike|ski)/);
+});
+
 test("Masters RX generator creates Open prep sessions with separate add-ons", () => {
   const profile = cloneDefaultProfile();
   const plans = buildGeneratedProgramme(
@@ -493,7 +513,7 @@ test("generated programme migration refreshes old WOD schema without changing ID
   assert.equal(migration.migrated, true);
   assert.equal(migration.plans[0].id, "generated-stronger-w2-d3");
   assert.equal(migration.plans[0].createdAt, "2026-01-01T00:00:00.000Z");
-  assert.equal(migration.plans[0].wodSchemaVersion, 3);
+  assert.equal(migration.plans[0].wodSchemaVersion, 4);
   assert.match(migration.plans[0].wod[1], /Stimulus:/);
   assert.match(migration.plans[0].wod[2], /Score:/);
   assert.equal(migration.plans[1], oldPlans[1]);

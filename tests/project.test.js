@@ -121,7 +121,7 @@ test("service worker caches the files needed to run offline", () => {
     "icon.svg",
   ];
 
-  assert.match(serviceWorker, /crossfit-training-programme-v6/);
+  assert.match(serviceWorker, /crossfit-training-programme-v7/);
   assert.match(
     serviceWorker,
     /react@18\.3\.1\/umd\/react\.production\.min\.js/,
