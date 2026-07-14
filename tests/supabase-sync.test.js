@@ -155,6 +155,42 @@ test("Supabase sync falls back safely when competition_proof is not migrated", a
   assert.equal("competition_proof" in calls[1], false);
 });
 
+test("Supabase score sync never uploads canonical training plans", async () => {
+  const tables = [];
+  const client = {
+    from(table) {
+      tables.push(table);
+      throw new Error(`Unexpected Supabase write to ${table}`);
+    },
+  };
+  const store = createSupabaseStore(client);
+  const result = await store.uploadLocalScores(
+    {
+      plans: [
+        {
+          id: "local-plan",
+          title: "Local only",
+          sessions: [{ id: "local-session", wod: ["AMRAP 10"] }],
+        },
+      ],
+      activePlanId: "local-plan",
+      logs: [],
+      prAttempts: [],
+      prs: {},
+    },
+    "user-1",
+    { logs: [], prAttempts: [], prs: {} },
+  );
+
+  assert.deepEqual(result, {
+    logs: 0,
+    prAttempts: 0,
+    prs: 0,
+    competitionProofPending: 0,
+  });
+  assert.deepEqual(tables, []);
+});
+
 test("Supabase sync helpers map PR attempts and personal records", () => {
   const attempt = {
     id: "attempt-1",

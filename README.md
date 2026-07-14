@@ -65,8 +65,10 @@ npm test
 ## Supabase database sync
 
 Workout logs, PR attempts, and current PRs can sync to Supabase Postgres after
-sign-in. Profile settings, generated/custom programmes, selected week, and theme
-remain local to the browser.
+sign-in. Profile settings, the canonical saved-plan catalog, active plan,
+selected week, and theme remain local to the browser in
+`forge-hour-state-v1`. Plan, Build, Proof, and Log resolve workouts from that
+same active-plan record; Supabase never receives programme definitions.
 
 1. Create a Supabase project.
 2. Run `supabase-schema.sql` in the Supabase SQL editor.
@@ -93,6 +95,7 @@ After the repository is pushed to GitHub, enable Pages with **GitHub Actions** a
 the source in the repository settings. Every push to `master` or `main` will run
 the test suite and deploy the static app.
 
-The deployed app keeps local-first behavior for generated programmes, training
-maxes, and theme settings. Signed-in users can persist workout logs and PR data
-in Supabase across devices and deployments.
+The deployed app keeps local-first behavior for generated and manually edited
+programmes, training maxes, and theme settings. Existing flat custom-session
+data is migrated into the canonical plan catalog on load. Signed-in users can
+persist workout logs and PR data in Supabase across devices and deployments.

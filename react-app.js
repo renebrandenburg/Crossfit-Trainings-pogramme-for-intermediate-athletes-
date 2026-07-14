@@ -27,6 +27,7 @@
     buildSession,
     clamp,
     cloneDefaultProfile,
+    createGenerationSeed,
     createId,
     customPlanSegments,
     filterMovementLibrary,
@@ -37,11 +38,13 @@
     getProgramDays,
     inferWorkoutTimer,
     isBetterPr,
-    migrateGeneratedProgrammePlans,
+    migratePlanState,
     normalizePrValue,
     positiveNumber,
     registerServiceWorker,
     splitLines,
+    selectActivePlan,
+    selectActiveWeekSessions,
     timerDisplaySeconds,
     valueFromPath,
   } = api;
@@ -59,11 +62,56 @@
   };
   const h = ReactRuntime.createElement;
 
+  /**
+   * @typedef {Object} WorkoutSession
+   * @property {string} id
+   * @property {number} week
+   * @property {string} title
+   * @property {string=} focus
+   * @property {string[]} warmup
+   * @property {string[]} strength
+   * @property {string[]} wod
+   * @property {string[]} mobility
+   * @property {number} duration
+   * @property {string=} intensity
+   * @property {"generated"|"manual"=} origin
+   * @property {boolean=} customized
+   * @property {string=} createdAt
+   */
+
+  /**
+   * @typedef {Object} TrainingPlan
+   * @property {string} id
+   * @property {string} title
+   * @property {"generated"|"custom"} kind
+   * @property {Object|null} generatorOptions
+   * @property {string|null} generationSeed
+   * @property {string} createdAt
+   * @property {string} updatedAt
+   * @property {WorkoutSession[]} sessions
+   */
+
+  /**
+   * @typedef {Object} AppState
+   * @property {number} schemaVersion
+   * @property {any} profile
+   * @property {any[]} logs
+   * @property {TrainingPlan[]} plans
+   * @property {string|null} activePlanId
+   * @property {Object<string, any>} prs
+   * @property {any[]} prAttempts
+   * @property {number} selectedWeek
+   * @property {string} themePreference
+   */
+
+  /** @returns {AppState} */
   function fallbackState() {
     return {
+      schemaVersion: 2,
       profile: cloneDefaultProfile(),
       logs: [],
-      customPlans: [],
+      plans: [],
+      activePlanId: null,
       prs: {},
       prAttempts: [],
       selectedWeek: 1,
@@ -71,6 +119,7 @@
     };
   }
 
+  /** @returns {AppState} */
   function loadState() {
     const fallback = fallbackState();
 
@@ -109,21 +158,17 @@
     }
   }
 
+  /** @param {AppState} state @returns {AppState} */
   function seedState(state) {
     let next = seedPrs(state);
-    const migration = migrateGeneratedProgrammePlans(
-      next.customPlans,
-      next.profile,
-    );
-
-    if (migration.migrated) {
-      next = { ...next, customPlans: migration.plans };
-    }
+    const migration = migratePlanState(next);
+    next = migration.state;
 
     saveState(next);
     return next;
   }
 
+  /** @param {AppState} state */
   function saveState(state) {
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -250,6 +295,15 @@
     return `view${viewId === activeView ? " is-active" : ""}`;
   }
 
+  function defaultSessionSelection(state, week = state.selectedWeek) {
+    const selectedWeek = clamp(Number(week) || 1, 1, 8);
+    const activeSessions = selectActiveWeekSessions(state, selectedWeek);
+    return {
+      week: selectedWeek,
+      dayId: activeSessions[0]?.id || getNextDayForToday().id,
+    };
+  }
+
   function App() {
     const [appState, setAppState] = ReactRuntime.useState(loadState);
     const [activeView, setActiveView] = ReactRuntime.useState("dashboardView");
@@ -270,10 +324,9 @@
     }));
     const [pendingTimerResult, setPendingTimerResult] =
       ReactRuntime.useState(null);
-    const [logSelection, setLogSelection] = ReactRuntime.useState(() => ({
-      week: 1,
-      dayId: getNextDayForToday().id,
-    }));
+    const [logSelection, setLogSelection] = ReactRuntime.useState(() =>
+      defaultSessionSelection(appState),
+    );
     const toastTimer = ReactRuntime.useRef(null);
     const themePreference = normalizeThemePreference(appState.themePreference);
     const activeTheme = resolveTheme(themePreference, systemTheme);
@@ -379,11 +432,21 @@
     );
 
     ReactRuntime.useEffect(() => {
-      setLogSelection((current) => ({
-        ...current,
-        week: appState.selectedWeek,
-      }));
-    }, [appState.selectedWeek]);
+      setLogSelection((current) => {
+        const sessions = selectActiveWeekSessions(
+          appState,
+          appState.selectedWeek,
+        );
+        const validIds = new Set(
+          sessions.length
+            ? sessions.map((session) => session.id)
+            : getProgramDays().map((day) => day.id),
+        );
+        return validIds.has(current.dayId)
+          ? { ...current, week: appState.selectedWeek }
+          : defaultSessionSelection(appState);
+      });
+    }, [appState.activePlanId, appState.selectedWeek, appState.plans]);
 
     ReactRuntime.useEffect(() => {
       registerServiceWorker();
@@ -453,6 +516,254 @@
     ReactRuntime.useLayoutEffect(() => {
       applyTheme(activeTheme);
     }, [activeTheme]);
+
+    /**
+     * @param {{sessions: WorkoutSession[], options: any, generationSeed: string, replaceActive: boolean}} payload
+     */
+    function handleGenerateProgramme({
+      sessions,
+      options,
+      generationSeed,
+      replaceActive,
+    }) {
+      const currentActivePlan = selectActivePlan(appState);
+      if (
+        replaceActive &&
+        currentActivePlan?.kind === "generated" &&
+        currentActivePlan.sessions.some((session) => session.customized) &&
+        !window.confirm(
+          `Regenerate "${currentActivePlan.title}" and replace customized sessions?`,
+        )
+      ) {
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const normalizedSessions = sessions.map((session) => ({
+        ...session,
+        origin: "generated",
+        customized: false,
+        generationSeed,
+      }));
+      const planId =
+        replaceActive && currentActivePlan?.kind === "generated"
+          ? currentActivePlan.id
+          : createId();
+      const nextPlan = {
+        id: planId,
+        title: `${GOAL_LABELS[options.goal] || "Generated"} programme`,
+        kind: "generated",
+        generatorOptions: options,
+        generationSeed,
+        createdAt:
+          planId === currentActivePlan?.id ? currentActivePlan.createdAt : now,
+        updatedAt: now,
+        sessions: normalizedSessions,
+      };
+
+      updateAppState((current) => ({
+        ...current,
+        plans:
+          planId === current.activePlanId
+            ? current.plans.map((plan) =>
+                plan.id === planId ? nextPlan : plan,
+              )
+            : [nextPlan, ...current.plans],
+        activePlanId: planId,
+        selectedWeek: 1,
+      }));
+      setLogSelection({
+        week: 1,
+        dayId: normalizedSessions[0]?.id || getNextDayForToday().id,
+      });
+      setPendingTimerResult(null);
+      notify(
+        planId === currentActivePlan?.id
+          ? `Regenerated ${sessions.length} sessions.`
+          : `Generated ${sessions.length} sessions.`,
+      );
+    }
+
+    /** @param {WorkoutSession} session @param {string|null} editingSessionId */
+    function handleSaveCustomSession(session, editingSessionId = null) {
+      const activePlan = selectActivePlan(appState);
+      const now = new Date().toISOString();
+
+      if (activePlan && editingSessionId) {
+        updateAppState((current) => ({
+          ...current,
+          plans: current.plans.map((plan) =>
+            plan.id !== activePlan.id
+              ? plan
+              : {
+                  ...plan,
+                  updatedAt: now,
+                  sessions: plan.sessions.map((existing) =>
+                    existing.id !== editingSessionId
+                      ? existing
+                      : {
+                          ...existing,
+                          ...session,
+                          id: existing.id,
+                          createdAt: existing.createdAt,
+                          customized:
+                            existing.origin === "generated" ||
+                            existing.generated
+                              ? true
+                              : existing.customized,
+                        },
+                  ),
+                },
+          ),
+        }));
+        notify("Training session updated.");
+        return;
+      }
+
+      const nextSession = {
+        ...session,
+        origin: "manual",
+        customized: true,
+      };
+      if (activePlan) {
+        updateAppState((current) => ({
+          ...current,
+          plans: current.plans.map((plan) =>
+            plan.id === activePlan.id
+              ? {
+                  ...plan,
+                  updatedAt: now,
+                  sessions: [nextSession, ...plan.sessions],
+                }
+              : plan,
+          ),
+        }));
+      } else {
+        const plan = {
+          id: createId(),
+          title: "My custom programme",
+          kind: "custom",
+          generatorOptions: null,
+          generationSeed: null,
+          createdAt: now,
+          updatedAt: now,
+          sessions: [nextSession],
+        };
+        updateAppState((current) => ({
+          ...current,
+          plans: [plan, ...current.plans],
+          activePlanId: plan.id,
+        }));
+      }
+      notify("Training session saved.");
+    }
+
+    /** @param {string} planId */
+    function handleSelectPlan(planId) {
+      const plan = appState.plans.find((item) => item.id === planId);
+      if (!plan) return;
+      updateAppState((current) => ({
+        ...current,
+        activePlanId: plan.id,
+      }));
+      const firstSession =
+        plan.sessions.find(
+          (session) => Number(session.week) === appState.selectedWeek,
+        ) || plan.sessions[0];
+      setLogSelection({
+        week: firstSession?.week || appState.selectedWeek,
+        dayId: firstSession?.id || getNextDayForToday().id,
+      });
+      setPendingTimerResult(null);
+    }
+
+    /** @param {string} planId @param {unknown} title */
+    function handleRenamePlan(planId, title) {
+      const normalizedTitle = String(title || "").trim();
+      if (!normalizedTitle) {
+        notify("Add a name for the custom plan.");
+        return;
+      }
+      updateAppState((current) => ({
+        ...current,
+        plans: current.plans.map((plan) =>
+          plan.id === planId
+            ? {
+                ...plan,
+                title: normalizedTitle,
+                updatedAt: new Date().toISOString(),
+              }
+            : plan,
+        ),
+      }));
+      notify("Custom plan updated.");
+    }
+
+    /** @param {string} planId */
+    function handleDeletePlan(planId) {
+      const plan = appState.plans.find((item) => item.id === planId);
+      if (!plan || !window.confirm(`Delete custom plan "${plan.title}"?`))
+        return;
+      const deletedSessionIds = new Set(
+        plan.sessions.map((session) => session.id),
+      );
+      const remainingPlans = appState.plans.filter(
+        (item) => item.id !== planId,
+      );
+      const nextPlan = remainingPlans[0] || null;
+      updateAppState((current) => ({
+        ...current,
+        plans: current.plans.filter((item) => item.id !== planId),
+        activePlanId:
+          current.activePlanId === planId
+            ? nextPlan?.id || null
+            : current.activePlanId,
+      }));
+      const nextSession =
+        nextPlan?.sessions.find(
+          (session) => Number(session.week) === appState.selectedWeek,
+        ) || nextPlan?.sessions[0];
+      setLogSelection({
+        week: nextSession?.week || appState.selectedWeek,
+        dayId: nextSession?.id || getNextDayForToday().id,
+      });
+      if (
+        pendingTimerResult &&
+        deletedSessionIds.has(pendingTimerResult.dayId)
+      ) {
+        setPendingTimerResult(null);
+      }
+      activateView("programView");
+      notify("Custom plan deleted.");
+    }
+
+    /** @param {string} sessionId */
+    function handleDeleteSession(sessionId) {
+      const activePlan = selectActivePlan(appState);
+      const session = activePlan?.sessions.find(
+        (item) => item.id === sessionId,
+      );
+      if (
+        !activePlan ||
+        !session ||
+        !window.confirm(`Delete "${session.title}"?`)
+      )
+        return;
+      updateAppState((current) => ({
+        ...current,
+        plans: current.plans.map((plan) =>
+          plan.id === activePlan.id
+            ? {
+                ...plan,
+                updatedAt: new Date().toISOString(),
+                sessions: plan.sessions.filter((item) => item.id !== sessionId),
+              }
+            : plan,
+        ),
+      }));
+      if (pendingTimerResult?.dayId === sessionId) setPendingTimerResult(null);
+      notify("Custom session deleted.");
+    }
 
     return h(
       ReactRuntime.Fragment,
@@ -610,52 +921,12 @@
             appState,
             activeView,
             onNotify: notify,
-            onWeekChange: setSelectedWeek,
-            onGenerate: (plans, replaceGenerated) => {
-              updateAppState((current) => {
-                const keptPlans = replaceGenerated
-                  ? current.customPlans.filter((plan) => !plan.generated)
-                  : current.customPlans;
-                return {
-                  ...current,
-                  customPlans: [...plans, ...keptPlans],
-                  selectedWeek: 1,
-                };
-              });
-              setLogSelection((current) => ({ ...current, week: 1 }));
-              notify(`Generated ${plans.length} sessions.`);
-            },
-            onAddCustomPlan: (plan) => {
-              updateAppState((current) => ({
-                ...current,
-                customPlans: [plan, ...current.customPlans],
-              }));
-              notify("Training session saved.");
-            },
-            onClearCustomPlans: () => {
-              if (!appState.customPlans.length) return;
-              if (
-                !window.confirm(
-                  "Clear all custom training sessions on this device?",
-                )
-              )
-                return;
-              updateAppState((current) => ({ ...current, customPlans: [] }));
-              notify("Custom programme cleared.");
-            },
-            onDeleteCustomPlan: (planId) => {
-              const plan = appState.customPlans.find(
-                (item) => item.id === planId,
-              );
-              if (!plan || !window.confirm(`Delete "${plan.title}"?`)) return;
-              updateAppState((current) => ({
-                ...current,
-                customPlans: current.customPlans.filter(
-                  (item) => item.id !== planId,
-                ),
-              }));
-              notify("Custom session deleted.");
-            },
+            onGenerate: handleGenerateProgramme,
+            onSaveSession: handleSaveCustomSession,
+            onSelectPlan: handleSelectPlan,
+            onRenamePlan: handleRenamePlan,
+            onDeletePlan: handleDeletePlan,
+            onDeleteSession: handleDeleteSession,
             onLogSession: jumpToLog,
             onTimerFinish: finishTimerToLog,
           }),
@@ -949,7 +1220,8 @@
         id,
         "aria-label": label,
         value: String(value),
-        onChange: (event) => onChange(event.target.value),
+        onChange: (event) =>
+          onChange(/** @type {HTMLSelectElement} */ (event.target).value),
       },
       weekOptions(),
     );
@@ -969,21 +1241,32 @@
     const logsThisWeek = appState.logs.filter(
       (log) => log.week === appState.selectedWeek,
     );
-    const mainDayIds = getProgramDays().map((day) => day.id);
-    const completedDays = new Set(
+    const activePlan = selectActivePlan(appState);
+    const weekSessions = activePlan
+      ? selectActiveWeekSessions(appState, appState.selectedWeek).map(
+          customPlanToSession,
+        )
+      : getProgramDays().map((day) =>
+          buildSession(day.id, appState.selectedWeek, appState.profile),
+        );
+    const mainDayIds = weekSessions.map((session) => session.id);
+    const completedDayIds = new Set(
       logsThisWeek
         .filter((log) => mainDayIds.includes(log.dayId))
         .map((log) => log.dayId),
-    ).size;
+    );
+    const completedDays = completedDayIds.size;
     const latestRpe = appState.logs.find((log) => log.rpe);
     const latestPr = appState.prAttempts.find((attempt) => attempt.isPr);
-    const weekPercent = Math.round((completedDays / 4) * 100);
+    const weekSessionCount = weekSessions.length;
+    const weekPercent = weekSessionCount
+      ? Math.round((completedDays / weekSessionCount) * 100)
+      : 0;
     const nextDay = getNextDayForToday();
-    const session = buildSession(
-      nextDay.id,
-      appState.selectedWeek,
-      appState.profile,
-    );
+    const session = activePlan
+      ? weekSessions.find((item) => !completedDayIds.has(item.id)) ||
+        weekSessions[0]
+      : weekSessions.find((item) => item.id === nextDay.id) || weekSessions[0];
 
     return h(
       "section",
@@ -1011,7 +1294,10 @@
       h(
         "div",
         { className: "stats-grid", id: "statsGrid" },
-        h(StatCard, { value: `${completedDays}/4`, label: "Sessions logged" }),
+        h(StatCard, {
+          value: `${completedDays}/${weekSessionCount}`,
+          label: "Sessions logged",
+        }),
         h(StatCard, { value: `${weekPercent}%`, label: "Week complete" }),
         h(StatCard, {
           value: latestRpe ? latestRpe.rpe : "-",
@@ -1025,53 +1311,66 @@
       h(
         "div",
         { id: "nextSession" },
-        h(
-          "section",
-          { className: "panel" },
-          h(
-            "div",
-            { className: "session-topline" },
-            h(
+        session
+          ? h(
+              "section",
+              { className: "panel" },
+              h(
+                "div",
+                { className: "session-topline" },
+                h(
+                  "div",
+                  null,
+                  h("p", { className: "eyebrow" }, "Next up"),
+                  h("h3", null, `${session.weekday} - ${session.shortTitle}`),
+                ),
+                h(
+                  "span",
+                  { className: "metric-pill" },
+                  `${session.duration || 60} min`,
+                ),
+              ),
+              h("p", { className: "muted-copy" }, session.focus),
+              h(
+                "div",
+                {
+                  className: "completion-bar",
+                  "aria-label": "Week completion",
+                },
+                h("span", { style: { width: `${weekPercent}%` } }),
+              ),
+              h(
+                "div",
+                { className: "quick-actions" },
+                h(
+                  "button",
+                  {
+                    className: "primary-button",
+                    type: "button",
+                    onClick: () => onJumpLog(session.id, appState.selectedWeek),
+                  },
+                  "Log this",
+                ),
+                h(
+                  "button",
+                  {
+                    className: "ghost-button",
+                    type: "button",
+                    onClick: onViewPlan,
+                  },
+                  "View plan",
+                ),
+              ),
+              h(WorkoutTimer, {
+                session,
+                onFinish: onTimerFinish,
+              }),
+            )
+          : h(
               "div",
-              null,
-              h("p", { className: "eyebrow" }, "Next up"),
-              h("h3", null, `${session.weekday} - ${session.shortTitle}`),
+              { className: "empty-state" },
+              `No sessions are scheduled for week ${appState.selectedWeek}.`,
             ),
-            h("span", { className: "metric-pill" }, "60 min"),
-          ),
-          h("p", { className: "muted-copy" }, session.focus),
-          h(
-            "div",
-            { className: "completion-bar", "aria-label": "Week completion" },
-            h("span", { style: { width: `${weekPercent}%` } }),
-          ),
-          h(
-            "div",
-            { className: "quick-actions" },
-            h(
-              "button",
-              {
-                className: "primary-button",
-                type: "button",
-                onClick: () => onJumpLog(session.id, appState.selectedWeek),
-              },
-              "Log this",
-            ),
-            h(
-              "button",
-              {
-                className: "ghost-button",
-                type: "button",
-                onClick: onViewPlan,
-              },
-              "View plan",
-            ),
-          ),
-          h(WorkoutTimer, {
-            session,
-            onFinish: onTimerFinish,
-          }),
-        ),
       ),
       h(ProfilePanel, {
         profile: appState.profile,
@@ -1083,7 +1382,7 @@
     );
   }
 
-  function StatCard({ value, label, detail }) {
+  function StatCard({ value, label, detail = null }) {
     return h(
       "article",
       { className: "stat-card" },
@@ -1549,9 +1848,16 @@
     onTimerFinish,
   }) {
     const week = WEEK_META.find((item) => item.week === appState.selectedWeek);
-    const generatedPlans = appState.customPlans.filter(
-      (plan) => plan.generated && Number(plan.week) === appState.selectedWeek,
+    const activePlan = selectActivePlan(appState);
+    const activeWeekSessions = selectActiveWeekSessions(
+      appState,
+      appState.selectedWeek,
     );
+    const programmeSessions = activePlan
+      ? activeWeekSessions.map(customPlanToSession)
+      : getProgramDays().map((day) =>
+          buildSession(day.id, appState.selectedWeek, appState.profile),
+        );
 
     return h(
       "section",
@@ -1566,8 +1872,16 @@
         h(
           "div",
           null,
-          h("p", { className: "eyebrow" }, "Eight-week cycle"),
-          h("h2", { id: "programTitle" }, "Programme"),
+          h(
+            "p",
+            { className: "eyebrow" },
+            activePlan ? "Active saved programme" : "Built-in eight-week cycle",
+          ),
+          h(
+            "h2",
+            { id: "programTitle" },
+            activePlan ? activePlan.title : "Programme",
+          ),
         ),
         h(WeekSelect, {
           id: "programWeek",
@@ -1579,67 +1893,45 @@
       h(
         "div",
         { className: "week-note", id: "weekNote" },
-        h("p", null, h("strong", null, `${week.title}.`), ` ${week.note}`),
+        activePlan
+          ? h(
+              "p",
+              null,
+              h("strong", null, `Week ${appState.selectedWeek}.`),
+              ` ${activeWeekSessions.length} session${activeWeekSessions.length === 1 ? "" : "s"} from ${activePlan.title}.`,
+            )
+          : h("p", null, h("strong", null, `${week.title}.`), ` ${week.note}`),
       ),
       h(
         "div",
         { className: "day-list", id: "programList" },
-        getProgramDays().map((day) => {
-          const session = buildSession(
-            day.id,
-            appState.selectedWeek,
-            appState.profile,
-          );
-          const logged = appState.logs.some(
-            (log) => log.week === appState.selectedWeek && log.dayId === day.id,
-          );
-          return h(SessionCard, {
-            key: session.id,
-            session,
-            tag: logged ? "Logged" : "60 min",
-            onLog: () => onLogSession(session.id, appState.selectedWeek),
-            onTimerFinish,
-          });
-        }),
+        programmeSessions.length
+          ? programmeSessions.map((session) => {
+              const storedSession = activeWeekSessions.find(
+                (item) => item.id === session.id,
+              );
+              const logged = appState.logs.some(
+                (log) =>
+                  log.week === appState.selectedWeek &&
+                  log.dayId === session.id,
+              );
+              return h(SessionCard, {
+                key: session.id,
+                session,
+                tag: logged ? "Logged" : `${session.duration || 60} min`,
+                meta: storedSession
+                  ? customPlanMeta(storedSession, logged)
+                  : null,
+                onLog: () => onLogSession(session.id, appState.selectedWeek),
+                onTimerFinish,
+              });
+            })
+          : h(
+              "div",
+              { className: "empty-state" },
+              `No sessions are scheduled for week ${appState.selectedWeek}.`,
+            ),
       ),
-      generatedPlans.length
-        ? h(
-            "section",
-            {
-              className: "programme-section",
-              "aria-labelledby": "generatedProgrammeTitle",
-            },
-            h(
-              "div",
-              { className: "section-heading programme-subheading" },
-              h(
-                "div",
-                null,
-                h("p", { className: "eyebrow" }, "Generated"),
-                h(
-                  "h3",
-                  { id: "generatedProgrammeTitle" },
-                  `Generated programme - Week ${appState.selectedWeek}`,
-                ),
-              ),
-            ),
-            h(
-              "div",
-              { className: "day-list", id: "generatedProgramList" },
-              generatedPlans.map((plan) => {
-                const logged = isCustomPlanLogged(appState.logs, plan);
-                return h(SessionCard, {
-                  key: plan.id,
-                  session: customPlanToSession(plan),
-                  tag: logged ? "Logged" : `${plan.duration} min`,
-                  meta: customPlanMeta(plan, logged),
-                  onLog: () => onLogSession(plan.id, plan.week),
-                  onTimerFinish,
-                });
-              }),
-            ),
-          )
-        : null,
     );
   }
 
@@ -1653,6 +1945,7 @@
       focus: plan.focus,
       segments: customPlanSegments(plan),
       addOns: plan.addOns || [],
+      duration: plan.duration,
     };
   }
 
@@ -1676,7 +1969,15 @@
     );
   }
 
-  function SessionCard({ session, tag, meta, onLog, onDelete, onTimerFinish }) {
+  function SessionCard({
+    session,
+    tag,
+    meta,
+    onLog,
+    onEdit = null,
+    onDelete = null,
+    onTimerFinish,
+  }) {
     return h(
       "article",
       { className: "day-card", id: session.id },
@@ -1713,6 +2014,13 @@
                 "button",
                 { className: "primary-button", type: "button", onClick: onLog },
                 "Log session",
+              )
+            : null,
+          onEdit
+            ? h(
+                "button",
+                { className: "ghost-button", type: "button", onClick: onEdit },
+                "Edit",
               )
             : null,
           onDelete
@@ -1926,11 +2234,15 @@
   }
 
   function ProofView({ appState, activeView, onFinish }) {
-    const programmeSessions = getProgramDays().map((day) =>
-      buildSession(day.id, appState.selectedWeek, appState.profile),
-    );
-    const savedSessions = appState.customPlans.map(customPlanToSession);
-    const allSessions = [...programmeSessions, ...savedSessions];
+    const activePlan = selectActivePlan(appState);
+    const programmeSessions = activePlan
+      ? selectActiveWeekSessions(appState, appState.selectedWeek).map(
+          customPlanToSession,
+        )
+      : getProgramDays().map((day) =>
+          buildSession(day.id, appState.selectedWeek, appState.profile),
+        );
+    const allSessions = programmeSessions;
     const initialSession = allSessions[0];
     const customSessionId = ReactRuntime.useRef(`competition-${createId()}`);
     const [sourceId, setSourceId] = ReactRuntime.useState(
@@ -1941,12 +2253,19 @@
     );
 
     ReactRuntime.useEffect(() => {
-      if (!getProgramDays().some((day) => day.id === sourceId)) return;
+      if (sourceId === "custom") return;
       const refreshedSession = programmeSessions.find(
         (session) => session.id === sourceId,
       );
-      if (refreshedSession) setDraft(proofDraftFromSession(refreshedSession));
-    }, [appState.selectedWeek]);
+      const nextSession = refreshedSession || programmeSessions[0];
+      if (!nextSession) {
+        setSourceId("custom");
+        setDraft(proofDraftFromSession(null));
+        return;
+      }
+      if (!refreshedSession) setSourceId(nextSession.id);
+      setDraft(proofDraftFromSession(nextSession));
+    }, [appState.activePlanId, appState.plans, appState.selectedWeek]);
 
     const selectedSession = allSessions.find(
       (session) => session.id === sourceId,
@@ -2020,7 +2339,9 @@
             h("option", { value: "custom" }, "Custom competition workout"),
             h(
               "optgroup",
-              { label: `Programme - Week ${appState.selectedWeek}` },
+              {
+                label: `${activePlan?.title || "Built-in programme"} - Week ${appState.selectedWeek}`,
+              },
               programmeSessions.map((item) =>
                 h(
                   "option",
@@ -2029,19 +2350,6 @@
                 ),
               ),
             ),
-            savedSessions.length
-              ? h(
-                  "optgroup",
-                  { label: "Saved workouts" },
-                  savedSessions.map((item) =>
-                    h(
-                      "option",
-                      { key: item.id, value: item.id },
-                      `Week ${item.week} - ${item.shortTitle}`,
-                    ),
-                  ),
-                )
-              : null,
           ),
         ),
         h(
@@ -3270,13 +3578,24 @@
     activeView,
     onNotify,
     onGenerate,
-    onAddCustomPlan,
-    onClearCustomPlans,
-    onDeleteCustomPlan,
+    onSaveSession,
+    onSelectPlan,
+    onRenamePlan,
+    onDeletePlan,
+    onDeleteSession,
     onLogSession,
     onTimerFinish,
   }) {
     const [customFormVersion, setCustomFormVersion] = ReactRuntime.useState(0);
+    const [editingSessionId, setEditingSessionId] = ReactRuntime.useState(null);
+    const activePlan = selectActivePlan(appState);
+    const editingSession = activePlan?.sessions.find(
+      (session) => session.id === editingSessionId,
+    );
+
+    ReactRuntime.useEffect(() => {
+      if (editingSessionId && !editingSession) setEditingSessionId(null);
+    }, [editingSession, editingSessionId]);
 
     return h(
       "section",
@@ -3298,14 +3617,86 @@
       h(GeneratorForm, {
         profile: appState.profile,
         onGenerate,
-        onNotify,
+        regenerating: activePlan?.kind === "generated",
       }),
+      appState.plans.length
+        ? h(
+            "section",
+            { className: "panel plan-manager", "aria-label": "Saved plans" },
+            h(
+              "div",
+              { className: "form-row" },
+              h(
+                "label",
+                null,
+                "Active plan",
+                h(
+                  "select",
+                  {
+                    value: activePlan?.id || "",
+                    onChange: (event) => {
+                      setEditingSessionId(null);
+                      onSelectPlan(event.target.value);
+                    },
+                  },
+                  appState.plans.map((plan) =>
+                    h("option", { key: plan.id, value: plan.id }, plan.title),
+                  ),
+                ),
+              ),
+              activePlan
+                ? h(
+                    "button",
+                    {
+                      className: "danger-button",
+                      type: "button",
+                      onClick: () => onDeletePlan(activePlan.id),
+                    },
+                    "Delete custom plan",
+                  )
+                : null,
+            ),
+            activePlan
+              ? h(
+                  "form",
+                  {
+                    key: activePlan.id,
+                    className: "form-row",
+                    onSubmit: (event) => {
+                      event.preventDefault();
+                      const data = new FormData(event.currentTarget);
+                      onRenamePlan(activePlan.id, data.get("planTitle"));
+                    },
+                  },
+                  h(
+                    "label",
+                    null,
+                    "Plan name",
+                    h("input", {
+                      name: "planTitle",
+                      type: "text",
+                      required: true,
+                      defaultValue: activePlan.title,
+                    }),
+                  ),
+                  h(
+                    "button",
+                    { className: "ghost-button", type: "submit" },
+                    "Save plan name",
+                  ),
+                )
+              : null,
+          )
+        : null,
       h(CustomPlanForm, {
-        key: `${appState.selectedWeek}-${customFormVersion}`,
+        key: `${appState.activePlanId}-${editingSessionId || customFormVersion}`,
         selectedWeek: appState.selectedWeek,
+        initialSession: editingSession,
         onNotify,
-        onSave: (plan) => {
-          onAddCustomPlan(plan);
+        onCancel: editingSession ? () => setEditingSessionId(null) : undefined,
+        onSave: (session) => {
+          onSaveSession(session, editingSessionId);
+          setEditingSessionId(null);
           setCustomFormVersion((version) => version + 1);
         },
       }),
@@ -3319,46 +3710,41 @@
             "div",
             null,
             h("p", { className: "eyebrow" }, "Saved"),
-            h("h3", { id: "customProgramTitle" }, "My training programme"),
-          ),
-          h(
-            "button",
-            {
-              className: "ghost-button",
-              id: "clearCustomPlans",
-              type: "button",
-              onClick: onClearCustomPlans,
-            },
-            "Clear custom",
+            h(
+              "h3",
+              { id: "customProgramTitle" },
+              activePlan?.title || "My training programme",
+            ),
           ),
         ),
         h(
           "div",
           { id: "customProgramList", className: "custom-list" },
-          appState.customPlans.length
-            ? appState.customPlans.map((plan) => {
-                const logged = isCustomPlanLogged(appState.logs, plan);
+          activePlan?.sessions.length
+            ? activePlan.sessions.map((session) => {
+                const logged = isCustomPlanLogged(appState.logs, session);
                 return h(SessionCard, {
-                  key: plan.id,
-                  session: customPlanToSession(plan),
-                  tag: `${plan.duration} min`,
-                  meta: customPlanMeta(plan, logged),
-                  onLog: () => onLogSession(plan.id, plan.week),
+                  key: session.id,
+                  session: customPlanToSession(session),
+                  tag: `${session.duration} min`,
+                  meta: customPlanMeta(session, logged),
+                  onLog: () => onLogSession(session.id, session.week),
                   onTimerFinish,
-                  onDelete: () => onDeleteCustomPlan(plan.id),
+                  onEdit: () => setEditingSessionId(session.id),
+                  onDelete: () => onDeleteSession(session.id),
                 });
               })
             : h(
                 "div",
                 { className: "empty-state" },
-                "No custom sessions yet. Build one here, then log it from the Log tab.",
+                "No saved sessions yet. Build one here, then log it from the Log tab.",
               ),
         ),
       ),
     );
   }
 
-  function GeneratorForm({ profile, onGenerate }) {
+  function GeneratorForm({ profile, onGenerate, regenerating }) {
     return h(
       "form",
       {
@@ -3366,19 +3752,28 @@
         className: "panel builder-form",
         onSubmit: (event) => {
           event.preventDefault();
-          const data = new FormData(event.currentTarget);
+          const data = new FormData(
+            /** @type {HTMLFormElement} */ (event.currentTarget),
+          );
           const options = {
             goal: String(data.get("generatorGoal") || "stronger"),
             daysPerWeek: Number(data.get("generatorDays") || 4),
             weakness: String(data.get("generatorWeakness") || "squat"),
             duration: positiveNumber(data.get("generatorDuration"), 60),
           };
+          const generationSeed = createGenerationSeed();
           const generatedPlans = buildGeneratedProgramme(
             options,
             profile,
             createId,
+            generationSeed,
           );
-          onGenerate(generatedPlans, Boolean(data.get("replaceGenerated")));
+          onGenerate({
+            sessions: generatedPlans,
+            options,
+            generationSeed,
+            replaceActive: Boolean(data.get("replaceGenerated")),
+          });
         },
       },
       h(
@@ -3480,17 +3875,27 @@
           type: "checkbox",
           defaultChecked: true,
         }),
-        "Replace earlier generated sessions",
+        regenerating
+          ? "Regenerate the active generated plan"
+          : "Replace the active generated plan when possible",
       ),
       h(
         "button",
         { className: "primary-button", type: "submit" },
-        "Generate 8-week programme",
+        regenerating
+          ? "Regenerate 8-week programme"
+          : "Generate 8-week programme",
       ),
     );
   }
 
-  function CustomPlanForm({ selectedWeek, onNotify, onSave }) {
+  function CustomPlanForm({
+    selectedWeek,
+    initialSession,
+    onNotify,
+    onSave,
+    onCancel,
+  }) {
     return h(
       "form",
       {
@@ -3498,7 +3903,9 @@
         className: "panel builder-form",
         onSubmit: (event) => {
           event.preventDefault();
-          const data = new FormData(event.currentTarget);
+          const data = new FormData(
+            /** @type {HTMLFormElement} */ (event.currentTarget),
+          );
           const title = String(data.get("customPlanTitle") || "").trim();
           if (!title) {
             onNotify("Add a title for the training session.");
@@ -3506,7 +3913,7 @@
           }
 
           onSave({
-            id: createId(),
+            id: initialSession?.id || createId(),
             week: Number(data.get("customPlanWeek")),
             title,
             focus: String(
@@ -3521,7 +3928,7 @@
               Math.max(15, positiveNumber(data.get("customPlanDuration"), 60)),
             ),
             intensity: String(data.get("customPlanIntensity") || "Moderate"),
-            createdAt: new Date().toISOString(),
+            createdAt: initialSession?.createdAt || new Date().toISOString(),
           });
         },
       },
@@ -3531,8 +3938,14 @@
         h(
           "div",
           null,
-          h("p", { className: "eyebrow" }, "Manual"),
-          h("h3", null, "Add one training session"),
+          h("p", { className: "eyebrow" }, initialSession ? "Edit" : "Manual"),
+          h(
+            "h3",
+            null,
+            initialSession
+              ? "Edit training session"
+              : "Add one training session",
+          ),
         ),
       ),
       h(
@@ -3548,7 +3961,7 @@
               id: "customPlanWeek",
               name: "customPlanWeek",
               required: true,
-              defaultValue: String(selectedWeek),
+              defaultValue: String(initialSession?.week || selectedWeek),
             },
             weekOptions(),
           ),
@@ -3562,6 +3975,7 @@
             name: "customPlanTitle",
             type: "text",
             required: true,
+            defaultValue: initialSession?.title || "",
             placeholder: "Friday engine + skill",
           }),
         ),
@@ -3574,6 +3988,7 @@
           id: "customPlanFocus",
           name: "customPlanFocus",
           type: "text",
+          defaultValue: initialSession?.focus || "",
           placeholder: "Engine, pull-up volume, mobility",
         }),
       ),
@@ -3585,6 +4000,7 @@
           id: "customPlanWarmup",
           name: "customPlanWarmup",
           rows: "3",
+          defaultValue: (initialSession?.warmup || []).join("\n"),
           placeholder: "8 min easy bike\nDynamic hips and shoulders",
         }),
       ),
@@ -3596,6 +4012,7 @@
           id: "customPlanStrength",
           name: "customPlanStrength",
           rows: "3",
+          defaultValue: (initialSession?.strength || []).join("\n"),
           placeholder: "EMOM 10: 2 strict pull-ups + 6 kip swings",
         }),
       ),
@@ -3607,6 +4024,7 @@
           id: "customPlanWod",
           name: "customPlanWod",
           rows: "3",
+          defaultValue: (initialSession?.wod || []).join("\n"),
           placeholder: "AMRAP 14: 12 cal row, 10 DB snatches, 8 burpees",
         }),
       ),
@@ -3618,6 +4036,7 @@
           id: "customPlanMobility",
           name: "customPlanMobility",
           rows: "3",
+          defaultValue: (initialSession?.mobility || []).join("\n"),
           placeholder: "5 min nasal breathing\nLats, pecs, hip flexors",
         }),
       ),
@@ -3636,7 +4055,7 @@
             max: "90",
             step: "5",
             inputMode: "numeric",
-            defaultValue: "60",
+            defaultValue: String(initialSession?.duration || 60),
           }),
         ),
         h(
@@ -3648,7 +4067,7 @@
             {
               id: "customPlanIntensity",
               name: "customPlanIntensity",
-              defaultValue: "Technique",
+              defaultValue: initialSession?.intensity || "Technique",
             },
             h("option", { value: "Technique" }, "Technique"),
             h("option", { value: "Moderate" }, "Moderate"),
@@ -3659,9 +4078,20 @@
         ),
       ),
       h(
-        "button",
-        { className: "primary-button", type: "submit" },
-        "Save training session",
+        "div",
+        { className: "quick-actions" },
+        h(
+          "button",
+          { className: "primary-button", type: "submit" },
+          initialSession ? "Update training session" : "Save training session",
+        ),
+        onCancel
+          ? h(
+              "button",
+              { className: "ghost-button", type: "button", onClick: onCancel },
+              "Cancel edit",
+            )
+          : null,
       ),
     );
   }
@@ -3853,6 +4283,8 @@
         ? pendingTimerResult
         : null;
     const timerSummary = matchingTimer ? formatTimerResult(matchingTimer) : "";
+    const activePlan = selectActivePlan(appState);
+    const activeSessions = selectActiveWeekSessions(appState, selectedWeek);
 
     return h(
       "section",
@@ -3981,28 +4413,23 @@
             },
             h(
               "optgroup",
-              { label: "CrossFit Training Programme" },
-              getProgramDays().map((day) =>
-                h(
-                  "option",
-                  { key: day.id, value: day.id },
-                  `${day.weekday} - ${day.shortTitle}`,
-                ),
-              ),
-            ),
-            appState.customPlans.length
-              ? h(
-                  "optgroup",
-                  { label: "My programme" },
-                  appState.customPlans.map((plan) =>
+              { label: activePlan?.title || "CrossFit Training Programme" },
+              activePlan
+                ? activeSessions.map((session) =>
                     h(
                       "option",
-                      { key: plan.id, value: plan.id },
-                      `Custom W${plan.week}: ${plan.title}`,
+                      { key: session.id, value: session.id },
+                      `Week ${session.week}: ${session.title}`,
+                    ),
+                  )
+                : getProgramDays().map((day) =>
+                    h(
+                      "option",
+                      { key: day.id, value: day.id },
+                      `${day.weekday} - ${day.shortTitle}`,
                     ),
                   ),
-                )
-              : null,
+            ),
             matchingTimer?.sessionSnapshot &&
               !findTrainingSessionForState(
                 matchingTimer.sessionSnapshot.id,
@@ -4221,12 +4648,17 @@
   }
 
   function findTrainingSessionForState(sessionId, weekNumber, state) {
-    const mainDay = getProgramDays().find((day) => day.id === sessionId);
-    if (mainDay) {
-      return buildSession(mainDay.id, weekNumber, state.profile);
+    const activePlan = selectActivePlan(state);
+    if (!activePlan) {
+      const mainDay = getProgramDays().find((day) => day.id === sessionId);
+      return mainDay
+        ? buildSession(mainDay.id, weekNumber, state.profile)
+        : null;
     }
 
-    const customPlan = state.customPlans.find((plan) => plan.id === sessionId);
+    const customPlan = activePlan.sessions.find(
+      (session) => session.id === sessionId,
+    );
     if (!customPlan) return null;
 
     return {

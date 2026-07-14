@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "crossfit-training-programme-v7";
+const CACHE_NAME = "crossfit-training-programme-v8";
 const LOCAL_ASSETS = [
   "./",
   "./index.html",

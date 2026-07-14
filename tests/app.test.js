@@ -24,10 +24,13 @@ const {
   isBetterPr,
   kg,
   migrateGeneratedProgrammePlans,
+  migratePlanState,
   normalizePrValue,
   parseTimeToSeconds,
   percent,
   roundToNearest,
+  selectActivePlan,
+  selectActiveWeekSessions,
   splitLines,
   timerDisplaySeconds,
   trimNumber,
@@ -517,6 +520,108 @@ test("generated programme migration refreshes old WOD schema without changing ID
   assert.match(migration.plans[0].wod[1], /Stimulus:/);
   assert.match(migration.plans[0].wod[2], /Score:/);
   assert.equal(migration.plans[1], oldPlans[1]);
+});
+
+test("legacy custom plans migrate once into one canonical plan catalog", () => {
+  const legacy = {
+    schemaVersion: 2,
+    selectedWeek: 2,
+    profile: cloneDefaultProfile(),
+    customPlans: [
+      {
+        id: "generated-1",
+        week: 2,
+        title: "W2 D1: Squat strength",
+        generated: true,
+        wodSchemaVersion: 4,
+        sourceGoal: "stronger",
+        sourceWeakness: "pulling",
+        duration: 60,
+        warmup: ["Original warm-up"],
+        strength: ["Original strength"],
+        wod: ["Original generated WOD"],
+        mobility: ["Original mobility"],
+        customized: true,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "manual-1",
+        week: 2,
+        title: "Manual session",
+        warmup: ["Manual warm-up"],
+        strength: [],
+        wod: ["Manual WOD stays exact"],
+        mobility: [],
+        duration: 45,
+        createdAt: "2026-01-02T00:00:00.000Z",
+      },
+    ],
+  };
+
+  const first = migratePlanState(legacy);
+  const migratedSessions = first.state.plans.flatMap((plan) => plan.sessions);
+
+  assert.equal(first.migrated, true);
+  assert.equal(Object.hasOwn(first.state, "customPlans"), false);
+  assert.deepEqual(migratedSessions.map((session) => session.id).sort(), [
+    "generated-1",
+    "manual-1",
+  ]);
+  assert.equal(
+    migratedSessions.find((session) => session.id === "generated-1").wod[0],
+    "Original generated WOD",
+  );
+  assert.equal(
+    migratedSessions.find((session) => session.id === "generated-1").customized,
+    true,
+  );
+  assert.ok(selectActivePlan(first.state));
+  assert.ok(selectActiveWeekSessions(first.state, 2).length > 0);
+
+  const second = migratePlanState(first.state);
+  assert.equal(second.migrated, false);
+  assert.equal(second.state, first.state);
+});
+
+test("seeded generation is reproducible, immutable, and materially varied", () => {
+  const profile = cloneDefaultProfile();
+  const options = {
+    goal: "balanced",
+    daysPerWeek: 4,
+    weakness: "pulling",
+    duration: 60,
+  };
+  const originalProfile = structuredClone(profile);
+  const originalOptions = structuredClone(options);
+  const ids = (seed) => seed;
+
+  const alpha = buildGeneratedProgramme(options, profile, ids, "seed-alpha");
+  const alphaAgain = buildGeneratedProgramme(
+    options,
+    profile,
+    ids,
+    "seed-alpha",
+  );
+  const beta = buildGeneratedProgramme(options, profile, ids, "seed-beta");
+
+  assert.deepEqual(
+    alpha.map((session) => session.wod),
+    alphaAgain.map((session) => session.wod),
+  );
+  assert.ok(
+    alpha.some((session, index) => session.wod[0] !== beta[index].wod[0]),
+    "different seeds must change workout format or movements",
+  );
+  assert.deepEqual(options, originalOptions);
+  assert.deepEqual(profile, originalProfile);
+  assert.equal(
+    new Set(alpha.map((session) => session.wod[0])).size,
+    alpha.length,
+  );
+  assert.equal(
+    new Set(beta.map((session) => session.wod[0])).size,
+    beta.length,
+  );
 });
 
 test("custom programme helpers turn phone text areas into renderable segments", () => {

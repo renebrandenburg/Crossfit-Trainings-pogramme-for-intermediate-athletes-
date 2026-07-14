@@ -46,7 +46,7 @@ test("React app contains the main app surfaces and navigation", () => {
   assert.match(app, /logView/);
   assert.match(app, /proofView/);
   assert.match(app, /prView/);
-  assert.match(app, /Eight-week cycle/);
+  assert.match(app, /eight-week cycle/i);
   assert.match(app, /RX readiness/);
   assert.match(app, /Masters RX assessment/);
   assert.match(app, /nav-button/);
@@ -121,7 +121,7 @@ test("service worker caches the files needed to run offline", () => {
     "icon.svg",
   ];
 
-  assert.match(serviceWorker, /crossfit-training-programme-v7/);
+  assert.match(serviceWorker, /crossfit-training-programme-v8/);
   assert.match(
     serviceWorker,
     /react@18\.3\.1\/umd\/react\.production\.min\.js/,

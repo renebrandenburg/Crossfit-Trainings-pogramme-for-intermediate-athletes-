@@ -91,6 +91,8 @@ function mountApp({
   supabaseMock = null,
   supabaseConfig = true,
   recordingSupport = false,
+  storedState = null,
+  confirmResponses = [true],
 } = {}) {
   const dom = new JSDOM(
     '<!doctype html><html><head><meta name="theme-color" content="#10120f"></head><body><div id="root"></div></body></html>',
@@ -117,10 +119,25 @@ function mountApp({
     dom.window,
   );
 
-  dom.window.confirm = () => true;
+  const confirmCalls = [];
+  const queuedConfirmResponses = [...confirmResponses];
+  dom.window.confirm = (message) => {
+    confirmCalls.push(String(message));
+    return queuedConfirmResponses.length
+      ? queuedConfirmResponses.shift()
+      : true;
+  };
   dom.window.scrollTo = () => undefined;
   dom.window.matchMedia = createMatchMedia(prefersDark);
   if (recordingSupport) installRecordingMocks(dom.window);
+  if (storedState) {
+    dom.window.localStorage.setItem(
+      "forge-hour-state-v1",
+      typeof storedState === "string"
+        ? storedState
+        : JSON.stringify(storedState),
+    );
+  }
   dom.window.React = require("react");
   dom.window.ReactDOM = require("react-dom/client");
   if (supabaseMock) {
@@ -146,6 +163,13 @@ function mountApp({
     fireEvent: testingLibrary.fireEvent,
     waitFor: testingLibrary.waitFor,
     ui,
+    confirmCalls,
+    readState() {
+      return JSON.parse(dom.window.localStorage.getItem("forge-hour-state-v1"));
+    },
+    view(id) {
+      return testingLibrary.within(dom.window.document.querySelector(`#${id}`));
+    },
     cleanup() {
       testingLibrary.cleanup();
       dom.window.close();
@@ -250,6 +274,59 @@ function installRecordingMocks(browserWindow) {
   browserWindow.MediaRecorder = MockMediaRecorder;
 }
 
+function canonicalPlanState({
+  kind = "custom",
+  customized = true,
+  logs = [],
+} = {}) {
+  const session = {
+    id: "saved-session-1",
+    week: 1,
+    title: "Saved canonical session",
+    focus: "One source of truth",
+    warmup: ["Easy row"],
+    strength: ["Back squat 5x5"],
+    wod: ["AMRAP 12: row, burpees, and pull-ups"],
+    mobility: ["Easy breathing"],
+    duration: 60,
+    intensity: "Moderate",
+    generated: kind === "generated",
+    origin: kind === "generated" ? "generated" : "manual",
+    customized,
+    sourceGoal: kind === "generated" ? "balanced" : undefined,
+    sourceWeakness: kind === "generated" ? "pulling" : undefined,
+    wodSchemaVersion: 4,
+    generationSeed: kind === "generated" ? "fixture-seed" : undefined,
+    createdAt: "2026-07-01T10:00:00.000Z",
+  };
+  return {
+    schemaVersion: 2,
+    plans: [
+      {
+        id: "saved-plan-1",
+        title: "Canonical programme",
+        kind,
+        generatorOptions:
+          kind === "generated"
+            ? {
+                goal: "balanced",
+                daysPerWeek: 4,
+                weakness: "pulling",
+                duration: 60,
+              }
+            : null,
+        generationSeed: kind === "generated" ? "fixture-seed" : null,
+        createdAt: "2026-07-01T10:00:00.000Z",
+        updatedAt: "2026-07-01T10:00:00.000Z",
+        sessions: [session],
+      },
+    ],
+    activePlanId: "saved-plan-1",
+    selectedWeek: 1,
+    logs,
+  };
+}
+
 test("React Testing Library renders the dashboard and bottom navigation", async () => {
   const { cleanup, ui } = mountApp();
 
@@ -334,14 +411,16 @@ test("React Testing Library generates a Masters 35-39 RX Open prep programme", a
     const saved = JSON.parse(
       window.localStorage.getItem("forge-hour-state-v1"),
     );
-    assert.equal(
-      saved.customPlans.filter((plan) => plan.sourceGoal === "mastersRxOpen")
-        .length,
-      32,
+    const activePlan = saved.plans.find(
+      (plan) => plan.id === saved.activePlanId,
     );
+    assert.equal(activePlan.kind, "generated");
+    assert.equal(activePlan.generatorOptions.goal, "mastersRxOpen");
+    assert.equal(activePlan.sessions.length, 32);
+    assert.equal(Object.hasOwn(saved, "customPlans"), false);
     assert.ok(
-      saved.customPlans.every(
-        (plan) => !plan.addOns || Array.isArray(plan.addOns),
+      activePlan.sessions.every(
+        (session) => !session.addOns || Array.isArray(session.addOns),
       ),
     );
   } finally {
@@ -545,7 +624,7 @@ test("React Testing Library recovers an unexpectedly stopped proof recording", a
 });
 
 test("React Testing Library saves a manual training session", async () => {
-  const { cleanup, fireEvent, ui, waitFor } = mountApp();
+  const { cleanup, fireEvent, readState, ui, view, waitFor } = mountApp();
 
   try {
     fireEvent.click(await ui.findByRole("button", { name: "Build" }));
@@ -569,11 +648,283 @@ test("React Testing Library saves a manual training session", async () => {
 
     fireEvent.click(ui.getByRole("button", { name: "Save training session" }));
 
+    const builder = view("builderView");
     await waitFor(() =>
-      assert.ok(ui.getByRole("heading", { name: "Friday engine + skill" })),
+      assert.ok(
+        builder.getByRole("heading", { name: "Friday engine + skill" }),
+      ),
     );
-    assert.ok(ui.getByText("Engine and pull-up volume"));
-    assert.ok(ui.getByText("AMRAP 14: 12 cal row, 10 DB snatches, 8 burpees"));
+    assert.ok(builder.getByText("Engine and pull-up volume"));
+    assert.ok(
+      builder.getByText("AMRAP 14: 12 cal row, 10 DB snatches, 8 burpees"),
+    );
+    const saved = readState();
+    assert.equal(saved.plans.length, 1);
+    assert.equal(saved.plans[0].sessions.length, 1);
+    assert.equal(saved.activePlanId, saved.plans[0].id);
+    assert.equal(Object.hasOwn(saved, "customPlans"), false);
+
+    fireEvent.click(ui.getByRole("button", { name: "Plan" }));
+    const planView = view("programView");
+    assert.match(document.querySelector("#programView").className, /is-active/);
+    assert.ok(planView.getByRole("heading", { name: "Friday engine + skill" }));
+    assert.ok(
+      planView.getByText("AMRAP 14: 12 cal row, 10 DB snatches, 8 burpees"),
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library reloads the canonical active plan without regenerating it", async () => {
+  const first = mountApp({ storedState: canonicalPlanState() });
+  let serialized;
+
+  try {
+    assert.ok(
+      await first.ui.findByRole("heading", { name: "Training dashboard" }),
+    );
+    serialized = JSON.stringify(first.readState());
+    assert.equal(first.readState().plans[0].sessions[0].id, "saved-session-1");
+  } finally {
+    first.cleanup();
+  }
+
+  const second = mountApp({ storedState: serialized });
+  try {
+    assert.ok(
+      await second.ui.findByRole("heading", { name: "Training dashboard" }),
+    );
+    const reloaded = second.readState();
+    assert.equal(reloaded.activePlanId, "saved-plan-1");
+    assert.equal(reloaded.plans[0].sessions[0].id, "saved-session-1");
+    assert.equal(
+      reloaded.plans[0].sessions[0].wod[0],
+      "AMRAP 12: row, burpees, and pull-ups",
+    );
+
+    second.fireEvent.click(second.ui.getByRole("button", { name: "Plan" }));
+    assert.ok(
+      second
+        .view("programView")
+        .getByText("AMRAP 12: row, burpees, and pull-ups"),
+    );
+    second.fireEvent.click(second.ui.getByRole("button", { name: "Build" }));
+    assert.ok(
+      second
+        .view("builderView")
+        .getByText("AMRAP 12: row, burpees, and pull-ups"),
+    );
+  } finally {
+    second.cleanup();
+  }
+});
+
+test("React Testing Library edits one canonical session across every consumer", async () => {
+  const { cleanup, fireEvent, readState, ui, view, waitFor } = mountApp({
+    storedState: canonicalPlanState({ kind: "generated" }),
+  });
+
+  try {
+    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    const builder = view("builderView");
+    fireEvent.change(ui.getByLabelText("Plan name"), {
+      target: { value: "Renamed canonical programme" },
+    });
+    fireEvent.click(ui.getByRole("button", { name: "Save plan name" }));
+    await waitFor(() =>
+      assert.equal(readState().plans[0].title, "Renamed canonical programme"),
+    );
+    fireEvent.click(builder.getByRole("button", { name: "Edit" }));
+    fireEvent.change(ui.getByLabelText("Day or title"), {
+      target: { value: "Edited canonical session" },
+    });
+    fireEvent.change(ui.getByLabelText("WOD"), {
+      target: { value: "For time: run, thrusters, and chest-to-bar" },
+    });
+    fireEvent.click(
+      ui.getByRole("button", { name: "Update training session" }),
+    );
+
+    await waitFor(() => {
+      const session = readState().plans[0].sessions[0];
+      assert.equal(session.id, "saved-session-1");
+      assert.equal(session.customized, true);
+      assert.equal(session.title, "Edited canonical session");
+    });
+
+    fireEvent.click(ui.getByRole("button", { name: "Plan" }));
+    assert.ok(
+      view("programView").getByRole("heading", {
+        name: "Renamed canonical programme",
+      }),
+    );
+    assert.ok(
+      view("programView").getByText(
+        "For time: run, thrusters, and chest-to-bar",
+      ),
+    );
+
+    fireEvent.click(ui.getByRole("button", { name: "Proof" }));
+    assert.ok(
+      view("proofView").getByRole("option", {
+        name: /Edited canonical session/,
+      }),
+    );
+    fireEvent.click(ui.getByRole("button", { name: "Log" }));
+    assert.ok(
+      view("logView").getByRole("option", {
+        name: /Edited canonical session/,
+      }),
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library regenerates the active plan without duplicating it", async () => {
+  const { cleanup, fireEvent, readState, ui, view, waitFor } = mountApp({
+    storedState: canonicalPlanState({ kind: "generated", customized: false }),
+  });
+
+  try {
+    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    const before = structuredClone(readState());
+    fireEvent.click(
+      ui.getByRole("button", { name: "Regenerate 8-week programme" }),
+    );
+
+    await waitFor(() => {
+      assert.notEqual(
+        readState().plans[0].generationSeed,
+        before.plans[0].generationSeed,
+      );
+    });
+    const after = readState();
+    assert.equal(after.plans.length, 1);
+    assert.equal(after.plans[0].id, before.plans[0].id);
+    assert.equal(after.plans[0].sessions.length, 32);
+    assert.equal(
+      after.plans[0].sessions.some(
+        (session) => session.id === "saved-session-1",
+      ),
+      false,
+    );
+    assert.notEqual(
+      after.plans[0].sessions[0].wod[0],
+      before.plans[0].sessions[0].wod[0],
+    );
+
+    fireEvent.click(ui.getByRole("button", { name: "Plan" }));
+    const firstSession = after.plans[0].sessions.find(
+      (session) => session.week === 1,
+    );
+    assert.ok(view("programView").getByText(firstSession.wod[0]));
+    fireEvent.click(ui.getByRole("button", { name: "Build" }));
+    assert.ok(view("builderView").getByText(firstSession.wod[0]));
+    fireEvent.click(ui.getByRole("button", { name: "Proof" }));
+    const proofOption = view("proofView").getByRole("option", {
+      name: new RegExp(
+        firstSession.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+      ),
+    });
+    assert.equal(proofOption.value, firstSession.id);
+    assert.equal(
+      view("proofView").queryByRole("option", {
+        name: /Saved canonical session/,
+      }),
+      null,
+    );
+    fireEvent.click(ui.getByRole("button", { name: "Log" }));
+    const logOption = view("logView").getByRole("option", {
+      name: new RegExp(
+        firstSession.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+      ),
+    });
+    assert.equal(logOption.value, firstSession.id);
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library confirms and fully deletes a custom plan", async () => {
+  const historicalLog = {
+    id: "historical-log",
+    date: "2026-07-02",
+    week: 1,
+    dayId: "saved-session-1",
+    dayTitle: "Saved canonical session",
+    readiness: "green",
+    wodScore: "5 rounds",
+    createdAt: "2026-07-02T12:00:00.000Z",
+  };
+  const { cleanup, confirmCalls, fireEvent, readState, ui, view, waitFor } =
+    mountApp({
+      storedState: canonicalPlanState({ logs: [historicalLog] }),
+      confirmResponses: [false, true],
+    });
+
+  try {
+    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    const deleteButton = ui.getByRole("button", {
+      name: "Delete custom plan",
+    });
+    fireEvent.click(deleteButton);
+    assert.equal(readState().plans.length, 1);
+    assert.match(confirmCalls[0], /Canonical programme/);
+
+    fireEvent.click(deleteButton);
+    await waitFor(() => assert.equal(readState().plans.length, 0));
+    const saved = readState();
+    assert.equal(saved.activePlanId, null);
+    assert.equal(saved.logs[0].id, "historical-log");
+    assert.match(document.querySelector("#programView").className, /is-active/);
+    assert.ok(view("programView").getByRole("heading", { name: "Programme" }));
+
+    fireEvent.click(ui.getByRole("button", { name: "Proof" }));
+    assert.equal(
+      ui.queryByRole("option", { name: /Saved canonical session/ }),
+      null,
+    );
+    fireEvent.click(ui.getByRole("button", { name: "Log" }));
+    assert.notEqual(ui.getByLabelText("Session").value, "saved-session-1");
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library migrates legacy custom plans during startup", async () => {
+  const legacyState = {
+    customPlans: [
+      {
+        id: "legacy-session",
+        week: 1,
+        title: "Legacy custom session",
+        focus: "Preserve me",
+        warmup: ["Legacy warm-up"],
+        strength: [],
+        wod: ["AMRAP 10: legacy workout"],
+        mobility: [],
+        duration: 45,
+        intensity: "Moderate",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+    selectedWeek: 1,
+  };
+  const { cleanup, fireEvent, readState, ui, view } = mountApp({
+    storedState: legacyState,
+  });
+
+  try {
+    assert.ok(await ui.findByRole("heading", { name: "Training dashboard" }));
+    const saved = readState();
+    assert.equal(Object.hasOwn(saved, "customPlans"), false);
+    assert.equal(saved.plans[0].sessions[0].id, "legacy-session");
+    fireEvent.click(ui.getByRole("button", { name: "Plan" }));
+    assert.ok(view("programView").getByText("AMRAP 10: legacy workout"));
+    fireEvent.click(ui.getByRole("button", { name: "Build" }));
+    assert.ok(view("builderView").getByText("AMRAP 10: legacy workout"));
   } finally {
     cleanup();
   }

@@ -934,9 +934,13 @@ const MOVEMENT_LIBRARY = [
 ];
 
 const WOD_SCHEMA_VERSION = 4;
+const PLAN_SCHEMA_VERSION = 2;
 
 const canUseDOM = typeof document !== "undefined";
-const state = loadState();
+const legacyVanillaRoot = canUseDOM
+  ? document.querySelector("[data-vanilla-app]")
+  : null;
+const state = legacyVanillaRoot ? loadState() : null;
 
 const elements = canUseDOM
   ? {
@@ -971,7 +975,7 @@ const elements = canUseDOM
     }
   : {};
 
-if (canUseDOM && document.querySelector("[data-vanilla-app]")) {
+if (legacyVanillaRoot) {
   init();
 }
 
@@ -1738,19 +1742,419 @@ function statCard(value, label) {
   `;
 }
 
-function buildGeneratedProgramme(options, profile, idFactory = createId) {
+function buildGeneratedProgramme(
+  options,
+  profile,
+  idFactory = createId,
+  generationSeed,
+) {
   const normalized = normalizeGeneratorOptions(options);
-  const plans = [];
+  const hasExplicitSeed = Boolean(generationSeed || normalized.generationSeed);
+  const seed = normalizeGenerationSeed(
+    generationSeed || normalized.generationSeed,
+  );
+  const sessions = [];
+  const generationContext = {
+    seed,
+    variationEnabled: hasExplicitSeed,
+    usedWodSignatures: new Set(),
+  };
 
   for (let week = 1; week <= 8; week += 1) {
     for (let day = 1; day <= normalized.daysPerWeek; day += 1) {
-      plans.push(
-        buildGeneratedSession(normalized, profile, week, day, idFactory),
+      sessions.push(
+        buildGeneratedSession(
+          normalized,
+          profile,
+          week,
+          day,
+          idFactory,
+          generationContext,
+        ),
       );
     }
   }
 
-  return plans;
+  return sessions;
+}
+
+function createGenerationSeed() {
+  const cryptoSource =
+    typeof globalThis !== "undefined" ? globalThis.crypto : undefined;
+  if (cryptoSource && typeof cryptoSource.randomUUID === "function") {
+    return cryptoSource.randomUUID();
+  }
+  return `generation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function normalizeGenerationSeed(value) {
+  const seed = String(value || "").trim();
+  return seed || "forge-hour-default-generation";
+}
+
+function migratePlanState(inputState) {
+  const source = inputState && typeof inputState === "object" ? inputState : {};
+  const hasCanonicalPlans = Array.isArray(source.plans);
+  const hasLegacyPlans = Array.isArray(source.customPlans);
+  const useCanonicalPlans =
+    hasCanonicalPlans &&
+    !(hasLegacyPlans && source.customPlans.length && !source.plans.length);
+  let plans;
+  let plansChanged;
+
+  if (useCanonicalPlans) {
+    const normalized = normalizeCanonicalPlans(source.plans);
+    plans = normalized.plans;
+    plansChanged = normalized.changed;
+  } else {
+    const profile = profileForGeneration(source.profile);
+    const refreshed = migrateGeneratedProgrammePlans(
+      hasLegacyPlans ? source.customPlans : [],
+      profile,
+    );
+    plans = groupLegacySessionsIntoPlans(refreshed.plans);
+    plansChanged = hasLegacyPlans || refreshed.migrated;
+  }
+
+  const legacySelectedId = source.selectedPlanId;
+  const requestedActiveId = useCanonicalPlans
+    ? source.activePlanId || legacySelectedId || null
+    : null;
+  const requestedPlan = plans.find((plan) => plan.id === requestedActiveId);
+  const containingPlan = plans.find((plan) =>
+    plan.sessions.some((session) => session.id === requestedActiveId),
+  );
+  const activePlanId = requestedPlan
+    ? requestedPlan.id
+    : containingPlan
+      ? containingPlan.id
+      : plans[0]
+        ? plans[0].id
+        : null;
+
+  const migrated =
+    source.schemaVersion !== PLAN_SCHEMA_VERSION ||
+    !useCanonicalPlans ||
+    Object.prototype.hasOwnProperty.call(source, "customPlans") ||
+    Object.prototype.hasOwnProperty.call(source, "selectedPlanId") ||
+    source.activePlanId !== activePlanId ||
+    plansChanged;
+
+  if (!migrated) return { state: source, migrated: false };
+
+  const {
+    customPlans: _legacyCustomPlans,
+    selectedPlanId: _legacySelectedPlanId,
+    ...rest
+  } = source;
+
+  return {
+    state: {
+      ...rest,
+      schemaVersion: PLAN_SCHEMA_VERSION,
+      plans,
+      activePlanId,
+    },
+    migrated: true,
+  };
+}
+
+function selectActivePlan(state) {
+  if (!state || !Array.isArray(state.plans) || !state.activePlanId) return null;
+  return state.plans.find((plan) => plan.id === state.activePlanId) || null;
+}
+
+function selectPlanWeekSessions(plan, week) {
+  if (!plan || !Array.isArray(plan.sessions)) return [];
+  const selectedWeek = clamp(Math.round(Number(week) || 1), 1, 8);
+  return plan.sessions.filter(
+    (session) => Number(session.week) === selectedWeek,
+  );
+}
+
+function selectActiveWeekSessions(state, week = state && state.selectedWeek) {
+  return selectPlanWeekSessions(selectActivePlan(state), week);
+}
+
+function normalizeCanonicalPlans(plans) {
+  let changed = false;
+  const normalizedPlans = plans
+    .filter((plan) => plan && typeof plan === "object")
+    .map((plan, index) => {
+      const normalized = normalizeCanonicalPlan(plan, index);
+      if (normalized.changed) changed = true;
+      return normalized.plan;
+    });
+
+  if (normalizedPlans.length !== plans.length) changed = true;
+  return { plans: changed ? normalizedPlans : plans, changed };
+}
+
+function normalizeCanonicalPlan(plan, index) {
+  const sessions = Array.isArray(plan.sessions) ? plan.sessions : [];
+  const kind =
+    plan.kind === "generated" ||
+    (plan.kind !== "custom" && sessions.some((session) => session.generated))
+      ? "generated"
+      : "custom";
+  const generationSeed =
+    kind === "generated"
+      ? normalizeGenerationSeed(
+          plan.generationSeed ||
+            sessions.find((session) => session && session.generationSeed)
+              ?.generationSeed ||
+            legacyGenerationSeed(sessions),
+        )
+      : null;
+  let changed = !Array.isArray(plan.sessions);
+  const normalizedSessions = sessions
+    .filter((session) => session && typeof session === "object")
+    .map((session) => {
+      const origin =
+        session.origin || (kind === "generated" ? "generated" : "manual");
+      const customized = Boolean(session.customized);
+      const nextGenerationSeed =
+        origin === "generated"
+          ? normalizeGenerationSeed(session.generationSeed || generationSeed)
+          : undefined;
+      if (
+        session.origin === origin &&
+        Object.prototype.hasOwnProperty.call(session, "customized") &&
+        Boolean(session.customized) === customized &&
+        (origin !== "generated" ||
+          session.generationSeed === nextGenerationSeed)
+      ) {
+        return session;
+      }
+      changed = true;
+      const nextSession = { ...session, origin, customized };
+      if (nextGenerationSeed) {
+        nextSession.generationSeed = nextGenerationSeed;
+      }
+      return nextSession;
+    });
+
+  if (normalizedSessions.length !== sessions.length) changed = true;
+  const id = String(plan.id || `canonical-plan-${index + 1}`);
+  const title = String(
+    plan.title ||
+      (kind === "generated" ? "Generated programme" : "Custom programme"),
+  );
+  const generatorOptions =
+    kind === "generated"
+      ? normalizeGeneratorOptions(
+          plan.generatorOptions || generatorOptionsFromSessions(sessions),
+        )
+      : null;
+  const createdAt =
+    plan.createdAt || planTimestamp(normalizedSessions, "createdAt", "first");
+  const updatedAt =
+    plan.updatedAt || planTimestamp(normalizedSessions, "updatedAt", "last");
+
+  if (
+    plan.id !== id ||
+    plan.title !== title ||
+    plan.kind !== kind ||
+    !sameGeneratorOptions(plan.generatorOptions, generatorOptions) ||
+    plan.generationSeed !== generationSeed ||
+    !plan.createdAt ||
+    !plan.updatedAt
+  ) {
+    changed = true;
+  }
+
+  if (!changed) return { plan, changed: false };
+  return {
+    plan: {
+      ...plan,
+      id,
+      title,
+      kind,
+      generatorOptions,
+      generationSeed,
+      createdAt,
+      updatedAt,
+      sessions: normalizedSessions,
+    },
+    changed: true,
+  };
+}
+
+function sameGeneratorOptions(left, right) {
+  if (left == null || right == null) return left === right;
+  return (
+    left.goal === right.goal &&
+    left.weakness === right.weakness &&
+    Number(left.daysPerWeek) === Number(right.daysPerWeek) &&
+    Number(left.duration) === Number(right.duration) &&
+    (left.generationSeed || null) === (right.generationSeed || null)
+  );
+}
+
+function groupLegacySessionsIntoPlans(sessions) {
+  if (!Array.isArray(sessions) || !sessions.length) return [];
+  const entries = [];
+  let currentGeneratedGroup = null;
+  let manualEntry = null;
+
+  sessions.forEach((session, index) => {
+    if (!session || typeof session !== "object") return;
+
+    if (!session.generated) {
+      if (!manualEntry) {
+        manualEntry = { kind: "manual", order: index, sessions: [] };
+        entries.push(manualEntry);
+      }
+      manualEntry.sessions.push(session);
+      currentGeneratedGroup = null;
+      return;
+    }
+
+    const key = legacyGeneratorKey(session);
+    const slot = `${parsePlanWeek(session)}:${parsePlanDay(session)}`;
+    if (
+      !currentGeneratedGroup ||
+      currentGeneratedGroup.key !== key ||
+      currentGeneratedGroup.slots.has(slot)
+    ) {
+      currentGeneratedGroup = {
+        kind: "generated",
+        key,
+        order: index,
+        sessions: [],
+        slots: new Set(),
+      };
+      entries.push(currentGeneratedGroup);
+    }
+    currentGeneratedGroup.sessions.push(session);
+    currentGeneratedGroup.slots.add(slot);
+  });
+
+  return entries
+    .sort((left, right) => left.order - right.order)
+    .map((entry, index) =>
+      entry.kind === "generated"
+        ? legacyGeneratedPlan(entry.sessions, index)
+        : legacyManualPlan(entry.sessions, index),
+    );
+}
+
+function legacyGeneratedPlan(sessions, index) {
+  const first = sessions[0] || {};
+  const goal = GOAL_LABELS[first.sourceGoal] ? first.sourceGoal : "balanced";
+  const weakness = WEAKNESS_LABELS[first.sourceWeakness]
+    ? first.sourceWeakness
+    : "squat";
+  const generationSeed = normalizeGenerationSeed(
+    first.generationSeed || legacyGenerationSeed(sessions),
+  );
+  const normalizedSessions = sessions.map((session) => ({
+    ...session,
+    origin: "generated",
+    customized: Boolean(session.customized),
+    generationSeed: normalizeGenerationSeed(
+      session.generationSeed || generationSeed,
+    ),
+  }));
+  const id = `legacy-generated-plan-${index + 1}-${safeLegacyId(first.id)}`;
+
+  return {
+    id,
+    title: `Generated: ${GOAL_LABELS[goal]}`,
+    kind: "generated",
+    generatorOptions: normalizeGeneratorOptions({
+      goal,
+      weakness,
+      daysPerWeek: Math.max(...sessions.map(parsePlanDay), 3),
+      duration: Number(first.duration) || 60,
+      generationSeed,
+    }),
+    generationSeed,
+    createdAt: planTimestamp(normalizedSessions, "createdAt", "first"),
+    updatedAt: planTimestamp(normalizedSessions, "updatedAt", "last"),
+    sessions: normalizedSessions,
+  };
+}
+
+function legacyManualPlan(sessions, index) {
+  const first = sessions[0] || {};
+  const normalizedSessions = sessions.map((session) => ({
+    ...session,
+    origin: session.origin || "manual",
+    customized: Boolean(session.customized),
+  }));
+  return {
+    id: `legacy-custom-plan-${index + 1}-${safeLegacyId(first.id)}`,
+    title: "Custom programme",
+    kind: "custom",
+    generatorOptions: null,
+    generationSeed: null,
+    createdAt: planTimestamp(normalizedSessions, "createdAt", "first"),
+    updatedAt: planTimestamp(normalizedSessions, "updatedAt", "last"),
+    sessions: normalizedSessions,
+  };
+}
+
+function generatorOptionsFromSessions(sessions) {
+  const first = sessions.find((session) => session && session.generated) || {};
+  return {
+    goal: first.sourceGoal,
+    weakness: first.sourceWeakness,
+    daysPerWeek: Math.max(...sessions.map(parsePlanDay), 3),
+    duration: Number(first.duration) || 60,
+    generationSeed: first.generationSeed,
+  };
+}
+
+function legacyGeneratorKey(session) {
+  return [
+    session.sourceGoal || "balanced",
+    session.sourceWeakness || "squat",
+    Number(session.duration) || 60,
+  ].join("|");
+}
+
+function legacyGenerationSeed(sessions) {
+  const signature = sessions
+    .map((session) =>
+      [session && session.id, session && session.title, session && session.wod]
+        .flat()
+        .join("|"),
+    )
+    .join("::");
+  return `legacy-${stableHash(signature).toString(36)}`;
+}
+
+function safeLegacyId(value) {
+  const safe = String(value || "session")
+    .replace(/[^a-z0-9_-]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  return safe || "session";
+}
+
+function planTimestamp(sessions, field, position) {
+  const timestamps = sessions
+    .map((session) => session && (session[field] || session.createdAt))
+    .filter(Boolean)
+    .sort();
+  if (!timestamps.length) return "1970-01-01T00:00:00.000Z";
+  return position === "last"
+    ? timestamps[timestamps.length - 1]
+    : timestamps[0];
+}
+
+function profileForGeneration(profile) {
+  const fallback = cloneDefaultProfile();
+  return {
+    ...fallback,
+    ...(profile || {}),
+    maxes: { ...fallback.maxes, ...((profile && profile.maxes) || {}) },
+    benchmarks: {
+      ...fallback.benchmarks,
+      ...((profile && profile.benchmarks) || {}),
+    },
+  };
 }
 
 function migrateGeneratedProgrammePlans(plans, profile) {
@@ -1759,6 +2163,7 @@ function migrateGeneratedProgrammePlans(plans, profile) {
     if (
       !plan ||
       !plan.generated ||
+      plan.customized ||
       plan.wodSchemaVersion === WOD_SCHEMA_VERSION
     )
       return plan;
@@ -1780,6 +2185,12 @@ function migrateGeneratedProgrammePlans(plans, profile) {
       week,
       day,
       () => plan.id || createId(),
+      plan.generationSeed
+        ? {
+            seed: normalizeGenerationSeed(plan.generationSeed),
+            usedWodSignatures: new Set(),
+          }
+        : undefined,
     );
 
     return {
@@ -1807,22 +2218,39 @@ function parsePlanDay(plan) {
 }
 
 function normalizeGeneratorOptions(options) {
-  const goal = GOAL_LABELS[options.goal] ? options.goal : "balanced";
-  const weakness = WEAKNESS_LABELS[options.weakness]
-    ? options.weakness
-    : "squat";
-  const daysPerWeek = clamp(Math.round(Number(options.daysPerWeek) || 4), 3, 5);
+  const source = options || {};
+  const goal = GOAL_LABELS[source.goal] ? source.goal : "balanced";
+  const weakness = WEAKNESS_LABELS[source.weakness] ? source.weakness : "squat";
+  const daysPerWeek = clamp(Math.round(Number(source.daysPerWeek) || 4), 3, 5);
   const duration = clamp(
-    roundToNearest(Number(options.duration) || 60, 5),
+    roundToNearest(Number(source.duration) || 60, 5),
     45,
     60,
   );
-  return { goal, weakness, daysPerWeek, duration };
+  const normalized = { goal, weakness, daysPerWeek, duration };
+  if (source.generationSeed) {
+    normalized.generationSeed = normalizeGenerationSeed(source.generationSeed);
+  }
+  return normalized;
 }
 
-function buildGeneratedSession(options, profile, week, day, idFactory) {
+function buildGeneratedSession(
+  options,
+  profile,
+  week,
+  day,
+  idFactory,
+  generationContext,
+) {
   if (options.goal === "mastersRxOpen") {
-    return buildMastersRxOpenSession(options, profile, week, day, idFactory);
+    return buildMastersRxOpenSession(
+      options,
+      profile,
+      week,
+      day,
+      idFactory,
+      generationContext,
+    );
   }
 
   const phase = getGeneratedWeekPhase(week, options.goal);
@@ -1832,7 +2260,22 @@ function buildGeneratedSession(options, profile, week, day, idFactory) {
     options.goal,
   );
 
-  return {
+  const wod = claimUniqueGeneratedWod(
+    (collisionSalt) =>
+      generatedWodItems(
+        options.goal,
+        options.weakness,
+        day,
+        week,
+        profile,
+        phase,
+        segmentMinutes.wod,
+        generationVariation(generationContext, week, day, collisionSalt),
+      ),
+    generationContext,
+  );
+
+  const session = {
     id: idFactory(`generated-${options.goal}-w${week}-d${day}`),
     week,
     title: `W${week} D${day}: ${title}`,
@@ -1846,15 +2289,7 @@ function buildGeneratedSession(options, profile, week, day, idFactory) {
       profile,
       phase,
     ),
-    wod: generatedWodItems(
-      options.goal,
-      options.weakness,
-      day,
-      week,
-      profile,
-      phase,
-      segmentMinutes.wod,
-    ),
+    wod,
     mobility: generatedMobility(options.weakness),
     duration: options.duration,
     segmentMinutes,
@@ -1865,6 +2300,84 @@ function buildGeneratedSession(options, profile, week, day, idFactory) {
     sourceWeakness: options.weakness,
     createdAt: new Date().toISOString(),
   };
+  if (generationContext && generationContext.seed) {
+    session.generationSeed = generationContext.seed;
+    session.origin = "generated";
+    session.customized = false;
+  }
+  return session;
+}
+
+function claimUniqueGeneratedWod(factory, generationContext) {
+  const signatures = generationContext && generationContext.usedWodSignatures;
+  if (!(signatures instanceof Set)) return factory(0);
+
+  for (let collisionSalt = 0; collisionSalt < 64; collisionSalt += 1) {
+    const wod = factory(collisionSalt);
+    const signature = normalizedWodSignature(wod);
+    if (signatures.has(signature)) continue;
+    signatures.add(signature);
+    return wod;
+  }
+
+  throw new Error("Could not create a unique workout for this programme.");
+}
+
+function normalizedWodSignature(wod) {
+  const workout = Array.isArray(wod) ? wod[0] : wod;
+  return String(workout || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function generationVariation(generationContext, week, day, collisionSalt) {
+  if (
+    !generationContext ||
+    !generationContext.seed ||
+    generationContext.variationEnabled === false
+  )
+    return null;
+  const seed = normalizeGenerationSeed(generationContext.seed);
+  return {
+    seed,
+    week,
+    day,
+    collisionSalt,
+    formatOffset: seededIndex(
+      `${seed}|format|day-${day}|collision-${collisionSalt}`,
+      6,
+    ),
+  };
+}
+
+function variationOffset(variation, label, length) {
+  if (!variation || !variation.seed || length <= 0) return 0;
+  return seededIndex(
+    [
+      variation.seed,
+      label,
+      variation.week,
+      variation.day,
+      variation.collisionSalt,
+    ].join("|"),
+    length,
+  );
+}
+
+function seededIndex(seed, length) {
+  if (!Number.isFinite(length) || length <= 0) return 0;
+  return stableHash(seed) % length;
+}
+
+function stableHash(value) {
+  let hash = 2166136261;
+  const text = String(value || "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
 }
 
 function getGeneratedWeekPhase(week, goal) {
@@ -2096,6 +2609,7 @@ function generatedWodItems(
   profile,
   phase,
   wodMinutes,
+  variation,
 ) {
   const movement = generatedWodMovementPool(
     goal,
@@ -2104,9 +2618,10 @@ function generatedWodItems(
     week,
     profile,
     phase,
+    variation,
   );
   const cap = clamp(Math.round(Number(wodMinutes) || 12), 8, 24);
-  const pattern = buildWodPattern(week, goal, day, cap, movement);
+  const pattern = buildWodPattern(week, goal, day, cap, movement, variation);
 
   return [
     pattern.workout,
@@ -2115,7 +2630,7 @@ function generatedWodItems(
   ];
 }
 
-function buildWodPattern(week, goal, day, cap, movement) {
+function buildWodPattern(week, goal, day, cap, movement, variation) {
   const intervals = Math.max(3, Math.floor(cap / 3));
   const repeatSets = Math.max(3, Math.floor(cap / 4));
   const rounds = cap >= 16 ? 5 : cap >= 13 ? 4 : 3;
@@ -2168,6 +2683,15 @@ function buildWodPattern(week, goal, day, cap, movement) {
     },
   };
 
+  const variablePatternWeeks = [1, 2, 3, 5, 6, 7];
+  const variableIndex = variablePatternWeeks.indexOf(week);
+  if (variation && variableIndex >= 0) {
+    return patterns[
+      variablePatternWeeks[
+        (variableIndex + variation.formatOffset) % variablePatternWeeks.length
+      ]
+    ];
+  }
   return patterns[week];
 }
 
@@ -2303,7 +2827,15 @@ function formatTimerResult(result) {
     : `${mode} ${elapsed}`;
 }
 
-function generatedWodMovementPool(goal, weakness, day, week, profile) {
+function generatedWodMovementPool(
+  goal,
+  weakness,
+  day,
+  week,
+  profile,
+  _phase,
+  variation,
+) {
   const cleanLoad = kg(
     profile.maxes.cleanJerk,
     goal === "stronger" ? 0.65 : 0.55,
@@ -2320,7 +2852,15 @@ function generatedWodMovementPool(goal, weakness, day, week, profile) {
     goal === "endurance"
       ? ["row", "bike", "run", "ski", "shuttle run"]
       : ["row", "bike", "run", "double unders", "ski"];
-  const mono = pick(monoOptions, week + day);
+  const mono =
+    weakness === "rowing" && day === 2
+      ? "row"
+      : pick(
+          monoOptions,
+          week +
+            day +
+            variationOffset(variation, "monostructural", monoOptions.length),
+        );
   const gymOptions = {
     stronger: [
       "8 toes-to-bar",
@@ -2382,14 +2922,32 @@ function generatedWodMovementPool(goal, weakness, day, week, profile) {
     ],
   };
 
-  const gym = pick(gymOptions[goal] || gymOptions.balanced, week + day);
+  const selectedGymOptions = gymOptions[goal] || gymOptions.balanced;
+  const selectedWeightOptions = weightOptions[goal] || weightOptions.balanced;
+  const simpleGymOptions = [
+    "8 burpees",
+    "10 sit-ups",
+    "10 push-ups",
+    "12 air squats",
+    "8 ring rows",
+  ];
+  const gym = pick(
+    selectedGymOptions,
+    week +
+      day +
+      variationOffset(variation, "gymnastics", selectedGymOptions.length),
+  );
   const weight = pick(
-    weightOptions[goal] || weightOptions.balanced,
-    week + day * 2,
+    selectedWeightOptions,
+    week +
+      day * 2 +
+      variationOffset(variation, "weighted", selectedWeightOptions.length),
   );
   const simpleGym = pick(
-    ["8 burpees", "10 sit-ups", "10 push-ups", "12 air squats", "8 ring rows"],
-    week + day * 3,
+    simpleGymOptions,
+    week +
+      day * 3 +
+      variationOffset(variation, "simple-gym", simpleGymOptions.length),
   );
   const weaknessMove = weaknessWodMovement(weakness, week);
 
@@ -2603,7 +3161,14 @@ function weaknessMobility(weakness) {
   return mobility[weakness];
 }
 
-function buildMastersRxOpenSession(options, profile, week, day, idFactory) {
+function buildMastersRxOpenSession(
+  options,
+  profile,
+  week,
+  day,
+  idFactory,
+  generationContext,
+) {
   const phase = getGeneratedWeekPhase(week, "mastersRxOpen");
   const title = generatedDayTitle("mastersRxOpen", day);
   const segmentMinutes = getGeneratedSegmentMinutes(
@@ -2612,15 +3177,26 @@ function buildMastersRxOpenSession(options, profile, week, day, idFactory) {
   );
   const templates = mastersRxSessionTemplates(profile, week, phase);
   const selected = templates[day] || templates[1];
+  const wod = claimUniqueGeneratedWod(
+    (collisionSalt) =>
+      mastersRxWod(
+        week,
+        day,
+        profile,
+        wallBallVolumeForWeek(week),
+        generationVariation(generationContext, week, day, collisionSalt),
+      ),
+    generationContext,
+  );
 
-  return {
+  const session = {
     id: idFactory(`generated-masters-rx-open-w${week}-d${day}`),
     week,
     title: `W${week} D${day}: ${title}`,
     focus: `Men Masters 35-39 RX prep. ${phase.note} Build Open standards without failed skill reps.`,
     warmup: selected.warmup,
     strength: selected.strength,
-    wod: selected.wod,
+    wod,
     mobility: selected.mobility,
     addOns: mastersRxAddOns(week, day),
     duration: options.duration,
@@ -2632,6 +3208,25 @@ function buildMastersRxOpenSession(options, profile, week, day, idFactory) {
     sourceWeakness: options.weakness,
     createdAt: new Date().toISOString(),
   };
+  if (generationContext && generationContext.seed) {
+    session.generationSeed = generationContext.seed;
+    session.origin = "generated";
+    session.customized = false;
+  }
+  return session;
+}
+
+function wallBallVolumeForWeek(week) {
+  return {
+    1: 80,
+    2: 100,
+    3: 120,
+    4: 70,
+    5: 110,
+    6: 130,
+    7: 150,
+    8: 100,
+  }[week];
 }
 
 function mastersRxSessionTemplates(profile, week, phase) {
@@ -2647,16 +3242,7 @@ function mastersRxSessionTemplates(profile, week, phase) {
     7: "test 8 min quality reps",
     8: "benchmark set or transition max",
   }[week];
-  const wallBallVolume = {
-    1: 80,
-    2: 100,
-    3: 120,
-    4: 70,
-    5: 110,
-    6: 130,
-    7: 150,
-    8: 100,
-  }[week];
+  const wallBallVolume = wallBallVolumeForWeek(week);
 
   return {
     1: {
@@ -2745,7 +3331,7 @@ function mastersRxSessionTemplates(profile, week, phase) {
   };
 }
 
-function mastersRxWod(week, day, profile, wallBallVolume) {
+function mastersRxWod(week, day, profile, wallBallVolume, variation) {
   const cleanLoad = kg(profile.maxes.cleanJerk, week >= 6 ? 0.6 : 0.52);
   const lightCleanLoad = kg(profile.maxes.cleanJerk, week >= 6 ? 0.55 : 0.5);
   const thrusterLoad =
@@ -2964,8 +3550,19 @@ function mastersRxWod(week, day, profile, wallBallVolume) {
       ],
     },
   };
-  const dayPatterns = patterns[day] || patterns[1];
-  return dayPatterns[week] || dayPatterns[1];
+  const variedDay = variation
+    ? ((day - 1 + variationOffset(variation, "masters-movements", 5)) % 5) + 1
+    : day;
+  const dayPatterns = patterns[variedDay] || patterns[1];
+  const variablePatternWeeks = [1, 2, 3, 5, 6, 7];
+  const variableIndex = variablePatternWeeks.indexOf(week);
+  const variedWeek =
+    variation && variableIndex >= 0
+      ? variablePatternWeeks[
+          (variableIndex + variation.formatOffset) % variablePatternWeeks.length
+        ]
+      : week;
+  return dayPatterns[variedWeek] || dayPatterns[1];
 }
 
 function mastersRxAddOns(week, day) {
@@ -3714,6 +4311,7 @@ const FORGE_HOUR_API = {
   GOAL_LABELS,
   MASTERS_RX_TARGETS,
   MOVEMENT_LIBRARY,
+  PLAN_SCHEMA_VERSION,
   PR_METRICS,
   READINESS_LABELS,
   WEEK_META,
@@ -3723,6 +4321,7 @@ const FORGE_HOUR_API = {
   buildSession,
   clamp,
   cloneDefaultProfile,
+  createGenerationSeed,
   createId,
   customPlanSegments,
   filterMovementLibrary,
@@ -3736,6 +4335,7 @@ const FORGE_HOUR_API = {
   inferWorkoutTimer,
   isBetterPr,
   kg,
+  migratePlanState,
   migrateGeneratedProgrammePlans,
   normalizePrValue,
   parseTimeToSeconds,
@@ -3743,6 +4343,9 @@ const FORGE_HOUR_API = {
   positiveNumber,
   registerServiceWorker,
   roundToNearest,
+  selectActivePlan,
+  selectActiveWeekSessions,
+  selectPlanWeekSessions,
   splitLines,
   trimNumber,
   valueFromPath,
