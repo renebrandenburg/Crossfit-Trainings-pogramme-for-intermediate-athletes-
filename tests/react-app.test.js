@@ -562,6 +562,57 @@ test("React Testing Library keeps cleared time benchmarks as test-needed values"
   }
 });
 
+test("React Testing Library generates a level-aware bar muscle-up programme", async () => {
+  const { cleanup, fireEvent, ui, waitFor } = mountApp();
+
+  try {
+    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    fireEvent.change(ui.getByLabelText("Main goal"), {
+      target: { value: "barMuscleUp" },
+    });
+
+    assert.equal(ui.queryByLabelText("Biggest weakness"), null);
+    const level = ui.getByLabelText("Current bar muscle-up level");
+    assert.equal(level.value, "highPull");
+    fireEvent.change(level, { target: { value: "assisted" } });
+    fireEvent.click(
+      ui.getByRole("button", { name: "Generate 8-week programme" }),
+    );
+
+    await waitFor(() =>
+      assert.ok(
+        ui.getAllByRole("heading", { name: /High pull \+ kip timing/ })
+          .length >= 8,
+      ),
+    );
+    assert.ok(ui.getAllByText(/Bar muscle-up focus/).length > 0);
+    assert.ok(ui.getAllByText(/Bar muscle-up support day/).length > 0);
+
+    const saved = JSON.parse(
+      window.localStorage.getItem("forge-hour-state-v1"),
+    );
+    const activePlan = saved.plans.find(
+      (plan) => plan.id === saved.activePlanId,
+    );
+    assert.equal(activePlan.title, "Get my first bar muscle-up programme");
+    assert.deepEqual(activePlan.generatorOptions, {
+      goal: "barMuscleUp",
+      daysPerWeek: 4,
+      weakness: "muscleup",
+      duration: 60,
+      barMuscleUpLevel: "assisted",
+    });
+    assert.equal(activePlan.sessions.length, 32);
+    assert.ok(
+      activePlan.sessions.every(
+        (session) => session.sourceBarMuscleUpLevel === "assisted",
+      ),
+    );
+  } finally {
+    cleanup();
+  }
+});
+
 test("React Testing Library generates a Masters 35-39 RX Open prep programme", async () => {
   const { cleanup, fireEvent, ui, waitFor } = mountApp();
 

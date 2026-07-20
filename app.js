@@ -249,8 +249,15 @@ const GOAL_LABELS = {
   stronger: "Get stronger",
   endurance: "More endurance",
   gymnastics: "Better gymnastics",
+  barMuscleUp: "Get my first bar muscle-up",
   balanced: "All-round CrossFit",
   mastersRxOpen: "Masters 35-39 RX / Open Prep",
+};
+
+const BAR_MUSCLE_UP_LEVELS = {
+  highPull: "Chest-to-bar / high pull, no turnover",
+  assisted: "Jumping or band-assisted reps",
+  singles: "Occasional unassisted singles",
 };
 
 const DIVISION_LABELS = {
@@ -2735,6 +2742,7 @@ function sameGeneratorOptions(left, right) {
   return (
     left.goal === right.goal &&
     left.weakness === right.weakness &&
+    (left.barMuscleUpLevel || null) === (right.barMuscleUpLevel || null) &&
     Number(left.daysPerWeek) === Number(right.daysPerWeek) &&
     Number(left.duration) === Number(right.duration) &&
     (left.generationSeed || null) === (right.generationSeed || null)
@@ -2815,6 +2823,7 @@ function legacyGeneratedPlan(sessions, index) {
     generatorOptions: normalizeGeneratorOptions({
       goal,
       weakness,
+      barMuscleUpLevel: first.sourceBarMuscleUpLevel,
       daysPerWeek: Math.max(...sessions.map(parsePlanDay), 3),
       duration: Number(first.duration) || 60,
       generationSeed,
@@ -2850,6 +2859,7 @@ function generatorOptionsFromSessions(sessions) {
   return {
     goal: first.sourceGoal,
     weakness: first.sourceWeakness,
+    barMuscleUpLevel: first.sourceBarMuscleUpLevel,
     daysPerWeek: Math.max(...sessions.map(parsePlanDay), 3),
     duration: Number(first.duration) || 60,
     generationSeed: first.generationSeed,
@@ -2860,6 +2870,7 @@ function legacyGeneratorKey(session) {
   return [
     session.sourceGoal || "balanced",
     session.sourceWeakness || "squat",
+    session.sourceBarMuscleUpLevel || "",
     Number(session.duration) || 60,
   ].join("|");
 }
@@ -2938,7 +2949,13 @@ function migrateGeneratedProgrammePlans(plans, profile) {
       60,
     );
     const replacement = buildGeneratedSession(
-      { goal, weakness, daysPerWeek: day, duration },
+      normalizeGeneratorOptions({
+        goal,
+        weakness,
+        barMuscleUpLevel: plan.sourceBarMuscleUpLevel,
+        daysPerWeek: day,
+        duration,
+      }),
       profile,
       week,
       day,
@@ -2982,7 +2999,12 @@ function parsePlanDay(plan) {
 function normalizeGeneratorOptions(options) {
   const source = options || {};
   const goal = GOAL_LABELS[source.goal] ? source.goal : "balanced";
-  const weakness = WEAKNESS_LABELS[source.weakness] ? source.weakness : "squat";
+  const weakness =
+    goal === "barMuscleUp"
+      ? "muscleup"
+      : WEAKNESS_LABELS[source.weakness]
+        ? source.weakness
+        : "squat";
   const daysPerWeek = clamp(Math.round(Number(source.daysPerWeek) || 4), 3, 5);
   const duration = clamp(
     roundToNearest(Number(source.duration) || 60, 5),
@@ -2990,6 +3012,11 @@ function normalizeGeneratorOptions(options) {
     60,
   );
   const normalized = { goal, weakness, daysPerWeek, duration };
+  if (goal === "barMuscleUp") {
+    normalized.barMuscleUpLevel = BAR_MUSCLE_UP_LEVELS[source.barMuscleUpLevel]
+      ? source.barMuscleUpLevel
+      : "highPull";
+  }
   if (source.generationSeed) {
     normalized.generationSeed = normalizeGenerationSeed(source.generationSeed);
   }
@@ -3006,6 +3033,16 @@ function buildGeneratedSession(
 ) {
   if (options.goal === "mastersRxOpen") {
     return buildMastersRxOpenSession(
+      options,
+      profile,
+      week,
+      day,
+      idFactory,
+      generationContext,
+    );
+  }
+  if (options.goal === "barMuscleUp") {
+    return buildBarMuscleUpSession(
       options,
       profile,
       week,
@@ -3068,6 +3105,224 @@ function buildGeneratedSession(
     session.customized = false;
   }
   return session;
+}
+
+function buildBarMuscleUpSession(
+  options,
+  profile,
+  week,
+  day,
+  idFactory,
+  generationContext,
+) {
+  const phase = getGeneratedWeekPhase(week, "gymnastics");
+  const segmentMinutes = getGeneratedSegmentMinutes(
+    options.duration,
+    "gymnastics",
+  );
+  const focused = day <= 3;
+  const workoutGoal = focused
+    ? "gymnastics"
+    : day === 4
+      ? "balanced"
+      : "endurance";
+  const workoutWeakness = focused
+    ? "muscleup"
+    : day === 4
+      ? "olympic"
+      : "rowing";
+  const workoutDefinition = claimUniqueGeneratedWod((collisionSalt) => {
+    const definition = generatedWodItems(
+      workoutGoal,
+      workoutWeakness,
+      day,
+      week,
+      profile,
+      phase,
+      segmentMinutes.wod,
+      generationVariation(generationContext, week, day, collisionSalt),
+      focused ? options.barMuscleUpLevel : undefined,
+    );
+    return options.barMuscleUpLevel === "singles"
+      ? capBarMuscleUpWorkoutReps(definition, 3)
+      : definition;
+  }, generationContext);
+  const titles = [
+    "High pull + kip timing",
+    "Turnover + straight-bar strength",
+    "Fresh attempts + skill transfer",
+    "Olympic lifting + lower body",
+    "Engine + shoulder recovery",
+  ];
+  const session = {
+    id: idFactory(`generated-bar-muscle-up-w${week}-d${day}`),
+    week,
+    title: `W${week} D${day}: ${titles[day - 1]}`,
+    focus: focused
+      ? `Bar muscle-up focus (${BAR_MUSCLE_UP_LEVELS[options.barMuscleUpLevel].toLowerCase()}). ${barMuscleUpPhaseNote(week)}`
+      : `Bar muscle-up support day. Build ${day === 4 ? "leg and Olympic-lifting strength" : "engine capacity while restoring the shoulders"}.`,
+    warmup: barMuscleUpWarmup(day),
+    strength: barMuscleUpStrengthItems(
+      options.barMuscleUpLevel,
+      week,
+      day,
+      profile,
+      phase,
+    ),
+    workoutDefinition,
+    mobility: barMuscleUpMobility(day),
+    duration: options.duration,
+    segmentMinutes,
+    intensity: phase.intensity,
+    generated: true,
+    wodSchemaVersion: WOD_SCHEMA_VERSION,
+    sourceGoal: options.goal,
+    sourceWeakness: "muscleup",
+    sourceBarMuscleUpLevel: options.barMuscleUpLevel,
+    createdAt: new Date().toISOString(),
+  };
+  if (generationContext && generationContext.seed) {
+    session.generationSeed = generationContext.seed;
+    session.origin = "generated";
+    session.customized = false;
+  }
+  return session;
+}
+
+function barMuscleUpPhaseNote(week) {
+  return {
+    1: "Establish strong shapes and repeatable high pulls.",
+    2: "Add controlled volume without grinding repetitions.",
+    3: "Increase pull height and make the turnover more specific.",
+    4: "Deload: halve the volume and finish every drill fresh.",
+    5: "Transfer the stronger pull into faster turnovers.",
+    6: "Take a few fresh attempts with full rest and no repeated misses.",
+    7: "Peak with low-volume, high-quality attempts.",
+    8: "Test one clean repetition or the best repeatable progression.",
+  }[week];
+}
+
+function barMuscleUpWarmup(day) {
+  if (day > 3) {
+    return [
+      "5 min easy bike, row, or jog with nasal breathing",
+      "Dynamic hips, ankles, T-spine, and shoulders",
+      day === 4
+        ? "Empty-bar Olympic-lifting rehearsal"
+        : "Scapular control and light band pull-aparts",
+      "Core brace and easy movement preparation",
+    ];
+  }
+  return [
+    "3-5 min easy machine work",
+    "Bar muscle-up focus: wrists, lats, pecs, and thoracic extension",
+    "2 rounds: 6 scap pull-ups, 6 hollow rocks, 6 arch rocks",
+    day === 1
+      ? "Three progressive kip swings and high-pull rehearsals"
+      : day === 2
+        ? "Low-bar foot-assisted turnover rehearsal"
+        : "Two low-effort practice attempts at the planned scale",
+  ];
+}
+
+function barMuscleUpStrengthItems(level, week, day, profile, phase) {
+  if (day === 4) {
+    return [
+      `Power clean 6x2 at ${percent(phase.oly)} (${kg(profile.maxes.cleanJerk, phase.oly)})`,
+      `Front squat ${phase.reps} at ${percent(phase.front)} (${kg(profile.maxes.frontSquat, phase.front)})`,
+    ];
+  }
+  if (day === 5) {
+    return [
+      "Zone 2 engine: 4x4 min smooth row, bike, or run; 1 min easy between",
+      "Shoulder support: 3 sets of 12 face pulls, 10 external rotations, and 30 sec side plank per side",
+    ];
+  }
+
+  const deload = week === 4;
+  const testWeek = week === 8;
+  const sets = deload ? 2 : week >= 5 ? 5 : 4;
+  const levelWork = {
+    highPull: {
+      1: `${sets} sets: 2-4 strict chest-to-bar or band-assisted high pulls + 3 explosive hip-to-bar pulls; rest 2:00`,
+      2: `${sets} sets: 3 low-bar foot-assisted turnovers + 3 deep straight-bar dips + 1 slow transition negative`,
+      3: testWeek
+        ? "Test: take up to 5 fully rested bar muscle-up attempts; after two misses, return to clean assisted turnovers"
+        : week >= 6
+          ? "Fresh skill transfer: 4-6 single attempts with 2:00-3:00 rest; stop after two misses, then complete 3 clean assisted turnovers"
+          : `${sets} rounds: 2 high pulls + 2 fast low-bar turnovers + 20 sec hollow/arch tension`,
+    },
+    assisted: {
+      1: `${sets} sets: 3 strict chest-to-bar pulls + 3 hip-to-bar pulls using only the assistance needed; rest 2:00`,
+      2: `${sets} sets: 2-4 banded or jumping bar muscle-ups + 3 deep straight-bar dips; reduce assistance only when turnover speed stays sharp`,
+      3: testWeek
+        ? "Test: take up to 5 fully rested unassisted attempts, then record the lightest assistance that produces three clean reps"
+        : week >= 5
+          ? "Fresh transfer: 3-5 unassisted single attempts with full rest, then 3x2 clean assisted reps; stop after two misses"
+          : `${sets} rounds: 3 assisted full transitions + 1 slow negative + 20 sec hollow hold`,
+    },
+    singles: {
+      1: `${sets} sets: 1-3 unbroken bar muscle-ups or quality singles; rest 2:00 and keep one rep in reserve`,
+      2: `${sets} sets: 2 fast low-bar turnovers + 3 deep straight-bar dips + 1 controlled bar muscle-up negative`,
+      3: testWeek
+        ? "Test: 8 min to accumulate quality bar muscle-ups without misses; record total reps and best unbroken set"
+        : week >= 5
+          ? "Skill density: every 2:00 for 6 rounds, complete 1-3 bar muscle-ups; stop each set before form changes"
+          : `${sets} rounds: 1-2 bar muscle-ups + 3 chest-to-bar pull-ups + 20 sec hollow/arch tension`,
+    },
+  }[level];
+  return [
+    `Bar muscle-up focus — ${day === 1 ? "pull and kip" : day === 2 ? "turnover" : "attempts and transfer"}: ${levelWork[day]}`,
+    deload
+      ? "Deload rule: use roughly half the normal repetitions and finish fresh"
+      : "Quality rule: no failed volume; end the drill when timing or shoulder position changes",
+  ];
+}
+
+function barMuscleUpMobility(day) {
+  return [
+    day <= 3
+      ? "Lats, pecs, triceps, forearms, and gentle shoulder extension"
+      : "Easy lats, pecs, hip flexors, and thoracic rotation",
+    "2 min nasal breathing to downshift",
+    "Log the best successful progression and any misses or discomfort",
+  ];
+}
+
+function capBarMuscleUpWorkoutReps(definition, maximumReps) {
+  const capExercise = (exercise) => {
+    if (
+      exercise?.movement !== "bar muscle-ups" ||
+      exercise.target?.type !== "reps"
+    ) {
+      return exercise;
+    }
+    return {
+      ...exercise,
+      target: {
+        ...exercise.target,
+        value: Math.min(maximumReps, Number(exercise.target.value) || 1),
+      },
+    };
+  };
+  const capExercises = (exercises) => arrayOrEmpty(exercises).map(capExercise);
+  return {
+    ...definition,
+    buyIn: capExercises(definition.buyIn),
+    exercises: capExercises(definition.exercises),
+    afterEachRound: capExercises(definition.afterEachRound),
+    cashOut: capExercises(definition.cashOut),
+    format:
+      definition.format?.type === "emom"
+        ? {
+            ...definition.format,
+            stations: definition.format.stations.map((station) => ({
+              ...station,
+              exercises: capExercises(station.exercises),
+            })),
+          }
+        : definition.format,
+  };
 }
 
 function claimUniqueGeneratedWod(factory, generationContext) {
@@ -3423,6 +3678,7 @@ function generatedWodItems(
   phase,
   wodMinutes,
   variation,
+  barMuscleUpLevel,
 ) {
   const movement = generatedWodMovementPool(
     goal,
@@ -3432,6 +3688,7 @@ function generatedWodItems(
     profile,
     phase,
     variation,
+    barMuscleUpLevel,
   );
   const cap = clamp(Math.round(Number(wodMinutes) || 12), 8, 24);
   return buildWodPattern(week, goal, day, cap, movement, variation, phase);
@@ -3777,6 +4034,7 @@ function generatedWodMovementPool(
   profile,
   _phase,
   variation,
+  barMuscleUpLevel,
 ) {
   const cleanLoad = kg(
     profile.maxes.cleanJerk,
@@ -3899,7 +4157,7 @@ function generatedWodMovementPool(
       day * 3 +
       variationOffset(variation, "simple-gym", simpleGymOptions.length),
   );
-  const weaknessMove = weaknessWodMovement(weakness, week);
+  const weaknessMove = weaknessWodMovement(weakness, week, barMuscleUpLevel);
 
   return {
     mono,
@@ -4097,7 +4355,7 @@ function generatedBenchmarkName(goal, day) {
   return pick(names[goal] || names.balanced, day - 1);
 }
 
-function weaknessWodMovement(weakness, week) {
+function weaknessWodMovement(weakness, week, barMuscleUpLevel) {
   const reps = week >= 5 ? 8 : 6;
   const movements = {
     squat: repsExercise("weakness", "tempo goblet squats", reps),
@@ -4106,11 +4364,14 @@ function weaknessWodMovement(weakness, week) {
     running: distanceExercise("weakness", "relaxed run", 200),
     runningBodyweight: repsExercise("weakness", "burpees", reps),
     pulling: repsExercise("weakness", "strict pull-ups or ring rows", reps),
-    muscleup: repsExercise(
-      "weakness",
-      "bar muscle-up transitions",
-      Math.max(3, reps - 3),
-    ),
+    muscleup:
+      barMuscleUpLevel === "singles" && week >= 5
+        ? repsExercise("weakness", "bar muscle-ups", 2)
+        : repsExercise(
+            "weakness",
+            "bar muscle-up transitions",
+            Math.max(3, reps - 3),
+          ),
     t2b: repsExercise("weakness", "toes-to-bar or hanging knee raises", reps),
   };
   return movements[weakness];
@@ -5767,6 +6028,7 @@ function registerServiceWorker() {
 }
 
 const FORGE_HOUR_API = {
+  BAR_MUSCLE_UP_LEVELS,
   DEFAULT_PROFILE,
   DIVISION_LABELS,
   GOAL_LABELS,

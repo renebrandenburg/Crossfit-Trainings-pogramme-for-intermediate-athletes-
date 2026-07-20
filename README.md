@@ -7,6 +7,7 @@ A phone-first CrossFit training programme and PR tracker for intermediate athlet
 - Four-day CrossFit programme capped at 60 minutes per session.
 - Eight-week progression cycle with recalculated loads from the athlete's 1RMs.
 - Needs-based programme generator for strength, endurance, gymnastics, running and bodyweight capacity, or all-round goals.
+- Dedicated eight-week bar muscle-up programme with level-aware first-rep or consistency progressions, three focused skill exposures per week, and supporting Olympic-lifting and engine sessions.
 - Masters 35-39 RX/Open prep generator with readiness targets, assessment fields, and optional engine or skill add-ons.
 - WOD variation across time domains and formats: AMRAP, intervals, for-time, EMOM, ladder, repeat sets, chipper, and benchmark.
 - Manual training programme builder for adding your own sessions.

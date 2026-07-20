@@ -16,6 +16,7 @@
   }
 
   const {
+    BAR_MUSCLE_UP_LEVELS,
     DIVISION_LABELS,
     GOAL_LABELS,
     PLAN_SCHEMA_VERSION,
@@ -4366,8 +4367,12 @@
       goal: initialOptions?.goal || "stronger",
       daysPerWeek: Number(initialOptions?.daysPerWeek) || 4,
       weakness: initialOptions?.weakness || "squat",
+      barMuscleUpLevel: initialOptions?.barMuscleUpLevel || "highPull",
       duration: positiveNumber(initialOptions?.duration, 60),
     };
+    const [selectedGoal, setSelectedGoal] = ReactRuntime.useState(
+      defaults.goal,
+    );
     return h(
       "form",
       {
@@ -4381,9 +4386,17 @@
           const options = {
             goal: String(data.get("generatorGoal") || "stronger"),
             daysPerWeek: Number(data.get("generatorDays") || 4),
-            weakness: String(data.get("generatorWeakness") || "squat"),
+            weakness:
+              selectedGoal === "barMuscleUp"
+                ? "muscleup"
+                : String(data.get("generatorWeakness") || "squat"),
             duration: positiveNumber(data.get("generatorDuration"), 60),
           };
+          if (selectedGoal === "barMuscleUp") {
+            options.barMuscleUpLevel = String(
+              data.get("barMuscleUpLevel") || "highPull",
+            );
+          }
           const generationSeed = createGenerationSeed();
           try {
             const generatedPlans = buildGeneratedProgramme(
@@ -4432,11 +4445,13 @@
               id: "generatorGoal",
               name: "generatorGoal",
               required: true,
-              defaultValue: defaults.goal,
+              value: selectedGoal,
+              onChange: (event) => setSelectedGoal(event.target.value),
             },
             h("option", { value: "stronger" }, "Get stronger"),
             h("option", { value: "endurance" }, "More endurance"),
             h("option", { value: "gymnastics" }, "Better gymnastics"),
+            h("option", { value: "barMuscleUp" }, "Get my first bar muscle-up"),
             h("option", { value: "balanced" }, "All-round CrossFit"),
             h(
               "option",
@@ -4466,23 +4481,41 @@
       h(
         "div",
         { className: "form-row" },
-        h(
-          "label",
-          null,
-          "Biggest weakness",
-          h(
-            "select",
-            {
-              id: "generatorWeakness",
-              name: "generatorWeakness",
-              required: true,
-              defaultValue: defaults.weakness,
-            },
-            Object.entries(WEAKNESS_LABELS).map(([value, label]) =>
-              h("option", { key: value, value }, label),
+        selectedGoal === "barMuscleUp"
+          ? h(
+              "label",
+              null,
+              "Current bar muscle-up level",
+              h(
+                "select",
+                {
+                  id: "barMuscleUpLevel",
+                  name: "barMuscleUpLevel",
+                  required: true,
+                  defaultValue: defaults.barMuscleUpLevel,
+                },
+                Object.entries(BAR_MUSCLE_UP_LEVELS).map(([value, label]) =>
+                  h("option", { key: value, value }, label),
+                ),
+              ),
+            )
+          : h(
+              "label",
+              null,
+              "Biggest weakness",
+              h(
+                "select",
+                {
+                  id: "generatorWeakness",
+                  name: "generatorWeakness",
+                  required: true,
+                  defaultValue: defaults.weakness,
+                },
+                Object.entries(WEAKNESS_LABELS).map(([value, label]) =>
+                  h("option", { key: value, value }, label),
+                ),
+              ),
             ),
-          ),
-        ),
         h(
           "label",
           null,

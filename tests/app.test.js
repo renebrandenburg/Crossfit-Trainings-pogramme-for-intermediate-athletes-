@@ -288,6 +288,110 @@ test("needs-based generator changes bias by goal and clamps options", () => {
   assert.equal(gymnasticsPlans[0].duration, 45);
 });
 
+test("bar muscle-up goal creates three level-aware skill exposures per week", () => {
+  const profile = cloneDefaultProfile();
+
+  for (const level of ["highPull", "assisted", "singles"]) {
+    const plans = buildGeneratedProgramme(
+      {
+        goal: "barMuscleUp",
+        barMuscleUpLevel: level,
+        daysPerWeek: 5,
+        weakness: "rowing",
+        duration: 60,
+      },
+      profile,
+      (id) => `${level}-${id}`,
+      `bar-muscle-up-${level}`,
+    );
+
+    assert.equal(plans.length, 40);
+    assert.ok(
+      plans.every(
+        (plan) =>
+          plan.sourceGoal === "barMuscleUp" &&
+          plan.sourceWeakness === "muscleup" &&
+          plan.sourceBarMuscleUpLevel === level,
+      ),
+    );
+    assert.ok(
+      plans.every(
+        (plan) =>
+          customPlanSegments(plan).reduce(
+            (total, segment) => total + Number(segment.minutes),
+            0,
+          ) === 60,
+      ),
+    );
+
+    for (let week = 1; week <= 8; week += 1) {
+      const weekPlans = plans.filter((plan) => plan.week === week);
+      assert.equal(
+        weekPlans.filter((plan) => plan.focus.startsWith("Bar muscle-up focus"))
+          .length,
+        3,
+      );
+      assert.ok(
+        weekPlans
+          .filter((plan) => /\bD(?:4|5):/.test(plan.title))
+          .every((plan) => plan.focus.startsWith("Bar muscle-up support day")),
+      );
+    }
+
+    assert.match(
+      JSON.stringify(plans.filter((plan) => plan.week === 4)),
+      /Deload rule/,
+    );
+    assert.match(
+      JSON.stringify(plans.filter((plan) => plan.week === 8)),
+      /Test:/,
+    );
+
+    const workoutDefinitions = JSON.stringify(
+      plans.map((plan) => plan.workoutDefinition),
+    );
+    if (level === "singles") {
+      assert.match(workoutDefinitions, /"movement":"bar muscle-ups"/);
+      plans.forEach((plan) => {
+        const directRepTargets = JSON.stringify(
+          plan.workoutDefinition,
+        ).matchAll(
+          /"movement":"bar muscle-ups","target":\{"type":"reps","value":(\d+)/g,
+        );
+        for (const match of directRepTargets) {
+          assert.ok(Number(match[1]) <= 3);
+        }
+      });
+    } else {
+      assert.doesNotMatch(workoutDefinitions, /"movement":"bar muscle-ups"/);
+    }
+  }
+});
+
+test("bar muscle-up generator defaults unknown levels to the high-pull track", () => {
+  const plans = buildGeneratedProgramme(
+    {
+      goal: "barMuscleUp",
+      barMuscleUpLevel: "unknown",
+      daysPerWeek: 3,
+      weakness: "squat",
+      duration: 45,
+    },
+    cloneDefaultProfile(),
+    (id) => id,
+  );
+
+  assert.equal(plans.length, 24);
+  assert.ok(
+    plans.every(
+      (plan) =>
+        plan.sourceBarMuscleUpLevel === "highPull" &&
+        plan.sourceWeakness === "muscleup",
+    ),
+  );
+  assert.match(plans[0].focus, /chest-to-bar \/ high pull, no turnover/i);
+});
+
 test("needs-based generator programs running and bodyweight weaknesses directly", () => {
   const profile = cloneDefaultProfile();
   const plans = buildGeneratedProgramme(
@@ -320,6 +424,7 @@ test("generated WODs use calories only for machines", () => {
     "stronger",
     "endurance",
     "gymnastics",
+    "barMuscleUp",
     "balanced",
     "mastersRxOpen",
   ].flatMap((goal) =>
@@ -1200,6 +1305,7 @@ test("table-driven generation sweep persists only valid structured workouts", ()
     "stronger",
     "endurance",
     "gymnastics",
+    "barMuscleUp",
     "balanced",
     "mastersRxOpen",
   ];
