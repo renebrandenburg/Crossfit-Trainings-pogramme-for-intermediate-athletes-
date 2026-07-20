@@ -934,8 +934,9 @@ const MOVEMENT_LIBRARY = [
   },
 ];
 
-const WOD_SCHEMA_VERSION = 6;
-const PLAN_SCHEMA_VERSION = 2;
+const WOD_SCHEMA_VERSION = 7;
+const PLAN_SCHEMA_VERSION = 3;
+const WORKOUT_DEFINITION_VERSION = 1;
 const MASTERS_RX_MOVEMENT_VARIATIONS = [
   {
     matches: /wall balls?/i,
@@ -1797,13 +1798,37 @@ function customPlanSegments(plan) {
       minutes: String(minutes.strength || 20),
       items: plan.strength || [],
     },
-    { title: "WOD", minutes: String(minutes.wod || 20), items: plan.wod || [] },
+    {
+      title: "WOD",
+      minutes: String(minutes.wod || 20),
+      items: workoutItemsForSession(plan),
+    },
     {
       title: "Cooldown and mobility",
       minutes: String(minutes.mobility || 12),
       items: plan.mobility || [],
     },
   ].filter((segment) => segment.items.length);
+}
+
+function workoutItemsForSession(session) {
+  if (
+    session &&
+    session.workoutDefinition &&
+    hasValidWorkoutDefinition(session.workoutDefinition)
+  ) {
+    return renderWorkoutItems(session.workoutDefinition);
+  }
+  if (
+    session &&
+    (session.origin === "generated" || session.generated) &&
+    !session.customized
+  ) {
+    return [
+      "Generated workout unavailable because its structure is invalid. Regenerate this programme before training.",
+    ];
+  }
+  return Array.isArray(session && session.wod) ? session.wod : [];
 }
 
 function renderLogs() {
@@ -1870,6 +1895,484 @@ function statCard(value, label) {
   `;
 }
 
+class WorkoutValidationError extends Error {
+  constructor(errors) {
+    super(`Invalid workout definition: ${errors.join("; ")}`);
+    this.name = "WorkoutValidationError";
+    this.errors = errors;
+  }
+}
+
+function workoutDefinitionErrors(definition) {
+  const errors = [];
+  if (
+    !definition ||
+    typeof definition !== "object" ||
+    Array.isArray(definition)
+  ) {
+    return ["definition must be an object"];
+  }
+  if (definition.schemaVersion !== WORKOUT_DEFINITION_VERSION) {
+    errors.push("unsupported workout definition version");
+  }
+  requireNonemptyString(definition.stimulus, "stimulus", errors);
+  requireNonemptyString(definition.score, "score", errors);
+  requireNonemptyString(definition.scaling, "scaling guidance", errors);
+
+  const format = definition.format;
+  const supportedFormats = new Set([
+    "amrap",
+    "emom",
+    "fixed_rounds",
+    "for_time",
+    "intervals",
+    "repeat_sets",
+    "chipper",
+    "benchmark",
+  ]);
+  if (!format || !supportedFormats.has(format.type)) {
+    errors.push("format type is invalid");
+  } else {
+    if (["amrap", "for_time", "chipper", "benchmark"].includes(format.type)) {
+      requirePositiveFinite(format.durationSeconds, "format duration", errors);
+    }
+    if (format.type === "benchmark") {
+      requireNonemptyString(format.name, "benchmark name", errors);
+    }
+    if (format.type === "fixed_rounds") {
+      requirePositiveInteger(format.rounds, "fixed round count", errors);
+      if (format.durationSeconds != null) {
+        requirePositiveFinite(
+          format.durationSeconds,
+          "fixed-round cap",
+          errors,
+        );
+      }
+    }
+    if (format.type === "intervals") {
+      requirePositiveInteger(format.rounds, "interval round count", errors);
+      requirePositiveFinite(
+        format.intervalSeconds,
+        "interval duration",
+        errors,
+      );
+    }
+    if (format.type === "repeat_sets") {
+      requirePositiveInteger(format.sets, "set count", errors);
+      requirePositiveFinite(format.restSeconds, "set rest", errors);
+    }
+    if (format.type === "emom") {
+      requirePositiveInteger(format.rounds, "EMOM round count", errors);
+      requirePositiveFinite(format.intervalSeconds, "EMOM interval", errors);
+      if (!Array.isArray(format.stations) || !format.stations.length) {
+        errors.push("EMOM requires at least one station");
+      } else {
+        format.stations.forEach((station, index) => {
+          if (!station || !["work", "rest"].includes(station.type)) {
+            errors.push(`EMOM station ${index + 1} is invalid`);
+          } else if (
+            station.type === "work" &&
+            (!Array.isArray(station.exercises) || !station.exercises.length)
+          ) {
+            errors.push(`EMOM station ${index + 1} requires exercises`);
+          }
+        });
+      }
+    }
+  }
+
+  const mainExercises = workoutMainExercises(definition);
+  const afterEachRound = arrayOrEmpty(definition.afterEachRound);
+  const buyIn = arrayOrEmpty(definition.buyIn);
+  const cashOut = arrayOrEmpty(definition.cashOut);
+  const allExercises = [
+    ...mainExercises,
+    ...afterEachRound,
+    ...buyIn,
+    ...cashOut,
+  ];
+  const ids = new Set();
+  allExercises.forEach((exercise, index) => {
+    if (!exercise || typeof exercise !== "object") {
+      errors.push(`exercise ${index + 1} is invalid`);
+      return;
+    }
+    const id = String(exercise.id || "").trim();
+    const movement = String(exercise.movement || "").trim();
+    if (!id) errors.push(`exercise ${index + 1} requires an id`);
+    if (id && ids.has(id)) errors.push(`exercise id ${id} is duplicated`);
+    if (id) ids.add(id);
+    if (!movement)
+      errors.push(`exercise ${id || index + 1} requires a movement`);
+    validateExerciseTarget(exercise.target, id || String(index + 1), errors);
+  });
+  if (!mainExercises.length) errors.push("main workout requires exercises");
+
+  const progression = definition.progression || { type: "none" };
+  const progressionTypes = new Set([
+    "none",
+    "ascending_ladder",
+    "descending_ladder",
+    "pyramid",
+    "build_up",
+  ]);
+  if (!progressionTypes.has(progression.type)) {
+    errors.push("progression type is invalid");
+  }
+
+  const appliesTo = Array.isArray(progression.appliesTo)
+    ? progression.appliesTo.map(String)
+    : [];
+  if (progression.type !== "none") {
+    if (!appliesTo.length)
+      errors.push("progression requires applicable exercises");
+    if (new Set(appliesTo).size !== appliesTo.length) {
+      errors.push("progression exercise references must be unique");
+    }
+    requirePositiveFinite(progression.start, "progression start", errors);
+  }
+  if (["ascending_ladder", "build_up"].includes(progression.type)) {
+    requirePositiveFinite(
+      progression.increment,
+      "progression increment",
+      errors,
+    );
+  }
+  if (progression.type === "descending_ladder") {
+    requirePositiveFinite(
+      progression.decrement,
+      "progression decrement",
+      errors,
+    );
+    requirePositiveFinite(progression.end, "progression end", errors);
+    if (Number(progression.end) >= Number(progression.start)) {
+      errors.push("descending ladder end must be below its start");
+    } else if (
+      Number.isFinite(Number(progression.decrement)) &&
+      (Number(progression.start) - Number(progression.end)) %
+        Number(progression.decrement) !==
+        0
+    ) {
+      errors.push("descending ladder must reach its end exactly");
+    }
+  }
+  if (progression.type === "pyramid") {
+    requirePositiveFinite(progression.increment, "pyramid increment", errors);
+    requirePositiveFinite(progression.decrement, "pyramid decrement", errors);
+    requirePositiveFinite(progression.peak, "pyramid peak", errors);
+    requirePositiveFinite(progression.end, "pyramid end", errors);
+    if (Number(progression.peak) <= Number(progression.start)) {
+      errors.push("pyramid peak must exceed its start");
+    } else {
+      if (
+        (Number(progression.peak) - Number(progression.start)) %
+          Number(progression.increment) !==
+        0
+      ) {
+        errors.push("pyramid must reach its peak exactly");
+      }
+      if (
+        Number(progression.end) >= Number(progression.peak) ||
+        (Number(progression.peak) - Number(progression.end)) %
+          Number(progression.decrement) !==
+          0
+      ) {
+        errors.push("pyramid must descend to its end exactly");
+      }
+    }
+  }
+  if (progression.type === "build_up") {
+    if (progression.rounds == null && progression.end == null) {
+      errors.push("build-up requires rounds or an ending value");
+    }
+    if (progression.rounds != null) {
+      requirePositiveInteger(progression.rounds, "build-up rounds", errors);
+    }
+    if (progression.end != null) {
+      requirePositiveFinite(progression.end, "build-up end", errors);
+      if (Number(progression.end) <= Number(progression.start)) {
+        errors.push("build-up end must exceed its start");
+      } else if (
+        Number.isFinite(Number(progression.increment)) &&
+        (Number(progression.end) - Number(progression.start)) %
+          Number(progression.increment) !==
+          0
+      ) {
+        errors.push("build-up must reach its end exactly");
+      }
+    }
+  }
+
+  const mainById = new Map(
+    mainExercises.map((exercise) => [exercise.id, exercise]),
+  );
+  appliesTo.forEach((id) => {
+    const exercise = mainById.get(id);
+    if (!exercise) errors.push(`progression references unknown exercise ${id}`);
+    else if (exercise.target?.type !== "progressive_reps") {
+      errors.push(`progression exercise ${id} cannot have a fixed target`);
+    }
+  });
+  mainExercises
+    .filter((exercise) => exercise.target?.type === "progressive_reps")
+    .forEach((exercise) => {
+      if (!appliesTo.includes(exercise.id)) {
+        errors.push(`progressive exercise ${exercise.id} is not assigned`);
+      }
+    });
+  if (progression.type === "none" && appliesTo.length) {
+    errors.push("fixed workout cannot declare progression exercises");
+  }
+  if (
+    [
+      "fixed_rounds",
+      "emom",
+      "intervals",
+      "repeat_sets",
+      "chipper",
+      "for_time",
+    ].includes(format?.type) &&
+    progression.type !== "none"
+  ) {
+    errors.push(`${format.type} workouts cannot contain a progression`);
+  }
+
+  [...buyIn, ...cashOut, ...afterEachRound].forEach((exercise) => {
+    if (exercise?.target?.type === "progressive_reps") {
+      errors.push(
+        `fixed phase exercise ${exercise.id || "unknown"} cannot progress`,
+      );
+    }
+  });
+  if (afterEachRound.length) {
+    const repeats =
+      ["amrap", "fixed_rounds", "intervals", "repeat_sets"].includes(
+        format?.type,
+      ) ||
+      (format?.type === "benchmark" && Number(format.rounds) > 0);
+    if (!repeats)
+      errors.push("after-each-round work requires a repeating format");
+  }
+  if (format?.type === "chipper" && afterEachRound.length) {
+    errors.push("chippers cannot contain after-each-round work");
+  }
+
+  return [...new Set(errors)];
+}
+
+function validateWorkoutDefinition(definition) {
+  const errors = workoutDefinitionErrors(definition);
+  if (errors.length) throw new WorkoutValidationError(errors);
+  return definition;
+}
+
+function requirePositiveFinite(value, label, errors) {
+  if (!Number.isFinite(Number(value)) || Number(value) <= 0) {
+    errors.push(`${label} must be positive and finite`);
+  }
+}
+
+function requirePositiveInteger(value, label, errors) {
+  if (!Number.isInteger(Number(value)) || Number(value) <= 0) {
+    errors.push(`${label} must be a positive integer`);
+  }
+}
+
+function requireNonemptyString(value, label, errors) {
+  if (typeof value !== "string" || !value.trim()) {
+    errors.push(`${label} must be nonempty`);
+  }
+}
+
+function arrayOrEmpty(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function workoutMainExercises(definition) {
+  if (definition?.format?.type === "emom") {
+    return arrayOrEmpty(definition.format.stations).flatMap((station) =>
+      station && station.type !== "rest" ? arrayOrEmpty(station.exercises) : [],
+    );
+  }
+  return arrayOrEmpty(definition && definition.exercises);
+}
+
+function validateExerciseTarget(target, id, errors) {
+  const fixedNumericTargets = new Set([
+    "reps",
+    "distance_m",
+    "calories",
+    "duration_seconds",
+  ]);
+  if (!target || typeof target !== "object") {
+    errors.push(`exercise ${id} requires a target`);
+    return;
+  }
+  if (target.type === "progressive_reps") return;
+  if (!fixedNumericTargets.has(target.type)) {
+    errors.push(`exercise ${id} target type is invalid`);
+    return;
+  }
+  requirePositiveFinite(target.value, `exercise ${id} target`, errors);
+  if (target.alternate != null) {
+    requirePositiveFinite(
+      target.alternate,
+      `exercise ${id} alternate target`,
+      errors,
+    );
+  }
+}
+
+function renderWorkoutItems(definition) {
+  validateWorkoutDefinition(definition);
+  return [
+    renderWorkoutDescription(definition),
+    `Stimulus: ${definition.stimulus}`,
+    `Score: ${definition.score}. ${definition.scaling}`,
+  ];
+}
+
+function renderWorkoutDescription(definition) {
+  validateWorkoutDefinition(definition);
+  const format = definition.format;
+  const main = renderExerciseList(workoutMainExercises(definition));
+  const progression = definition.progression || { type: "none" };
+  let description;
+
+  if (format.type === "amrap") {
+    if (progression.type === "none") {
+      description = `AMRAP ${formatDurationMinutes(format.durationSeconds)}: ${main}`;
+    } else {
+      description = `${formatDurationMinutes(format.durationSeconds)} min ${renderProgressionName(progression)}: ${renderProgressionSequence(progression)} ${main}`;
+    }
+  } else if (format.type === "fixed_rounds") {
+    const cap = format.durationSeconds
+      ? `, ${formatDurationMinutes(format.durationSeconds)} min cap`
+      : "";
+    description = `${format.rounds} rounds for time${cap}: ${main}`;
+  } else if (format.type === "for_time") {
+    description = `For time, ${formatDurationMinutes(format.durationSeconds)} min cap: ${main}`;
+  } else if (format.type === "chipper") {
+    description = `For time, ${formatDurationMinutes(format.durationSeconds)} min cap: ${main}`;
+  } else if (format.type === "intervals") {
+    description = `Every ${formatClock(format.intervalSeconds)} x ${format.rounds}: ${main}${format.restRemaining ? "; rest remaining time" : ""}`;
+  } else if (format.type === "repeat_sets") {
+    description = `${format.sets} sets, rest ${formatClock(format.restSeconds)} between sets: ${main}`;
+  } else if (format.type === "emom") {
+    const stationText = format.stations
+      .map((station, index) =>
+        station.type === "rest"
+          ? `min ${index + 1} rest`
+          : `min ${index + 1} ${renderExerciseList(station.exercises)}`,
+      )
+      .join(", ");
+    const totalSeconds =
+      format.rounds * format.intervalSeconds * format.stations.length;
+    description = `EMOM ${formatDurationMinutes(totalSeconds)}: ${stationText}`;
+  } else {
+    const rounds = format.rounds ? `${format.rounds} rounds: ` : "";
+    description = `Benchmark ${format.name}, ${formatDurationMinutes(format.durationSeconds)} min cap: ${rounds}${main}`;
+  }
+
+  const after = arrayOrEmpty(definition.afterEachRound);
+  if (after.length) {
+    description += `; after each round complete ${renderExerciseList(after)}`;
+  }
+  const buyIn = arrayOrEmpty(definition.buyIn);
+  if (buyIn.length) {
+    description = `Buy-in: ${renderExerciseList(buyIn)}. Then ${description}`;
+  }
+  const cashOut = arrayOrEmpty(definition.cashOut);
+  if (cashOut.length) {
+    description += `. Cash-out: ${renderExerciseList(cashOut)}`;
+  }
+  return description;
+}
+
+function renderExerciseList(exercises) {
+  const rendered = arrayOrEmpty(exercises).map(renderExercise);
+  if (rendered.length <= 1) return rendered[0] || "";
+  if (rendered.length === 2) return `${rendered[0]} and ${rendered[1]}`;
+  return `${rendered.slice(0, -1).join(", ")}, ${rendered.at(-1)}`;
+}
+
+function renderExercise(exercise) {
+  const target = exercise.target;
+  let prefix = "";
+  if (target.type === "reps") prefix = `${trimNumber(target.value)} `;
+  if (target.type === "distance_m") prefix = `${trimNumber(target.value)} m `;
+  if (target.type === "calories") {
+    prefix = `${trimNumber(target.value)}${target.alternate ? `/${trimNumber(target.alternate)}` : ""} cal `;
+  }
+  if (target.type === "duration_seconds") {
+    prefix = `${trimNumber(target.value)} sec `;
+  }
+  const load = exercise.load?.display ? ` at ${exercise.load.display}` : "";
+  return `${prefix}${exercise.movement}${load}`;
+}
+
+function renderProgressionName(progression) {
+  return {
+    ascending_ladder: "ascending ladder",
+    descending_ladder: "descending ladder",
+    pyramid: "pyramid",
+    build_up: "build-up",
+  }[progression.type];
+}
+
+function renderProgressionSequence(progression) {
+  if (progression.type === "ascending_ladder") {
+    return `${progression.start}-${progression.start + progression.increment}-${progression.start + progression.increment * 2}-${progression.start + progression.increment * 3}...`;
+  }
+  if (progression.type === "descending_ladder") {
+    return numericSequence(
+      progression.start,
+      progression.end,
+      -progression.decrement,
+    ).join("-");
+  }
+  if (progression.type === "pyramid") {
+    const up = numericSequence(
+      progression.start,
+      progression.peak,
+      progression.increment,
+    );
+    const down = numericSequence(
+      progression.peak - progression.decrement,
+      progression.end,
+      -progression.decrement,
+    );
+    return [...up, ...down].join("-");
+  }
+  const end = progression.end
+    ? ` to ${trimNumber(progression.end)}`
+    : ` for ${progression.rounds} rounds`;
+  return `from ${trimNumber(progression.start)} by ${trimNumber(progression.increment)}${end}`;
+}
+
+function numericSequence(start, end, step) {
+  const values = [];
+  for (
+    let value = Number(start);
+    step > 0 ? value <= Number(end) : value >= Number(end);
+    value += Number(step)
+  ) {
+    values.push(value);
+    if (values.length > 100) break;
+  }
+  return values;
+}
+
+function formatDurationMinutes(seconds) {
+  return trimNumber(Number(seconds) / 60);
+}
+
+function formatClock(seconds) {
+  const total = Number(seconds);
+  if (total % 60 === 0) return `${total / 60} min`;
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")} min`;
+}
+
 function buildGeneratedProgramme(
   options,
   profile,
@@ -1932,18 +2435,39 @@ function migratePlanState(inputState) {
 
   if (useCanonicalPlans) {
     const normalized = normalizeCanonicalPlans(source.plans);
-    const refreshed = migrateCanonicalGeneratedPlans(
-      normalized.plans,
-      profileForGeneration(source.profile),
-    );
+    let refreshed;
+    try {
+      refreshed = migrateCanonicalGeneratedPlans(
+        normalized.plans,
+        profileForGeneration(source.profile),
+      );
+    } catch (error) {
+      console.warn(
+        "Generated workouts could not be migrated; unsafe workout prose remains hidden.",
+        error,
+      );
+      refreshed = { plans: normalized.plans, migrated: false };
+    }
     plans = refreshed.plans;
     plansChanged = normalized.changed || refreshed.migrated;
   } else {
     const profile = profileForGeneration(source.profile);
-    const refreshed = migrateGeneratedProgrammePlans(
-      hasLegacyPlans ? source.customPlans : [],
-      profile,
-    );
+    let refreshed;
+    try {
+      refreshed = migrateGeneratedProgrammePlans(
+        hasLegacyPlans ? source.customPlans : [],
+        profile,
+      );
+    } catch (error) {
+      console.warn(
+        "Legacy generated workouts could not be migrated; unsafe workout prose remains hidden.",
+        error,
+      );
+      refreshed = {
+        plans: hasLegacyPlans ? source.customPlans : [],
+        migrated: false,
+      };
+    }
     plans = groupLegacySessionsIntoPlans(refreshed.plans);
     plansChanged = hasLegacyPlans || refreshed.migrated;
   }
@@ -2049,10 +2573,19 @@ function normalizeCanonicalPlan(plan, index) {
         origin === "generated"
           ? normalizeGenerationSeed(session.generationSeed || generationSeed)
           : undefined;
+      const hasCanonicalWorkout = hasValidWorkoutDefinition(
+        session.workoutDefinition,
+      );
+      const hasRenderedDuplicate =
+        origin === "generated" &&
+        !customized &&
+        hasCanonicalWorkout &&
+        Object.prototype.hasOwnProperty.call(session, "wod");
       if (
         session.origin === origin &&
         Object.prototype.hasOwnProperty.call(session, "customized") &&
         Boolean(session.customized) === customized &&
+        !hasRenderedDuplicate &&
         (origin !== "generated" ||
           session.generationSeed === nextGenerationSeed)
       ) {
@@ -2063,6 +2596,7 @@ function normalizeCanonicalPlan(plan, index) {
       if (nextGenerationSeed) {
         nextSession.generationSeed = nextGenerationSeed;
       }
+      if (hasRenderedDuplicate) delete nextSession.wod;
       return nextSession;
     });
 
@@ -2123,7 +2657,8 @@ function migrateCanonicalGeneratedPlans(plans, profile) {
           session &&
           (session.origin === "generated" || session.generated) &&
           !session.customized &&
-          session.wodSchemaVersion !== WOD_SCHEMA_VERSION,
+          (session.wodSchemaVersion !== WOD_SCHEMA_VERSION ||
+            !hasValidWorkoutDefinition(session.workoutDefinition)),
       )
       .sort(compareGeneratedSessionSlots);
     if (!staleSessions.length) return plan;
@@ -2141,9 +2676,10 @@ function migrateCanonicalGeneratedPlans(plans, profile) {
               session &&
               (session.origin === "generated" || session.generated) &&
               !session.customized &&
-              session.wodSchemaVersion === WOD_SCHEMA_VERSION,
+              session.wodSchemaVersion === WOD_SCHEMA_VERSION &&
+              hasValidWorkoutDefinition(session.workoutDefinition),
           )
-          .map((session) => structuralWodSignature(session.wod)),
+          .map((session) => structuralWodSignature(session)),
       ),
     };
     const replacements = new Map();
@@ -2331,7 +2867,14 @@ function legacyGeneratorKey(session) {
 function legacyGenerationSeed(sessions) {
   const signature = sessions
     .map((session) =>
-      [session && session.id, session && session.title, session && session.wod]
+      [
+        session && session.id,
+        session && session.title,
+        session &&
+          (session.workoutDefinition
+            ? structuralWodSignature(session)
+            : session.wod),
+      ]
         .flat()
         .join("|"),
     )
@@ -2378,7 +2921,8 @@ function migrateGeneratedProgrammePlans(plans, profile) {
       !plan ||
       !plan.generated ||
       plan.customized ||
-      plan.wodSchemaVersion === WOD_SCHEMA_VERSION
+      (plan.wodSchemaVersion === WOD_SCHEMA_VERSION &&
+        hasValidWorkoutDefinition(plan.workoutDefinition))
     )
       return plan;
     migrated = true;
@@ -2415,6 +2959,10 @@ function migrateGeneratedProgrammePlans(plans, profile) {
   });
 
   return { plans: nextPlans, migrated };
+}
+
+function hasValidWorkoutDefinition(definition) {
+  return workoutDefinitionErrors(definition).length === 0;
 }
 
 function parsePlanWeek(plan) {
@@ -2474,7 +3022,7 @@ function buildGeneratedSession(
     options.goal,
   );
 
-  const wod = claimUniqueGeneratedWod(
+  const workoutDefinition = claimUniqueGeneratedWod(
     (collisionSalt) =>
       generatedWodItems(
         options.goal,
@@ -2503,7 +3051,7 @@ function buildGeneratedSession(
       profile,
       phase,
     ),
-    wod,
+    workoutDefinition,
     mobility: generatedMobility(options.weakness),
     duration: options.duration,
     segmentMinutes,
@@ -2524,22 +3072,63 @@ function buildGeneratedSession(
 
 function claimUniqueGeneratedWod(factory, generationContext) {
   const signatures = generationContext && generationContext.usedWodSignatures;
-  if (!(signatures instanceof Set)) return factory(0);
-
-  for (let collisionSalt = 0; collisionSalt < 64; collisionSalt += 1) {
-    const wod = factory(collisionSalt);
-    const signature = structuralWodSignature(wod);
-    if (signatures.has(signature)) continue;
-    signatures.add(signature);
-    return wod;
+  if (!(signatures instanceof Set)) {
+    return validateWorkoutDefinition(factory(0));
   }
 
-  throw new Error("Could not create a unique workout for this programme.");
+  for (let collisionSalt = 0; collisionSalt < 64; collisionSalt += 1) {
+    let workoutDefinition;
+    try {
+      workoutDefinition = validateWorkoutDefinition(factory(collisionSalt));
+    } catch (error) {
+      if (error instanceof WorkoutValidationError) continue;
+      throw error;
+    }
+    const signature = structuralWodSignature(workoutDefinition);
+    if (signatures.has(signature)) continue;
+    signatures.add(signature);
+    return workoutDefinition;
+  }
+
+  throw new Error(
+    "Could not create a valid, unique workout for this programme.",
+  );
 }
 
 function structuralWodSignature(wod) {
+  const definition = wod && wod.workoutDefinition ? wod.workoutDefinition : wod;
+  if (
+    definition &&
+    typeof definition === "object" &&
+    !Array.isArray(definition) &&
+    definition.format
+  ) {
+    const progression = definition.progression || { type: "none" };
+    return JSON.stringify({
+      format: definition.format.type,
+      benchmark: normalizeStructuralText(definition.format.name),
+      progression: progression.type,
+      progressionTargets: arrayOrEmpty(progression.appliesTo).slice().sort(),
+      main: structuralExercises(workoutMainExercises(definition)),
+      afterEachRound: structuralExercises(definition.afterEachRound),
+      buyIn: structuralExercises(definition.buyIn),
+      cashOut: structuralExercises(definition.cashOut),
+    });
+  }
   const workout = Array.isArray(wod) ? wod[0] : wod;
-  return String(workout || "")
+  return normalizeStructuralText(workout);
+}
+
+function structuralExercises(exercises) {
+  return arrayOrEmpty(exercises).map((exercise) => ({
+    movement: normalizeStructuralText(exercise && exercise.movement),
+    target: exercise?.target?.type || "",
+    load: normalizeStructuralText(exercise?.load?.display),
+  }));
+}
+
+function normalizeStructuralText(value) {
+  return String(value || "")
     .trim()
     .toLowerCase()
     .replace(/\d+(?:\.\d+)?(?:\s*(?:-|\/|:)\s*\d+(?:\.\d+)?)*(?:\+|%)?/g, "#")
@@ -2845,66 +3434,119 @@ function generatedWodItems(
     variation,
   );
   const cap = clamp(Math.round(Number(wodMinutes) || 12), 8, 24);
-  const pattern = buildWodPattern(week, goal, day, cap, movement, variation);
-
-  return [
-    pattern.workout,
-    `Stimulus: ${pattern.stimulus}`,
-    `Score: ${pattern.score}. Target intensity: ${phase.intensity}; scale reps, distance, or loading before extending the cap.`,
-  ];
+  return buildWodPattern(week, goal, day, cap, movement, variation, phase);
 }
 
-function buildWodPattern(week, goal, day, cap, movement, variation) {
+function buildWodPattern(week, goal, day, cap, movement, variation, phase) {
   const intervals = Math.max(3, Math.floor(cap / 3));
   const repeatSets = Math.max(3, Math.floor(cap / 4));
   const rounds = cap >= 16 ? 5 : cap >= 13 ? 4 : 3;
   const benchmarkName = generatedBenchmarkName(goal, day);
+  const scaling = `Target intensity: ${phase.intensity}; scale reps, distance, or loading before extending the cap.`;
 
   const patterns = {
-    1: {
-      workout: `AMRAP ${Math.min(cap, 12)}: ${movement.weight}, ${movement.monoAmrap}, ${movement.gym}`,
-      stimulus:
-        "short-to-medium mixed piece; unbroken early rounds, quick transitions",
-      score: "total rounds and reps",
-    },
-    2: {
-      workout: `Every 3 min x ${intervals}: ${movement.monoInterval}, ${movement.weightLowRep}, ${movement.simpleGym}; rest remaining time`,
-      stimulus:
-        "repeatable intervals; each set should feel fast but controlled",
-      score: "slowest interval split",
-    },
-    3: {
-      workout: `${rounds} rounds for time, ${cap} min cap: ${movement.monoInterval}, ${movement.gym}, ${movement.weight}`,
-      stimulus: "medium for-time test; hold one repeatable break plan",
-      score: "finish time or completed reps at cap",
-    },
-    4: {
-      workout: `EMOM ${cap}: min 1 ${movement.weakness}, min 2 easy ${movement.mono}, min 3 ${movement.simpleGym}, min 4 rest or mobility`,
-      stimulus: "deload skill conditioning; leave fresher than you started",
-      score: "quality completed, no failed reps",
-    },
-    5: {
-      workout: `${cap} min ascending ladder: 2-4-6-8... ${movement.weightLowRep} and ${movement.gym}; after each round complete ${movement.shortMono}`,
-      stimulus: "second-wave density piece; manageable reps that accumulate",
-      score: "last completed round plus reps",
-    },
-    6: {
-      workout: `${repeatSets} sets, rest 1:00 between sets: ${movement.monoInterval}, ${movement.weight}, ${movement.simpleGym}`,
-      stimulus:
-        "hard repeat efforts; pacing should not fade more than 10 percent",
-      score: "total working time",
-    },
-    7: {
-      workout: `For time, ${cap} min cap: ${movement.chipper}`,
-      stimulus: "longer mixed chipper; controlled opening pace, strong finish",
-      score: "finish time or reps completed",
-    },
-    8: {
-      workout: `Benchmark ${benchmarkName}, ${cap} min cap: ${movement.benchmark}`,
-      stimulus:
-        "test week; compare against future cycles without changing standards",
-      score: "benchmark result",
-    },
+    1: createWorkoutDefinition(
+      { type: "amrap", durationSeconds: Math.min(cap, 12) * 60 },
+      [movement.weight, movement.monoAmrap, movement.gym],
+      {
+        stimulus:
+          "short-to-medium mixed piece; unbroken early rounds, quick transitions",
+        score: "total rounds and reps",
+        scaling,
+      },
+    ),
+    2: createWorkoutDefinition(
+      {
+        type: "intervals",
+        intervalSeconds: 180,
+        rounds: intervals,
+        restRemaining: true,
+      },
+      [movement.monoInterval, movement.weightLowRep, movement.simpleGym],
+      {
+        stimulus:
+          "repeatable intervals; each set should feel fast but controlled",
+        score: "slowest interval split",
+        scaling,
+      },
+    ),
+    3: createWorkoutDefinition(
+      { type: "fixed_rounds", rounds, durationSeconds: cap * 60 },
+      [movement.monoInterval, movement.gym, movement.weight],
+      {
+        stimulus: "medium for-time test; hold one repeatable break plan",
+        score: "finish time or completed reps at cap",
+        scaling,
+      },
+    ),
+    4: createWorkoutDefinition(
+      {
+        type: "emom",
+        intervalSeconds: 60,
+        rounds: Math.max(1, Math.floor(cap / 4)),
+        stations: [
+          { type: "work", exercises: [movement.weakness] },
+          { type: "work", exercises: [movement.easyMono] },
+          { type: "work", exercises: [movement.simpleGym] },
+          { type: "rest" },
+        ],
+      },
+      [],
+      {
+        stimulus: "deload skill conditioning; leave fresher than you started",
+        score: "quality completed, no failed reps",
+        scaling,
+      },
+    ),
+    5: createWorkoutDefinition(
+      { type: "amrap", durationSeconds: cap * 60 },
+      [
+        asProgressiveExercise(movement.weightLowRep),
+        asProgressiveExercise(movement.gym),
+      ],
+      {
+        progression: {
+          type: "ascending_ladder",
+          start: 2,
+          increment: 2,
+          appliesTo: [movement.weightLowRep.id, movement.gym.id],
+        },
+        afterEachRound: [movement.shortMono],
+        stimulus: "second-wave density piece; manageable reps that accumulate",
+        score: "last completed round plus reps",
+        scaling,
+      },
+    ),
+    6: createWorkoutDefinition(
+      { type: "repeat_sets", sets: repeatSets, restSeconds: 60 },
+      [movement.monoInterval, movement.weight, movement.simpleGym],
+      {
+        stimulus:
+          "hard repeat efforts; pacing should not fade more than 10 percent",
+        score: "total working time",
+        scaling,
+      },
+    ),
+    7: createWorkoutDefinition(
+      { type: "chipper", durationSeconds: cap * 60 },
+      movement.chipper,
+      {
+        stimulus:
+          "longer mixed chipper; controlled opening pace, strong finish",
+        score: "finish time or reps completed",
+        scaling,
+      },
+    ),
+    8: createWorkoutDefinition(
+      { type: "benchmark", name: benchmarkName, durationSeconds: cap * 60 },
+      movement.benchmark,
+      {
+        stimulus:
+          "test week; compare against future cycles without changing standards",
+        score: "benchmark result",
+        scaling,
+      },
+    ),
   };
 
   const variablePatternWeeks = [1, 2, 3, 5, 6, 7];
@@ -2919,7 +3561,32 @@ function buildWodPattern(week, goal, day, cap, movement, variation) {
   return patterns[week];
 }
 
+function createWorkoutDefinition(format, exercises, options = {}) {
+  return {
+    schemaVersion: WORKOUT_DEFINITION_VERSION,
+    format,
+    progression: options.progression || { type: "none" },
+    buyIn: options.buyIn || [],
+    exercises: exercises || [],
+    afterEachRound: options.afterEachRound || [],
+    cashOut: options.cashOut || [],
+    stimulus:
+      options.stimulus || "repeatable work with consistent movement standards",
+    score: options.score || "completed work",
+    scaling:
+      options.scaling ||
+      "Scale reps, distance, or loading before changing the intended format.",
+  };
+}
+
+function asProgressiveExercise(exercise) {
+  return { ...exercise, target: { type: "progressive_reps" } };
+}
+
 function inferWorkoutTimer(session) {
+  if (session?.workoutDefinition) {
+    return timerConfigFromWorkoutDefinition(session.workoutDefinition);
+  }
   if (!session || !Array.isArray(session.segments)) return null;
   const timedSegment = session.segments.find((segment) =>
     /WOD|Engine/i.test(segment.title || ""),
@@ -2929,6 +3596,57 @@ function inferWorkoutTimer(session) {
       ? timedSegment.items[0]
       : "";
   return inferTimerFromText(workout);
+}
+
+function timerConfigFromWorkoutDefinition(definition) {
+  validateWorkoutDefinition(definition);
+  const format = definition.format;
+  const workout = renderWorkoutDescription(definition);
+  if (format.type === "amrap") {
+    return timerConfig("amrap", workout, format.durationSeconds, {
+      label: `AMRAP ${formatSecondsForLabel(format.durationSeconds)}`,
+    });
+  }
+  if (format.type === "emom") {
+    const rounds = format.rounds * format.stations.length;
+    return timerConfig("emom", workout, rounds * format.intervalSeconds, {
+      rounds,
+      intervalSeconds: format.intervalSeconds,
+      label: `EMOM ${formatSecondsForLabel(rounds * format.intervalSeconds)}`,
+    });
+  }
+  if (format.type === "intervals") {
+    return timerConfig(
+      "interval",
+      workout,
+      format.rounds * format.intervalSeconds,
+      {
+        rounds: format.rounds,
+        intervalSeconds: format.intervalSeconds,
+        label: `${format.rounds} intervals of ${formatSeconds(format.intervalSeconds)}`,
+      },
+    );
+  }
+  if (
+    ["fixed_rounds", "for_time", "chipper", "benchmark"].includes(format.type)
+  ) {
+    return timerConfig("forTime", workout, format.durationSeconds || null, {
+      label: `For time cap ${formatSecondsForLabel(format.durationSeconds)}`,
+    });
+  }
+  if (format.type === "repeat_sets") {
+    return timerConfig("rest", workout, format.sets * format.restSeconds, {
+      rounds: format.sets,
+      intervalSeconds: format.restSeconds,
+      label: `${format.sets} rest breaks of ${formatSeconds(format.restSeconds)}`,
+    });
+  }
+  return null;
+}
+
+function formatSecondsForLabel(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
 function inferTimerFromText(value) {
@@ -3090,73 +3808,78 @@ function generatedWodMovementPool(
   })();
   const gymOptions = {
     stronger: [
-      "8 toes-to-bar",
-      "8 box jumps",
-      "10 push-ups",
-      "6 chest-to-bar",
-      "12 wall balls",
+      repsExercise("gymnastics", "toes-to-bar", 8),
+      repsExercise("gymnastics", "box jumps", 8),
+      repsExercise("gymnastics", "push-ups", 10),
+      repsExercise("gymnastics", "chest-to-bar pull-ups", 6),
+      repsExercise("gymnastics", "wall balls", 12),
     ],
     endurance: [
-      "10 burpees",
-      "14 wall balls",
-      "12 sit-ups",
-      "10 box step-overs",
-      "12 air squats",
+      repsExercise("gymnastics", "burpees", 10),
+      repsExercise("gymnastics", "wall balls", 14),
+      repsExercise("gymnastics", "sit-ups", 12),
+      repsExercise("gymnastics", "box step-overs", 10),
+      repsExercise("gymnastics", "air squats", 12),
     ],
     gymnastics: [
-      "8 pull-ups",
-      "10 toes-to-bar",
-      "4 bar muscle-up transitions",
-      "1 wall walk",
-      "30 sec handstand hold",
+      repsExercise("gymnastics", "pull-ups", 8),
+      repsExercise("gymnastics", "toes-to-bar", 10),
+      repsExercise("gymnastics", "bar muscle-up transitions", 4),
+      repsExercise("gymnastics", "wall walk", 1),
+      durationExercise("gymnastics", "handstand hold", 30),
     ],
     balanced: [
-      "10 pull-ups",
-      "12 wall balls",
-      "10 toes-to-bar",
-      "8 burpees",
-      "15 air squats",
+      repsExercise("gymnastics", "pull-ups", 10),
+      repsExercise("gymnastics", "wall balls", 12),
+      repsExercise("gymnastics", "toes-to-bar", 10),
+      repsExercise("gymnastics", "burpees", 8),
+      repsExercise("gymnastics", "air squats", 15),
     ],
   };
   const weightOptions = {
     stronger: [
-      `6 power cleans at ${cleanLoad}`,
-      `8 DB front squats`,
-      `6 deadlifts at ${kg(profile.maxes.cleanJerk, 0.85)}`,
-      `8 DB snatches`,
-      `6 push jerks at ${lightCleanLoad}`,
+      repsExercise("weighted", "power cleans", 6, cleanLoad),
+      repsExercise("weighted", "DB front squats", 8),
+      repsExercise(
+        "weighted",
+        "deadlifts",
+        6,
+        kg(profile.maxes.cleanJerk, 0.85),
+      ),
+      repsExercise("weighted", "DB snatches", 8),
+      repsExercise("weighted", "push jerks", 6, lightCleanLoad),
     ],
     endurance: [
-      `12 light KB swings`,
-      `10 DB snatches`,
-      `12 goblet squats`,
-      `8 power cleans at ${lightCleanLoad}`,
-      `16 alternating DB step-ups`,
+      repsExercise("weighted", "light KB swings", 12),
+      repsExercise("weighted", "DB snatches", 10),
+      repsExercise("weighted", "goblet squats", 12),
+      repsExercise("weighted", "power cleans", 8, lightCleanLoad),
+      repsExercise("weighted", "alternating DB step-ups", 16),
     ],
     gymnastics: [
-      `8 DB snatches at ${snatchLoad}`,
-      `10 light KB swings`,
-      `8 overhead squats at ${snatchLoad}`,
-      `10 medicine-ball cleans`,
-      `12 DB lunges`,
+      repsExercise("weighted", "DB snatches", 8, snatchLoad),
+      repsExercise("weighted", "light KB swings", 10),
+      repsExercise("weighted", "overhead squats", 8, snatchLoad),
+      repsExercise("weighted", "medicine-ball cleans", 10),
+      repsExercise("weighted", "DB lunges", 12),
     ],
     balanced: [
-      `8 power cleans at ${lightCleanLoad}`,
-      `8 overhead squats at ${snatchLoad}`,
-      `10 DB snatches`,
-      `12 KB swings`,
-      `8 clean and jerks at ${lightCleanLoad}`,
+      repsExercise("weighted", "power cleans", 8, lightCleanLoad),
+      repsExercise("weighted", "overhead squats", 8, snatchLoad),
+      repsExercise("weighted", "DB snatches", 10),
+      repsExercise("weighted", "KB swings", 12),
+      repsExercise("weighted", "clean and jerks", 8, lightCleanLoad),
     ],
   };
 
   const selectedGymOptions = gymOptions[goal] || gymOptions.balanced;
   const selectedWeightOptions = weightOptions[goal] || weightOptions.balanced;
   const simpleGymOptions = [
-    "8 burpees",
-    "10 sit-ups",
-    "10 push-ups",
-    "12 air squats",
-    "8 ring rows",
+    repsExercise("simple-gym", "burpees", 8),
+    repsExercise("simple-gym", "sit-ups", 10),
+    repsExercise("simple-gym", "push-ups", 10),
+    repsExercise("simple-gym", "air squats", 12),
+    repsExercise("simple-gym", "ring rows", 8),
   ];
   const gym = pick(
     selectedGymOptions,
@@ -3183,59 +3906,151 @@ function generatedWodMovementPool(
     monoAmrap: monoAmrap(mono, goal),
     monoInterval: monoInterval(mono, goal),
     shortMono: shortMono(mono),
+    easyMono: durationExercise("easy-monostructural", `easy ${mono}`, 45),
     gym,
     simpleGym,
     weakness: weaknessMove,
     weight,
-    weightLowRep: lowerRepMovement(weight),
+    weightLowRep: lowerRepExercise(weight),
     chipper: generatedChipper(goal, weaknessMove, mono, gym, weight),
     benchmark: generatedBenchmark(goal, day, mono, gym, weight, weaknessMove),
   };
 }
 
 function monoAmrap(mono, goal) {
-  const calories = goal === "endurance" ? "14/11 cal" : "10/8 cal";
-  if (["row", "bike", "ski"].includes(mono)) return `${calories} ${mono}`;
-  if (mono === "run") return goal === "endurance" ? "200 m run" : "100 m run";
-  if (mono === "shuttle run") return "8 shuttle runs";
-  return goal === "endurance" ? "40 double unders" : "30 double unders";
+  if (["row", "bike", "ski"].includes(mono)) {
+    return caloriesExercise(
+      "monostructural",
+      mono,
+      goal === "endurance" ? 14 : 10,
+      goal === "endurance" ? 11 : 8,
+    );
+  }
+  if (mono === "run") {
+    return distanceExercise(
+      "monostructural",
+      "run",
+      goal === "endurance" ? 200 : 100,
+    );
+  }
+  if (mono === "shuttle run") {
+    return repsExercise("monostructural", "shuttle runs", 8);
+  }
+  return repsExercise(
+    "monostructural",
+    "double unders",
+    goal === "endurance" ? 40 : 30,
+  );
 }
 
 function generatedChipper(goal, weaknessMove, mono, gym, weight) {
-  const opening = monoInterval(mono, goal);
-  const closer = shortMono(mono);
-  return `${opening}, 40 air squats, 30 ${gym.replace(/^\d+\s*/, "")}, 20 ${weight.replace(/^\d+\s*/, "")}, 10 ${weaknessMove.replace(/^\d+\s*/, "")}, ${closer}`;
+  return [
+    withExerciseId(monoInterval(mono, goal), "chipper-opening"),
+    repsExercise("chipper-air-squats", "air squats", 40),
+    withFixedExerciseTarget(gym, "chipper-gymnastics", 30),
+    withFixedExerciseTarget(weight, "chipper-weighted", 20),
+    withFixedExerciseTarget(weaknessMove, "chipper-weakness", 10),
+    withExerciseId(shortMono(mono), "chipper-closing"),
+  ];
 }
 
 function generatedBenchmark(goal, day, mono, gym, weight, weaknessMove) {
   const benchmarks = {
     stronger: [
-      `10 rounds: 3 ${weight.replace(/^\d+\s*/, "")}, 6 box jumps`,
-      `5 rounds: ${monoInterval(mono, goal)}, 5 ${weight.replace(/^\d+\s*/, "")}`,
-      `AMRAP: 5 ${weight.replace(/^\d+\s*/, "")}, 7 ${gym.replace(/^\d+\s*/, "")}, 9 wall balls`,
-      `Max rounds quality: 6 strict push-ups, 8 KB swings, 10 cal bike`,
-      `EMOM test: ${weaknessMove}, ${shortMono(mono)}, loaded carry`,
+      [
+        withFixedExerciseTarget(weight, "benchmark-weight", 3),
+        repsExercise("benchmark-gym", "box jumps", 6),
+      ],
+      [
+        withExerciseId(monoInterval(mono, goal), "benchmark-mono"),
+        withFixedExerciseTarget(weight, "benchmark-weight", 5),
+      ],
+      [
+        withFixedExerciseTarget(weight, "benchmark-weight", 5),
+        withFixedExerciseTarget(gym, "benchmark-gym", 7),
+        repsExercise("benchmark-wall-balls", "wall balls", 9),
+      ],
+      [
+        repsExercise("benchmark-push", "strict push-ups", 6),
+        repsExercise("benchmark-swing", "KB swings", 8),
+        caloriesExercise("benchmark-bike", "bike", 10),
+      ],
+      [
+        withExerciseId(weaknessMove, "benchmark-weakness"),
+        withExerciseId(shortMono(mono), "benchmark-mono"),
+        distanceExercise("benchmark-carry", "loaded carry", 40),
+      ],
     ],
     endurance: [
-      `max sustainable meters on ${mono}`,
-      `5x${monoInterval(mono, goal)}, rest 1:00`,
-      `AMRAP: 400 m run, 15 wall balls, 12 sit-ups`,
-      `for time: 800 m ${mono}, 60 air squats, 40 burpees, 800 m ${mono}`,
-      `zone 2 distance check, same machine for full cap`,
+      [distanceExercise("benchmark-mono", mono, 1000)],
+      [withExerciseId(monoInterval(mono, goal), "benchmark-mono")],
+      [
+        distanceExercise("benchmark-run", "run", 400),
+        repsExercise("benchmark-wall-balls", "wall balls", 15),
+        repsExercise("benchmark-situps", "sit-ups", 12),
+      ],
+      [
+        distanceExercise("benchmark-opening", mono, 800),
+        repsExercise("benchmark-squats", "air squats", 60),
+        repsExercise("benchmark-burpees", "burpees", 40),
+        distanceExercise("benchmark-closing", mono, 800),
+      ],
+      [durationExercise("benchmark-zone-two", `zone 2 ${mono}`, 60)],
     ],
     gymnastics: [
-      `AMRAP: 5 pull-ups, 10 push-ups, 15 air squats`,
-      `EMOM rotation: toes-to-bar, burpees, ${shortMono(mono)}`,
-      `max quality ${weaknessMove} with easy ${shortMono(mono)} after each set`,
-      `AMRAP: wall walk or hold, 12 sit-ups, 200 m run`,
-      `skill density: ${weaknessMove}, hollow rocks, easy machine`,
+      [
+        repsExercise("benchmark-pullups", "pull-ups", 5),
+        repsExercise("benchmark-pushups", "push-ups", 10),
+        repsExercise("benchmark-squats", "air squats", 15),
+      ],
+      [
+        repsExercise("benchmark-t2b", "toes-to-bar", 8),
+        repsExercise("benchmark-burpees", "burpees", 8),
+        withExerciseId(shortMono(mono), "benchmark-mono"),
+      ],
+      [
+        withExerciseId(weaknessMove, "benchmark-weakness"),
+        withExerciseId(shortMono(mono), "benchmark-mono"),
+      ],
+      [
+        repsExercise("benchmark-wallwalk", "wall walks", 2),
+        repsExercise("benchmark-situps", "sit-ups", 12),
+        distanceExercise("benchmark-run", "run", 200),
+      ],
+      [
+        withExerciseId(weaknessMove, "benchmark-weakness"),
+        repsExercise("benchmark-hollow", "hollow rocks", 20),
+        durationExercise("benchmark-machine", "easy machine", 45),
+      ],
     ],
     balanced: [
-      `AMRAP: ${weight}, 10 box jump overs, ${shortMono(mono)}`,
-      `5 rounds: ${monoInterval(mono, goal)}, 8 overhead squats, 10 burpees`,
-      `AMRAP: 200 m run, 10 pull-ups, 12 wall balls`,
-      `AMRAP: 400 m run, 10 pull-ups, 15 push-ups, 20 air squats`,
-      `EMOM rotation: ${weaknessMove}, ${shortMono(mono)}, light barbell, core`,
+      [
+        withExerciseId(weight, "benchmark-weight"),
+        repsExercise("benchmark-box", "box jump-overs", 10),
+        withExerciseId(shortMono(mono), "benchmark-mono"),
+      ],
+      [
+        withExerciseId(monoInterval(mono, goal), "benchmark-mono"),
+        repsExercise("benchmark-ohs", "overhead squats", 8),
+        repsExercise("benchmark-burpees", "burpees", 10),
+      ],
+      [
+        distanceExercise("benchmark-run", "run", 200),
+        repsExercise("benchmark-pullups", "pull-ups", 10),
+        repsExercise("benchmark-wallballs", "wall balls", 12),
+      ],
+      [
+        distanceExercise("benchmark-run", "run", 400),
+        repsExercise("benchmark-pullups", "pull-ups", 10),
+        repsExercise("benchmark-pushups", "push-ups", 15),
+        repsExercise("benchmark-squats", "air squats", 20),
+      ],
+      [
+        withExerciseId(weaknessMove, "benchmark-weakness"),
+        withExerciseId(shortMono(mono), "benchmark-mono"),
+        repsExercise("benchmark-barbell", "light barbell reps", 8),
+        repsExercise("benchmark-core", "core reps", 12),
+      ],
     ],
   };
   return pick(benchmarks[goal] || benchmarks.balanced, day - 1);
@@ -3283,46 +4098,119 @@ function generatedBenchmarkName(goal, day) {
 }
 
 function weaknessWodMovement(weakness, week) {
-  const reps = week >= 5 ? "8" : "6";
+  const reps = week >= 5 ? 8 : 6;
   const movements = {
-    squat: `${reps} tempo goblet squats`,
-    olympic: `${reps} hang power clean drills`,
-    rowing: "250 m technique row",
-    running: "200 m relaxed run",
-    runningBodyweight: `${reps} burpees`,
-    pulling: `${reps} strict pull-ups or ring rows`,
-    muscleup: `${Math.max(3, Number(reps) - 3)} bar muscle-up transitions`,
-    t2b: `${reps} toes-to-bar or hanging knee raises`,
+    squat: repsExercise("weakness", "tempo goblet squats", reps),
+    olympic: repsExercise("weakness", "hang power clean drills", reps),
+    rowing: distanceExercise("weakness", "technique row", 250),
+    running: distanceExercise("weakness", "relaxed run", 200),
+    runningBodyweight: repsExercise("weakness", "burpees", reps),
+    pulling: repsExercise("weakness", "strict pull-ups or ring rows", reps),
+    muscleup: repsExercise(
+      "weakness",
+      "bar muscle-up transitions",
+      Math.max(3, reps - 3),
+    ),
+    t2b: repsExercise("weakness", "toes-to-bar or hanging knee raises", reps),
   };
   return movements[weakness];
 }
 
 function monoInterval(mono, goal) {
-  if (mono === "run") return goal === "endurance" ? "400 m run" : "200 m run";
-  if (mono === "row") return goal === "endurance" ? "500 m row" : "250 m row";
-  if (mono === "bike")
-    return goal === "endurance" ? "18/14 cal bike" : "12/9 cal bike";
-  if (mono === "ski") return goal === "endurance" ? "400 m ski" : "250 m ski";
-  if (mono === "shuttle run") return "10 shuttle runs";
-  return "50 double unders";
+  if (mono === "run") {
+    return distanceExercise(
+      "monostructural",
+      "run",
+      goal === "endurance" ? 400 : 200,
+    );
+  }
+  if (mono === "row") {
+    return distanceExercise(
+      "monostructural",
+      "row",
+      goal === "endurance" ? 500 : 250,
+    );
+  }
+  if (mono === "bike") {
+    return caloriesExercise(
+      "monostructural",
+      "bike",
+      goal === "endurance" ? 18 : 12,
+      goal === "endurance" ? 14 : 9,
+    );
+  }
+  if (mono === "ski") {
+    return distanceExercise(
+      "monostructural",
+      "ski",
+      goal === "endurance" ? 400 : 250,
+    );
+  }
+  if (mono === "shuttle run")
+    return repsExercise("monostructural", "shuttle runs", 10);
+  return repsExercise("monostructural", "double unders", 50);
 }
 
 function shortMono(mono) {
-  if (mono === "run") return "100 m run";
-  if (mono === "row") return "150 m row";
-  if (mono === "bike") return "8/6 cal bike";
-  if (mono === "ski") return "150 m ski";
-  if (mono === "shuttle run") return "5 shuttle runs";
-  return "30 double unders";
+  if (mono === "run") return distanceExercise("after-round", "run", 100);
+  if (mono === "row") return distanceExercise("after-round", "row", 150);
+  if (mono === "bike") return caloriesExercise("after-round", "bike", 8, 6);
+  if (mono === "ski") return distanceExercise("after-round", "ski", 150);
+  if (mono === "shuttle run")
+    return repsExercise("after-round", "shuttle runs", 5);
+  return repsExercise("after-round", "double unders", 30);
 }
 
-function lowerRepMovement(movement) {
-  return movement
-    .replace(/^12\s/, "8 ")
-    .replace(/^10\s/, "7 ")
-    .replace(/^8\s/, "6 ")
-    .replace(/^6\s/, "5 ")
-    .replace(/^16\s/, "10 ");
+function lowerRepExercise(exercise) {
+  const replacements = { 12: 8, 10: 7, 8: 6, 6: 5, 16: 10 };
+  const value = Number(exercise.target?.value);
+  return {
+    ...exercise,
+    target: {
+      ...exercise.target,
+      value: replacements[value] || value,
+    },
+  };
+}
+
+function repsExercise(id, movement, value, load) {
+  return exerciseDefinition(id, movement, { type: "reps", value }, load);
+}
+
+function distanceExercise(id, movement, value) {
+  return exerciseDefinition(id, movement, { type: "distance_m", value });
+}
+
+function caloriesExercise(id, movement, value, alternate) {
+  return exerciseDefinition(id, movement, {
+    type: "calories",
+    value,
+    ...(alternate ? { alternate } : {}),
+  });
+}
+
+function durationExercise(id, movement, value) {
+  return exerciseDefinition(id, movement, { type: "duration_seconds", value });
+}
+
+function exerciseDefinition(id, movement, target, load) {
+  return {
+    id,
+    movement,
+    target,
+    ...(load ? { load: { display: load } } : {}),
+  };
+}
+
+function withExerciseId(exercise, id) {
+  return { ...exercise, id };
+}
+
+function withFixedExerciseTarget(exercise, id, reps) {
+  if (exercise.target?.type === "reps") {
+    return { ...exercise, id, target: { type: "reps", value: reps } };
+  }
+  return { ...exercise, id };
 }
 
 function generatedMobility(weakness) {
@@ -3433,9 +4321,9 @@ function buildMastersRxOpenSession(
         ],
       }
     : template;
-  const wod = claimUniqueGeneratedWod(
+  const workoutDefinition = claimUniqueGeneratedWod(
     (collisionSalt) =>
-      mastersRxWod(
+      mastersRxWorkoutDefinition(
         week,
         day,
         profile,
@@ -3452,7 +4340,7 @@ function buildMastersRxOpenSession(
     focus: `Men Masters 35-39 RX prep with ${WEAKNESS_LABELS[options.weakness].toLowerCase()} priority. ${phase.note} Build Open standards without failed skill reps.`,
     warmup: selected.warmup,
     strength: selected.strength,
-    wod,
+    workoutDefinition,
     mobility: selected.mobility,
     addOns: mastersRxAddOns(week, day),
     duration: options.duration,
@@ -3585,6 +4473,283 @@ function mastersRxSessionTemplates(profile, week, phase) {
       ],
     },
   };
+}
+
+function mastersRxWorkoutDefinition(
+  week,
+  day,
+  profile,
+  wallBallVolume,
+  variation,
+) {
+  const variablePatternWeeks = [1, 2, 3, 5, 6, 7];
+  const variableIndex = variablePatternWeeks.indexOf(week);
+  let variedDay = day;
+  let variedWeek = week;
+
+  if (variation && variableIndex >= 0) {
+    const assignments = seededPermutation(
+      5 * variablePatternWeeks.length,
+      `${variation.seed}|masters-rx-structured`,
+    );
+    const slot = variableIndex * 5 + (day - 1);
+    const assignedPattern = assignments[slot];
+    variedDay = Math.floor(assignedPattern / variablePatternWeeks.length) + 1;
+    variedWeek =
+      variablePatternWeeks[assignedPattern % variablePatternWeeks.length];
+  } else if (variation) {
+    variedDay =
+      seededPermutation(5, `${variation.seed}|masters-rx-fixed-${week}`)[
+        day - 1
+      ] + 1;
+  }
+
+  const pool = mastersRxMovementPool(
+    variedDay,
+    variedWeek,
+    profile,
+    wallBallVolume,
+  );
+  const definition = mastersRxPattern(variedWeek, variedDay, pool);
+  return varyStructuredMastersWorkout(definition, variation);
+}
+
+function mastersRxMovementPool(day, week, profile, wallBallVolume) {
+  const cleanLoad = kg(profile.maxes.cleanJerk, week >= 6 ? 0.6 : 0.52);
+  const lightCleanLoad = kg(profile.maxes.cleanJerk, week >= 6 ? 0.55 : 0.5);
+  const thrusterLoad =
+    week >= 6 ? "43-61 kg / 95-135 lb" : "43-52 kg / 95-115 lb";
+  const ohsLoad = "52 kg / 115 lb";
+  const wallBallReps = clamp(Math.round(wallBallVolume / 8), 10, 20);
+  const pools = {
+    1: {
+      primary: repsExercise("primary", "wall balls", wallBallReps),
+      secondary: repsExercise("secondary", "toes-to-bar", week >= 6 ? 10 : 8),
+      tertiary: repsExercise("tertiary", "box jump-overs", 10),
+      mono: distanceExercise("monostructural", "run", 200),
+    },
+    2: {
+      primary: repsExercise("primary", "overhead squats", 8, ohsLoad),
+      secondary: repsExercise("secondary", "burpees over bar", 8),
+      tertiary: repsExercise("tertiary", "power snatches", 6, lightCleanLoad),
+      mono: repsExercise("monostructural", "shuttle runs", 8),
+    },
+    3: {
+      primary: repsExercise("primary", "thrusters", 8, thrusterLoad),
+      secondary: repsExercise("secondary", "chest-to-bar pull-ups", 8),
+      tertiary: repsExercise("tertiary", "bar muscle-ups or transitions", 4),
+      mono: distanceExercise("monostructural", "row", 150),
+    },
+    4: {
+      primary: repsExercise("primary", "clean and jerks", 8, cleanLoad),
+      secondary: repsExercise("secondary", "bar muscle-ups or transitions", 4),
+      tertiary: repsExercise("tertiary", "strict HSPU or pike presses", 8),
+      mono: repsExercise("monostructural", "double-unders", 40),
+    },
+    5: {
+      primary: repsExercise("primary", "power cleans", 6, lightCleanLoad),
+      secondary: repsExercise("secondary", "burpees over bar", 8),
+      tertiary: repsExercise("tertiary", "wall balls", 12),
+      mono: repsExercise("monostructural", "double-unders", 30),
+    },
+  };
+  return pools[day] || pools[1];
+}
+
+function mastersRxPattern(week, day, pool) {
+  const scaling =
+    "Scale skill, reps, or load before changing the clock or movement order.";
+  const common = {
+    scaling,
+    stimulus: "Open-style repeatability with competition-standard movement",
+  };
+  const patterns = {
+    1: createWorkoutDefinition(
+      { type: "amrap", durationSeconds: 12 * 60 },
+      [pool.primary, pool.secondary, pool.tertiary, pool.mono],
+      { ...common, score: "rounds and reps" },
+    ),
+    2: createWorkoutDefinition(
+      {
+        type: "intervals",
+        intervalSeconds: 180,
+        rounds: 4,
+        restRemaining: true,
+      },
+      [pool.mono, pool.primary, pool.secondary],
+      { ...common, score: "slowest interval split" },
+    ),
+    3: createWorkoutDefinition(
+      { type: "fixed_rounds", rounds: 3, durationSeconds: 14 * 60 },
+      [pool.primary, pool.secondary, pool.tertiary],
+      { ...common, score: "finish time or reps completed at cap" },
+    ),
+    4: createWorkoutDefinition(
+      {
+        type: "emom",
+        intervalSeconds: 60,
+        rounds: 4,
+        stations: [
+          { type: "work", exercises: [pool.primary] },
+          { type: "work", exercises: [pool.secondary] },
+          { type: "work", exercises: [pool.mono] },
+          { type: "rest" },
+        ],
+      },
+      [],
+      { ...common, score: "quality completed with no failed reps" },
+    ),
+    5: createWorkoutDefinition(
+      { type: "amrap", durationSeconds: 14 * 60 },
+      [
+        asProgressiveExercise(pool.primary),
+        asProgressiveExercise(pool.secondary),
+      ],
+      {
+        ...common,
+        progression: {
+          type: "ascending_ladder",
+          start: day === 1 ? 5 : 3,
+          increment: day === 1 ? 5 : 3,
+          appliesTo: [pool.primary.id, pool.secondary.id],
+        },
+        afterEachRound: [withExerciseId(pool.mono, "after-round")],
+        score: "last completed round plus reps",
+      },
+    ),
+    6: createWorkoutDefinition(
+      { type: "repeat_sets", sets: 5, restSeconds: 60 },
+      [pool.mono, pool.primary, pool.secondary],
+      { ...common, score: "total working time" },
+    ),
+    7: createWorkoutDefinition(
+      { type: "chipper", durationSeconds: 18 * 60 },
+      [
+        withFixedExerciseTarget(pool.mono, "chipper-mono", 50),
+        withFixedExerciseTarget(pool.primary, "chipper-primary", 30),
+        withFixedExerciseTarget(pool.secondary, "chipper-secondary", 20),
+        withFixedExerciseTarget(pool.tertiary, "chipper-tertiary", 10),
+      ],
+      { ...common, score: "finish time or reps completed" },
+    ),
+    8: createWorkoutDefinition(
+      {
+        type: "benchmark",
+        name: generatedBenchmarkName("mastersRxOpen", day),
+        durationSeconds: 15 * 60,
+      },
+      [pool.mono, pool.primary, pool.secondary, pool.tertiary],
+      { ...common, score: "benchmark result" },
+    ),
+  };
+  return patterns[week] || patterns[1];
+}
+
+function varyStructuredMastersWorkout(definition, variation) {
+  if (!variation) return definition;
+  const replacements = [
+    {
+      matches: /wall balls?/i,
+      movements: ["DB thrusters", "sandbag-to-shoulder"],
+    },
+    {
+      matches: /box (?:jump|step)-overs?/i,
+      movements: ["lateral burpees over a line", "DB step-overs"],
+    },
+    {
+      matches: /toes-to-bar/i,
+      movements: ["chest-to-bar pull-ups", "knee-to-elbow reps"],
+    },
+    {
+      matches: /overhead squats?/i,
+      movements: ["front squats", "single-arm DB overhead squats"],
+    },
+    {
+      matches: /shuttle runs?|\brun\b/i,
+      movements: [
+        {
+          movement: "bike",
+          target: { type: "calories", value: 10, alternate: 8 },
+        },
+        { movement: "ski", target: { type: "distance_m", value: 150 } },
+      ],
+    },
+    {
+      matches: /burpees?/i,
+      movements: ["box jump-overs", "alternating DB snatches"],
+    },
+    { matches: /chest-to-bar/i, movements: ["toes-to-bar", "strict pull-ups"] },
+    { matches: /\brow\b|\bbike\b|\bski\b/i, movements: ["bike", "row"] },
+    {
+      matches: /thrusters?/i,
+      movements: ["DB thrusters", "DB clean and push presses"],
+    },
+    {
+      matches: /bar muscle-ups?/i,
+      movements: ["ring muscle-ups", "chest-to-bar pull-ups plus box dips"],
+    },
+    {
+      matches: /double-unders?/i,
+      movements: ["crossovers", "fast single-unders"],
+    },
+    {
+      matches: /clean and jerks?|power cleans?|power snatches?/i,
+      movements: ["alternating DB snatches", "sandbag cleans"],
+    },
+    {
+      matches: /strict HSPU|pike presses?/i,
+      movements: ["strict DB presses", "hand-release push-ups"],
+    },
+  ];
+  const main = workoutMainExercises(definition);
+  const candidates = main.flatMap((exercise, exerciseIndex) =>
+    replacements
+      .filter((replacement) => replacement.matches.test(exercise.movement))
+      .map((replacement) => ({ exerciseIndex, replacement })),
+  );
+  if (!candidates.length) return definition;
+  const candidate =
+    candidates[
+      seededIndex(
+        `${variation.seed}|${variation.week}|${variation.day}|${variation.collisionSalt}|movement`,
+        candidates.length,
+      )
+    ];
+  const replacement =
+    candidate.replacement.movements[
+      seededIndex(
+        `${variation.seed}|${variation.collisionSalt}|replacement`,
+        candidate.replacement.movements.length,
+      )
+    ];
+  let currentIndex = 0;
+  return mapMainWorkoutExercises(definition, (exercise) => {
+    const next =
+      currentIndex === candidate.exerciseIndex
+        ? typeof replacement === "string"
+          ? { ...exercise, movement: replacement }
+          : { ...exercise, ...replacement }
+        : exercise;
+    currentIndex += 1;
+    return next;
+  });
+}
+
+function mapMainWorkoutExercises(definition, mapper) {
+  if (definition.format.type === "emom") {
+    return {
+      ...definition,
+      format: {
+        ...definition.format,
+        stations: definition.format.stations.map((station) =>
+          station.type === "rest"
+            ? station
+            : { ...station, exercises: station.exercises.map(mapper) },
+        ),
+      },
+    };
+  }
+  return { ...definition, exercises: definition.exercises.map(mapper) };
 }
 
 function mastersRxWod(week, day, profile, wallBallVolume, variation) {
@@ -4219,14 +5384,16 @@ function buildProgramWod(dayId, week, profile, wodMinutes) {
     day4: { goal: "gymnastics", weakness: "muscleup", generatedDay: 4 },
   }[dayId];
   const phase = getGeneratedWeekPhase(week, config.goal);
-  return generatedWodItems(
-    config.goal,
-    config.weakness,
-    config.generatedDay,
-    week,
-    profile,
-    phase,
-    Number(wodMinutes),
+  return renderWorkoutItems(
+    generatedWodItems(
+      config.goal,
+      config.weakness,
+      config.generatedDay,
+      week,
+      profile,
+      phase,
+      Number(wodMinutes),
+    ),
   );
 }
 
@@ -4611,11 +5778,13 @@ const FORGE_HOUR_API = {
   WEEK_META,
   WEAKNESS_LABELS,
   WOD_SCHEMA_VERSION,
+  WORKOUT_DEFINITION_VERSION,
   buildGeneratedProgramme,
   buildRxReadiness,
   buildSession,
   clamp,
   cloneDefaultProfile,
+  claimUniqueGeneratedWod,
   createGenerationSeed,
   createId,
   customPlanSegments,
@@ -4632,6 +5801,8 @@ const FORGE_HOUR_API = {
   kg,
   migratePlanState,
   migrateGeneratedProgrammePlans,
+  renderWorkoutDescription,
+  renderWorkoutItems,
   normalizePrValue,
   parseTimeToSeconds,
   percent,
@@ -4645,6 +5816,9 @@ const FORGE_HOUR_API = {
   structuralWodSignature,
   trimNumber,
   valueFromPath,
+  validateWorkoutDefinition,
+  workoutDefinitionErrors,
+  workoutItemsForSession,
 };
 
 if (typeof globalThis !== "undefined") {

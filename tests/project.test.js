@@ -271,8 +271,8 @@ test("service worker revalidates app code and falls back to its offline cache", 
 test("service worker preserves unrelated caches during version transitions", async () => {
   const { calls, listeners } = runServiceWorker({
     cacheKeys: [
-      "crossfit-training-programme-v8",
       "crossfit-training-programme-v9",
+      "crossfit-training-programme-v10",
       "another-application-v1",
     ],
   });
@@ -285,7 +285,7 @@ test("service worker preserves unrelated caches during version transitions", asy
   });
   await activationPromise;
 
-  assert.deepEqual(calls.deleted, ["crossfit-training-programme-v8"]);
+  assert.deepEqual(calls.deleted, ["crossfit-training-programme-v9"]);
 });
 
 test("project documentation describes the current feature set", () => {

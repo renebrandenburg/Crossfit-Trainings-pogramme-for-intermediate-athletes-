@@ -3,6 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { JSDOM } = require("jsdom");
+const { workoutItemsForSession } = require("../app.js");
 
 function freshRequire(file) {
   const modulePath = require.resolve(file);
@@ -186,6 +187,7 @@ function mountApp({
   recordingSupport = false,
   storedState = null,
   confirmResponses = [true],
+  apiOverrides = null,
 } = {}) {
   const dom = new JSDOM(
     '<!doctype html><html><head><meta name="theme-color" content="#10120f"></head><body><div id="root"></div></body></html>',
@@ -245,6 +247,7 @@ function mountApp({
   freshRequire("../app.js");
   freshRequire("../supabase-sync.js");
   dom.window.ForgeHour = global.ForgeHour;
+  if (apiOverrides) Object.assign(dom.window.ForgeHour, apiOverrides);
   dom.window.ForgeHourSync = global.ForgeHourSync;
   freshRequire("../react-app.js");
 
@@ -378,6 +381,10 @@ function activeScores(state) {
   );
 }
 
+function sessionWod(session) {
+  return workoutItemsForSession(session)[0];
+}
+
 function canonicalPlanState({
   kind = "custom",
   customized = true,
@@ -469,12 +476,12 @@ async function assertPlanSessionAcrossViews(mounted, plan) {
     programView.getByLabelText("Programme week").value,
     String(session.week),
   );
-  assert.ok(programView.getByText(session.wod[0]));
+  assert.ok(programView.getByText(sessionWod(session)));
 
   fireEvent.click(ui.getByRole("button", { name: "Build" }));
   const builderView = view("builderView");
   assert.equal(builderView.getByLabelText("Active plan").value, plan.id);
-  assert.ok(builderView.getByText(session.wod[0]));
+  assert.ok(builderView.getByText(sessionWod(session)));
 
   fireEvent.click(ui.getByRole("button", { name: "Proof" }));
   const proofView = view("proofView");
@@ -592,6 +599,12 @@ test("React Testing Library generates a Masters 35-39 RX Open prep programme", a
     assert.equal(activePlan.generatorOptions.weakness, "runningBodyweight");
     assert.equal(activePlan.sessions.length, 32);
     assert.equal(Object.hasOwn(saved, "customPlans"), false);
+    assert.ok(
+      activePlan.sessions.every(
+        (session) =>
+          session.workoutDefinition && !Object.hasOwn(session, "wod"),
+      ),
+    );
     assert.ok(
       activePlan.sessions.every(
         (session) => !session.addOns || Array.isArray(session.addOns),
@@ -885,7 +898,7 @@ test("React Testing Library reloads the canonical active plan without regenerati
     assert.equal(reloaded.activePlanId, "saved-plan-1");
     assert.equal(reloaded.plans[0].sessions[0].id, "saved-session-1");
     assert.equal(
-      reloaded.plans[0].sessions[0].wod[0],
+      sessionWod(reloaded.plans[0].sessions[0]),
       "AMRAP 12: row, burpees, and pull-ups",
     );
 
@@ -1001,17 +1014,17 @@ test("React Testing Library regenerates the active plan without duplicating it",
       false,
     );
     assert.notEqual(
-      after.plans[0].sessions[0].wod[0],
-      before.plans[0].sessions[0].wod[0],
+      sessionWod(after.plans[0].sessions[0]),
+      sessionWod(before.plans[0].sessions[0]),
     );
 
     fireEvent.click(ui.getByRole("button", { name: "Plan" }));
     const firstSession = after.plans[0].sessions.find(
       (session) => session.week === 1,
     );
-    assert.ok(view("programView").getByText(firstSession.wod[0]));
+    assert.ok(view("programView").getByText(sessionWod(firstSession)));
     fireEvent.click(ui.getByRole("button", { name: "Build" }));
-    assert.ok(view("builderView").getByText(firstSession.wod[0]));
+    assert.ok(view("builderView").getByText(sessionWod(firstSession)));
     fireEvent.click(ui.getByRole("button", { name: "Proof" }));
     const proofOption = view("proofView").getByRole("option", {
       name: new RegExp(
@@ -1034,6 +1047,41 @@ test("React Testing Library regenerates the active plan without duplicating it",
     assert.equal(logOption.value, firstSession.id);
   } finally {
     cleanup();
+  }
+});
+
+test("React Testing Library preserves the active plan when generation is rejected", async () => {
+  const originalConsoleError = console.error;
+  console.error = () => undefined;
+  const mounted = mountApp({
+    storedState: canonicalPlanState({ kind: "generated", customized: false }),
+    apiOverrides: {
+      buildGeneratedProgramme: () => {
+        throw new Error("invalid structured workout");
+      },
+    },
+  });
+  const { cleanup, fireEvent, readState, ui, waitFor } = mounted;
+
+  try {
+    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    const before = structuredClone(readState());
+    fireEvent.click(
+      ui.getByRole("button", { name: "Regenerate 8-week programme" }),
+    );
+
+    await waitFor(() =>
+      assert.ok(
+        ui.getByText(
+          "Programme generation could not produce valid workouts. Your current plan was not changed.",
+        ),
+      ),
+    );
+    assert.deepEqual(readState().plans, before.plans);
+    assert.equal(readState().activePlanId, before.activePlanId);
+  } finally {
+    cleanup();
+    console.error = originalConsoleError;
   }
 });
 
@@ -1882,7 +1930,7 @@ test("React Testing Library isolates signed-in scores from legacy guest scores",
 
     const saved = readState();
     assert.equal(saved.schemaVersion, 3);
-    assert.equal(saved.planSchemaVersion, 2);
+    assert.equal(saved.planSchemaVersion, 3);
     assert.equal(Object.hasOwn(saved, "logs"), false);
     assert.equal(saved.scoreDataByOwner.guest.logs[0].id, "guest-log");
     assert.equal(saved.scoreDataByOwner["user-1"].logs[0].id, "remote-log");

@@ -10,9 +10,11 @@ const {
   PR_METRICS,
   WEEK_META,
   WOD_SCHEMA_VERSION,
+  WORKOUT_DEFINITION_VERSION,
   buildGeneratedProgramme,
   buildRxReadiness,
   buildSession,
+  claimUniqueGeneratedWod,
   clamp,
   cloneDefaultProfile,
   customPlanSegments,
@@ -36,6 +38,10 @@ const {
   structuralWodSignature,
   timerDisplaySeconds,
   trimNumber,
+  renderWorkoutDescription,
+  validateWorkoutDefinition,
+  workoutDefinitionErrors,
+  workoutItemsForSession,
 } = require("../app.js");
 
 function totalMinutes(session) {
@@ -47,6 +53,10 @@ function totalMinutes(session) {
 
 function wodSegment(session) {
   return session.segments.find((segment) => /WOD|Engine/.test(segment.title));
+}
+
+function wodItems(session) {
+  return workoutItemsForSession(session);
 }
 
 function daysAgo(days) {
@@ -230,14 +240,19 @@ test("needs-based generator creates complete eight-week programmes", () => {
       ),
       60,
     );
-    assert.match(plan.wod[1], /Stimulus:/);
-    assert.match(plan.wod[2], /Score:/);
+    assert.match(wodItems(plan)[1], /Stimulus:/);
+    assert.match(wodItems(plan)[2], /Score:/);
+    assert.equal(
+      plan.workoutDefinition.schemaVersion,
+      WORKOUT_DEFINITION_VERSION,
+    );
+    assert.equal(Object.hasOwn(plan, "wod"), false);
     assert.equal(JSON.stringify(plan).includes("undefined"), false);
   }
 
   const dayOneWods = plans
     .filter((plan) => plan.title.includes("D1"))
-    .map((plan) => plan.wod[0]);
+    .map((plan) => wodItems(plan)[0]);
   assert.equal(new Set(dayOneWods).size, 8);
   assert.match(dayOneWods.join(" "), /AMRAP/);
   assert.match(dayOneWods.join(" "), /Every 3 min/);
@@ -261,7 +276,13 @@ test("needs-based generator changes bias by goal and clamps options", () => {
 
   assert.equal(endurancePlans.length, 40);
   assert.equal(gymnasticsPlans.length, 24);
-  assert.match(JSON.stringify(endurancePlans), /5x500 m row|Zone 3 intervals/);
+  assert.ok(
+    endurancePlans.some((plan) =>
+      plan.workoutDefinition.exercises?.some(
+        (exercise) => exercise.movement === "row",
+      ),
+    ),
+  );
   assert.match(JSON.stringify(gymnasticsPlans), /Muscle-up/);
   assert.equal(endurancePlans[0].duration, 60);
   assert.equal(gymnasticsPlans[0].duration, 45);
@@ -285,7 +306,7 @@ test("needs-based generator programs running and bodyweight weaknesses directly"
 
   assert.equal(plans.length, 32);
   assert.ok(
-    runningDays.every((plan) => /\brun\b/i.test(plan.wod[0])),
+    runningDays.every((plan) => /\brun\b/i.test(wodItems(plan)[0])),
     "day two and day four conditioning should include running",
   );
   assert.match(serialized, /Running and bodyweight capacity/);
@@ -309,7 +330,7 @@ test("generated WODs use calories only for machines", () => {
       `movement-validity-${goal}`,
     ),
   );
-  const workouts = plans.map((plan) => plan.wod[0]).join(" ");
+  const workouts = plans.map((plan) => wodItems(plan)[0]).join(" ");
 
   assert.doesNotMatch(
     workouts,
@@ -350,8 +371,8 @@ test("Masters RX generator creates Open prep sessions with separate add-ons", ()
       Array.isArray(plan.addOns),
       "generated RX plans should expose optional add-ons",
     );
-    assert.match(plan.wod[1], /Stimulus:/);
-    assert.match(plan.wod[2], /Score:/);
+    assert.match(wodItems(plan)[1], /Stimulus:/);
+    assert.match(wodItems(plan)[2], /Score:/);
     assert.equal(JSON.stringify(plan).includes("undefined"), false);
   }
 
@@ -580,8 +601,9 @@ test("generated programme migration refreshes old WOD schema without changing ID
   assert.equal(migration.plans[0].id, "generated-stronger-w2-d3");
   assert.equal(migration.plans[0].createdAt, "2026-01-01T00:00:00.000Z");
   assert.equal(migration.plans[0].wodSchemaVersion, WOD_SCHEMA_VERSION);
-  assert.match(migration.plans[0].wod[1], /Stimulus:/);
-  assert.match(migration.plans[0].wod[2], /Score:/);
+  assert.match(wodItems(migration.plans[0])[1], /Stimulus:/);
+  assert.match(wodItems(migration.plans[0])[2], /Score:/);
+  assert.equal(Object.hasOwn(migration.plans[0], "wod"), false);
   assert.equal(migration.plans[1], oldPlans[1]);
 });
 
@@ -668,21 +690,23 @@ test("seeded generation is reproducible, immutable, and materially varied", () =
   const beta = buildGeneratedProgramme(options, profile, ids, "seed-beta");
 
   assert.deepEqual(
-    alpha.map((session) => session.wod),
-    alphaAgain.map((session) => session.wod),
+    alpha.map((session) => session.workoutDefinition),
+    alphaAgain.map((session) => session.workoutDefinition),
   );
   assert.ok(
-    alpha.some((session, index) => session.wod[0] !== beta[index].wod[0]),
+    alpha.some(
+      (session, index) => wodItems(session)[0] !== wodItems(beta[index])[0],
+    ),
     "different seeds must change workout format or movements",
   );
   assert.deepEqual(options, originalOptions);
   assert.deepEqual(profile, originalProfile);
   assert.equal(
-    new Set(alpha.map((session) => session.wod[0])).size,
+    new Set(alpha.map((session) => wodItems(session)[0])).size,
     alpha.length,
   );
   assert.equal(
-    new Set(beta.map((session) => session.wod[0])).size,
+    new Set(beta.map((session) => wodItems(session)[0])).size,
     beta.length,
   );
 });
@@ -727,7 +751,7 @@ test("seeded Masters RX generation is structurally unique and changes across cyc
       profile,
       (id) => id,
       seed,
-    ).map((session) => structuralWodSignature(session.wod));
+    ).map((session) => structuralWodSignature(session));
   const alpha = buildSignatures("masters-alpha");
   const alphaAgain = buildSignatures("masters-alpha");
   const beta = buildSignatures("masters-beta");
@@ -868,9 +892,8 @@ test("canonical generated-plan migration is plan-wide, lossless, and idempotent"
     ),
   );
   assert.equal(
-    new Set(
-      migratedGenerated.map((session) => structuralWodSignature(session.wod)),
-    ).size,
+    new Set(migratedGenerated.map((session) => structuralWodSignature(session)))
+      .size,
     migratedGenerated.length,
   );
 
@@ -895,6 +918,330 @@ test("custom programme helpers turn phone text areas into renderable segments", 
     ["Warm-up", "Strength and skill", "WOD"],
   );
   assert.equal(segments[0].items.length, 2);
+});
+
+function semanticWorkout(overrides = {}) {
+  return {
+    schemaVersion: WORKOUT_DEFINITION_VERSION,
+    format: { type: "amrap", durationSeconds: 12 * 60 },
+    progression: { type: "none" },
+    buyIn: [],
+    exercises: [
+      {
+        id: "squats",
+        movement: "air squats",
+        target: { type: "reps", value: 12 },
+      },
+    ],
+    afterEachRound: [],
+    cashOut: [],
+    stimulus: "steady movement",
+    score: "completed work",
+    scaling: "Scale before changing the format.",
+    ...overrides,
+  };
+}
+
+function progressiveCouplet(progression) {
+  return semanticWorkout({
+    progression: {
+      ...progression,
+      appliesTo: ["cleans", "burpees"],
+    },
+    exercises: [
+      {
+        id: "cleans",
+        movement: "power cleans",
+        target: { type: "progressive_reps" },
+        load: { display: "45 kg" },
+      },
+      {
+        id: "burpees",
+        movement: "burpees",
+        target: { type: "progressive_reps" },
+      },
+    ],
+  });
+}
+
+test("semantic workout validator accepts every supported progression and format", () => {
+  const validDefinitions = [
+    progressiveCouplet({ type: "ascending_ladder", start: 2, increment: 2 }),
+    progressiveCouplet({
+      type: "descending_ladder",
+      start: 10,
+      decrement: 2,
+      end: 2,
+    }),
+    progressiveCouplet({
+      type: "pyramid",
+      start: 2,
+      increment: 2,
+      peak: 10,
+      decrement: 2,
+      end: 2,
+    }),
+    progressiveCouplet({
+      type: "build_up",
+      start: 40,
+      increment: 5,
+      rounds: 5,
+    }),
+    semanticWorkout({
+      format: { type: "fixed_rounds", rounds: 5, durationSeconds: 15 * 60 },
+    }),
+    semanticWorkout(),
+    semanticWorkout({
+      format: {
+        type: "emom",
+        rounds: 5,
+        intervalSeconds: 60,
+        stations: [
+          {
+            type: "work",
+            exercises: [
+              {
+                id: "row",
+                movement: "row",
+                target: { type: "calories", value: 12 },
+              },
+            ],
+          },
+          { type: "rest" },
+        ],
+      },
+      exercises: [],
+    }),
+    semanticWorkout({ format: { type: "chipper", durationSeconds: 20 * 60 } }),
+    semanticWorkout({
+      format: { type: "for_time", durationSeconds: 15 * 60 },
+      buyIn: [
+        {
+          id: "buy-in",
+          movement: "row",
+          target: { type: "distance_m", value: 500 },
+        },
+      ],
+      cashOut: [
+        {
+          id: "cash-out",
+          movement: "run",
+          target: { type: "distance_m", value: 400 },
+        },
+      ],
+    }),
+    {
+      ...progressiveCouplet({
+        type: "ascending_ladder",
+        start: 2,
+        increment: 2,
+      }),
+      afterEachRound: [
+        {
+          id: "row",
+          movement: "row",
+          target: { type: "distance_m", value: 150 },
+        },
+      ],
+    },
+  ];
+
+  validDefinitions.forEach((definition) => {
+    assert.equal(validateWorkoutDefinition(definition), definition);
+    assert.equal(workoutDefinitionErrors(definition).length, 0);
+    assert.ok(renderWorkoutDescription(definition).length > 0);
+  });
+});
+
+test("semantic workout validator rejects contradictory and incomplete structures", () => {
+  const validLadder = progressiveCouplet({
+    type: "ascending_ladder",
+    start: 2,
+    increment: 2,
+  });
+  const invalidDefinitions = [
+    {
+      ...validLadder,
+      exercises: validLadder.exercises.map((exercise) => ({
+        ...exercise,
+        target: { type: "reps", value: exercise.id === "cleans" ? 5 : 8 },
+      })),
+    },
+    {
+      ...validLadder,
+      progression: { ...validLadder.progression, appliesTo: ["missing"] },
+    },
+    progressiveCouplet({ type: "ascending_ladder", start: 0, increment: 2 }),
+    progressiveCouplet({
+      type: "descending_ladder",
+      start: 10,
+      decrement: 3,
+      end: 2,
+    }),
+    progressiveCouplet({
+      type: "pyramid",
+      start: 2,
+      increment: 3,
+      peak: 10,
+      decrement: 2,
+      end: 2,
+    }),
+    {
+      ...validLadder,
+      format: { type: "fixed_rounds", rounds: 3 },
+    },
+    semanticWorkout({
+      format: { type: "chipper", durationSeconds: 15 * 60 },
+      afterEachRound: [
+        {
+          id: "row",
+          movement: "row",
+          target: { type: "distance_m", value: 150 },
+        },
+      ],
+    }),
+    {
+      ...validLadder,
+      afterEachRound: [
+        {
+          id: "row",
+          movement: "row",
+          target: { type: "progressive_reps" },
+        },
+      ],
+    },
+    semanticWorkout({
+      format: { type: "emom", rounds: 10, intervalSeconds: 60, stations: [] },
+      exercises: [],
+    }),
+    semanticWorkout({
+      exercises: [
+        {
+          id: "duplicate",
+          movement: "row",
+          target: { type: "distance_m", value: 100 },
+        },
+        {
+          id: "duplicate",
+          movement: "burpees",
+          target: { type: "reps", value: 10 },
+        },
+      ],
+    }),
+  ];
+
+  invalidDefinitions.forEach((definition) => {
+    assert.ok(workoutDefinitionErrors(definition).length > 0);
+    assert.throws(
+      () => validateWorkoutDefinition(definition),
+      /Invalid workout/,
+    );
+  });
+});
+
+test("ladders render deterministically from explicit exercise assignments", () => {
+  const definition = {
+    ...progressiveCouplet({ type: "ascending_ladder", start: 2, increment: 2 }),
+    format: { type: "amrap", durationSeconds: 23 * 60 },
+    afterEachRound: [
+      {
+        id: "row",
+        movement: "row",
+        target: { type: "distance_m", value: 150 },
+      },
+    ],
+  };
+  const rendered = renderWorkoutDescription(definition);
+
+  assert.equal(
+    rendered,
+    "23 min ascending ladder: 2-4-6-8... power cleans at 45 kg and burpees; after each round complete 150 m row",
+  );
+  assert.doesNotMatch(rendered, /\.\.\.\s+5 power cleans|and 8 burpees/);
+  assert.equal(renderWorkoutDescription(structuredClone(definition)), rendered);
+  assert.deepEqual(
+    {
+      mode: inferWorkoutTimer({ workoutDefinition: definition }).mode,
+      plannedSeconds: inferWorkoutTimer({ workoutDefinition: definition })
+        .plannedSeconds,
+    },
+    { mode: "amrap", plannedSeconds: 23 * 60 },
+  );
+});
+
+test("generation retries invalid candidates and rejects exhausted output", () => {
+  const valid = semanticWorkout();
+  let attempts = 0;
+  const selected = claimUniqueGeneratedWod(
+    () => {
+      attempts += 1;
+      return attempts === 1
+        ? semanticWorkout({ format: { type: "amrap", durationSeconds: 0 } })
+        : valid;
+    },
+    { usedWodSignatures: new Set() },
+  );
+
+  assert.equal(selected, valid);
+  assert.equal(attempts, 2);
+  assert.throws(
+    () =>
+      claimUniqueGeneratedWod(
+        () =>
+          semanticWorkout({ format: { type: "amrap", durationSeconds: 0 } }),
+        { usedWodSignatures: new Set() },
+      ),
+    /valid, unique workout/,
+  );
+});
+
+test("table-driven generation sweep persists only valid structured workouts", () => {
+  const goals = [
+    "stronger",
+    "endurance",
+    "gymnastics",
+    "balanced",
+    "mastersRxOpen",
+  ];
+  const weaknesses = [
+    "squat",
+    "olympic",
+    "rowing",
+    "running",
+    "runningBodyweight",
+    "pulling",
+    "muscleup",
+    "t2b",
+  ];
+  const profile = cloneDefaultProfile();
+
+  for (let seedIndex = 0; seedIndex < 100; seedIndex += 1) {
+    const goal = goals[seedIndex % goals.length];
+    const weakness = weaknesses[seedIndex % weaknesses.length];
+    const daysPerWeek = 3 + (seedIndex % 3);
+    const sessions = buildGeneratedProgramme(
+      { goal, weakness, daysPerWeek, duration: 60 },
+      profile,
+      (id) => id,
+      `semantic-sweep-${seedIndex}`,
+    );
+    assert.equal(sessions.length, daysPerWeek * 8);
+    sessions.forEach((session) => {
+      assert.equal(
+        workoutDefinitionErrors(session.workoutDefinition).length,
+        0,
+      );
+      assert.equal(Object.hasOwn(session, "wod"), false);
+      assert.doesNotMatch(
+        workoutItemsForSession(session)[0],
+        /(?:^|[:,;]\s|and\s|min\s+\d+\s+)\d+\s+(?:bike|row|ski)\b/i,
+      );
+      assert.deepEqual(
+        workoutItemsForSession(JSON.parse(JSON.stringify(session))),
+        workoutItemsForSession(session),
+      );
+    });
+  }
 });
 
 test("PR helpers parse times, format results, and compare records", () => {

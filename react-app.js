@@ -48,6 +48,7 @@
     selectActiveWeekSessions,
     timerDisplaySeconds,
     valueFromPath,
+    workoutItemsForSession,
   } = api;
 
   const { createSupabaseStore, mergeById, mergePrs } = syncApi;
@@ -73,13 +74,15 @@
    * @property {string=} focus
    * @property {string[]} warmup
    * @property {string[]} strength
-   * @property {string[]} wod
+   * @property {string[]=} wod
+   * @property {Object=} workoutDefinition
    * @property {string[]} mobility
    * @property {number} duration
    * @property {string=} intensity
    * @property {"generated"|"manual"=} origin
    * @property {boolean=} generated
    * @property {boolean=} customized
+   * @property {number=} wodSchemaVersion
    * @property {string=} createdAt
    */
 
@@ -956,20 +959,22 @@
         const updatedPlan = {
           ...storedPlan,
           updatedAt: now,
-          sessions: storedPlan.sessions.map((existing) =>
-            existing.id !== editingSessionId
-              ? existing
-              : {
-                  ...existing,
-                  ...session,
-                  id: existing.id,
-                  createdAt: existing.createdAt,
-                  customized:
-                    existing.origin === "generated" || existing.generated
-                      ? true
-                      : existing.customized,
-                },
-          ),
+          sessions: storedPlan.sessions.map((existing) => {
+            if (existing.id !== editingSessionId) return existing;
+            const updatedSession = {
+              ...existing,
+              ...session,
+              id: existing.id,
+              createdAt: existing.createdAt,
+              customized:
+                existing.origin === "generated" || existing.generated
+                  ? true
+                  : existing.customized,
+            };
+            delete updatedSession.workoutDefinition;
+            delete updatedSession.wodSchemaVersion;
+            return updatedSession;
+          }),
         };
         const selection = resolvePlanTransition(
           updatedPlan,
@@ -2544,6 +2549,7 @@
       shortTitle: plan.title,
       title: plan.title,
       focus: plan.focus,
+      workoutDefinition: plan.workoutDefinition,
       segments: customPlanSegments(plan),
       addOns: plan.addOns || [],
       duration: plan.duration,
@@ -4222,6 +4228,7 @@
         regenerating: activePlan?.kind === "generated",
         initialOptions:
           activePlan?.kind === "generated" ? activePlan.generatorOptions : null,
+        onNotify,
       }),
       appState.plans.length
         ? h(
@@ -4353,6 +4360,7 @@
     onGenerate,
     regenerating,
     initialOptions,
+    onNotify,
   }) {
     const defaults = {
       goal: initialOptions?.goal || "stronger",
@@ -4377,18 +4385,28 @@
             duration: positiveNumber(data.get("generatorDuration"), 60),
           };
           const generationSeed = createGenerationSeed();
-          const generatedPlans = buildGeneratedProgramme(
-            options,
-            profile,
-            createId,
-            generationSeed,
-          );
-          onGenerate({
-            sessions: generatedPlans,
-            options,
-            generationSeed,
-            replaceActive: Boolean(data.get("replaceGenerated")),
-          });
+          try {
+            const generatedPlans = buildGeneratedProgramme(
+              options,
+              profile,
+              createId,
+              generationSeed,
+            );
+            onGenerate({
+              sessions: generatedPlans,
+              options,
+              generationSeed,
+              replaceActive: Boolean(data.get("replaceGenerated")),
+            });
+          } catch (error) {
+            console.error(
+              "Programme generation rejected invalid output.",
+              error,
+            );
+            onNotify(
+              "Programme generation could not produce valid workouts. Your current plan was not changed.",
+            );
+          }
         },
       },
       h(
@@ -4639,7 +4657,7 @@
           id: "customPlanWod",
           name: "customPlanWod",
           rows: "3",
-          defaultValue: (initialSession?.wod || []).join("\n"),
+          defaultValue: workoutItemsForSession(initialSession).join("\n"),
           placeholder: "AMRAP 14: 12 cal row, 10 DB snatches, 8 burpees",
         }),
       ),

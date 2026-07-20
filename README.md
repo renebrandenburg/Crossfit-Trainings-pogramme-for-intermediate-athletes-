@@ -70,6 +70,13 @@ selected week, and theme remain local to the browser in
 `forge-hour-state-v1`. Plan, Build, Proof, and Log resolve workouts from that
 same active-plan record; Supabase never receives programme definitions.
 
+Generated sessions persist a validated structured workout definition. Workout
+descriptions, timers, progression sequences, buy-ins, cash-outs, and
+after-each-round work are rendered from that definition instead of being stored
+as a second prose copy. Existing manual and customized text workouts remain
+loadable as legacy free-form sessions; uncustomized generated sessions migrate
+to the structured format on load.
+
 Score data in that key is partitioned by authenticated user ID. Legacy scores
 are migrated into a separate `guest` bucket and are never shown in a signed-in
 account unless the athlete explicitly chooses **Import guest scores**. A remote
