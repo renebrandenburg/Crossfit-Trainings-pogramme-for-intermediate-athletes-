@@ -30,24 +30,28 @@
     </noscript>
     <script
       src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"
-      crossorigin
+      integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z"
+      crossorigin="anonymous"
       defer
     ></script>
     <script
       src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"
-      crossorigin
+      integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1"
+      crossorigin="anonymous"
       defer
     ></script>
     <script
-      src="https://unpkg.com/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js"
-      crossorigin
-      defer
+      src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.js"
+      integrity="sha384-sLWJsCmP+Z4Qn+HgF7Hi64Djta4fZMu0fcgi3uUL3GFV/ubx2G86LPOuMf7+ZIyX"
+      crossorigin="anonymous"
     ></script>
-    <script
-      src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js"
-      crossorigin
-      defer
-    ></script>
+    <script>
+      if (!window.supabase) {
+        document.write(
+          '<script src="https://unpkg.com/@supabase/supabase-js@2.57.4/dist/umd/supabase.js" integrity="sha384-sLWJsCmP+Z4Qn+HgF7Hi64Djta4fZMu0fcgi3uUL3GFV/ubx2G86LPOuMf7+ZIyX" crossorigin="anonymous"><\/script>',
+        );
+      }
+    </script>
     <script src="./supabase-config.js" defer></script>
     <script src="./app.js" defer></script>
     <script src="./supabase-sync.js" defer></script>

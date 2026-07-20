@@ -8,10 +8,12 @@ coverage/
 # Build and generated output
 dist/
 build/
+types/database.types.ts
 
 # Local temporary files
 tmp/
 temp/
+supabase/.temp/
 
 # Local agent/plugin metadata
 .agents/

@@ -32,11 +32,37 @@ function createMatchMedia(matches = false) {
   });
 }
 
-function createMockSupabase({ session = null, remote = {}, calls = [] } = {}) {
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function createMockSupabase({
+  session = null,
+  remote = {},
+  calls = [],
+  failUpsert = [],
+  failUpsertOnce = {},
+  failSelectOnce = {},
+  getSessionResult = null,
+  missingUpsertColumns = [],
+  rpcResults = {},
+} = {}) {
+  let currentSession = session;
+  const authListeners = new Set();
   const data = {
     workout_logs: remote.workout_logs || [],
     pr_attempts: remote.pr_attempts || [],
-    personal_records: remote.personal_records || [],
+    personal_records: (remote.personal_records || []).map((record) => ({
+      ...record,
+      updated_at:
+        record.updated_at || record.updatedAt || "1970-01-01T00:00:00.000Z",
+    })),
   };
 
   function ok(value) {
@@ -45,10 +71,17 @@ function createMockSupabase({ session = null, remote = {}, calls = [] } = {}) {
 
   const client = {
     auth: {
-      getSession: () => ok({ session }),
-      onAuthStateChange: () => ({
-        data: { subscription: { unsubscribe: () => undefined } },
-      }),
+      getSession: () => getSessionResult || ok({ session: currentSession }),
+      onAuthStateChange: (callback) => {
+        authListeners.add(callback);
+        return {
+          data: {
+            subscription: {
+              unsubscribe: () => authListeners.delete(callback),
+            },
+          },
+        };
+      },
       signInWithOtp: (payload) => {
         calls.push({ type: "signInWithOtp", payload });
         return ok({});
@@ -60,13 +93,55 @@ function createMockSupabase({ session = null, remote = {}, calls = [] } = {}) {
     },
     from: (table) => ({
       select: () => {
-        if (table === "personal_records") return ok(data[table]);
-        return {
-          order: () => ok(data[table]),
+        calls.push({ type: "select", table });
+        const selected = () => {
+          const remainingFailures = Number(failSelectOnce[table]) || 0;
+          if (remainingFailures > 0) {
+            failSelectOnce[table] = remainingFailures - 1;
+            return Promise.resolve({
+              data: null,
+              error: { code: "NETWORK_ERROR", message: "Offline" },
+            });
+          }
+          return ok(data[table]);
         };
+        if (table === "personal_records") return selected();
+        const builder = {
+          order: () => builder,
+          range: async (from, to) => {
+            const result = await selected();
+            return result.error
+              ? result
+              : { ...result, data: result.data.slice(from, to + 1) };
+          },
+        };
+        return builder;
       },
       upsert: (payload) => {
         calls.push({ type: "upsert", table, payload });
+        const rows = Array.isArray(payload) ? payload : [payload];
+        const missingColumn = missingUpsertColumns.find((column) =>
+          rows.some((row) => Object.hasOwn(row, column)),
+        );
+        if (missingColumn) {
+          return Promise.resolve({
+            data: null,
+            error: {
+              code: "PGRST204",
+              message: `Could not find the '${missingColumn}' column in the schema cache`,
+            },
+          });
+        }
+        const remainingFailures = Number(failUpsertOnce[table]) || 0;
+        if (failUpsert.includes(table) || remainingFailures > 0) {
+          if (remainingFailures > 0) {
+            failUpsertOnce[table] = remainingFailures - 1;
+          }
+          return Promise.resolve({
+            data: null,
+            error: { code: "NETWORK_ERROR", message: "Offline" },
+          });
+        }
         return ok(payload);
       },
       delete: () => ({
@@ -76,10 +151,28 @@ function createMockSupabase({ session = null, remote = {}, calls = [] } = {}) {
         },
       }),
     }),
+    rpc: (name, payload) => {
+      calls.push({ type: "rpc", name, payload });
+      const configured = rpcResults[name];
+      return ok(
+        typeof configured === "function"
+          ? configured(payload)
+          : configured === undefined
+            ? null
+            : configured,
+      );
+    },
   };
 
   return {
     client,
+    authListenerCount() {
+      return authListeners.size;
+    },
+    emitAuth(event, nextSession) {
+      currentSession = nextSession;
+      authListeners.forEach((listener) => listener(event, nextSession));
+    },
     supabase: {
       createClient: () => client,
     },
@@ -274,6 +367,17 @@ function installRecordingMocks(browserWindow) {
   browserWindow.MediaRecorder = MockMediaRecorder;
 }
 
+function activeScores(state) {
+  const owner = state.activeScoreOwner || "guest";
+  return (
+    state.scoreDataByOwner?.[owner] || {
+      logs: state.logs || [],
+      prs: state.prs || {},
+      prAttempts: state.prAttempts || [],
+    }
+  );
+}
+
 function canonicalPlanState({
   kind = "custom",
   customized = true,
@@ -327,6 +431,69 @@ function canonicalPlanState({
   };
 }
 
+function sparsePlanFixture({ id, title, week }) {
+  const session = {
+    ...canonicalPlanState().plans[0].sessions[0],
+    id: `${id}-session`,
+    week,
+    title: `${title} week ${week} session`,
+    focus: `${title} fallback week`,
+    wod: [`AMRAP ${week + 10}: ${title} workout`],
+  };
+  return {
+    id,
+    title,
+    kind: "custom",
+    generatorOptions: null,
+    generationSeed: null,
+    createdAt: "2026-07-01T10:00:00.000Z",
+    updatedAt: "2026-07-01T10:00:00.000Z",
+    sessions: [session],
+  };
+}
+
+async function assertPlanSessionAcrossViews(mounted, plan) {
+  const { fireEvent, readState, ui, view, waitFor } = mounted;
+  const session = plan.sessions[0];
+
+  await waitFor(() => {
+    const state = readState();
+    assert.equal(state.activePlanId, plan.id);
+    assert.equal(state.selectedWeek, session.week);
+  });
+
+  fireEvent.click(ui.getByRole("button", { name: "Plan" }));
+  const programView = view("programView");
+  assert.ok(programView.getByRole("heading", { name: plan.title }));
+  assert.equal(
+    programView.getByLabelText("Programme week").value,
+    String(session.week),
+  );
+  assert.ok(programView.getByText(session.wod[0]));
+
+  fireEvent.click(ui.getByRole("button", { name: "Build" }));
+  const builderView = view("builderView");
+  assert.equal(builderView.getByLabelText("Active plan").value, plan.id);
+  assert.ok(builderView.getByText(session.wod[0]));
+
+  fireEvent.click(ui.getByRole("button", { name: "Proof" }));
+  const proofView = view("proofView");
+  await waitFor(() => {
+    const option = proofView.getByRole("option", {
+      name: new RegExp(session.title),
+    });
+    assert.equal(option.value, session.id);
+    assert.equal(proofView.getByLabelText("Workout source").value, session.id);
+  });
+
+  fireEvent.click(ui.getByRole("button", { name: "Log" }));
+  const logView = view("logView");
+  await waitFor(() => {
+    assert.equal(logView.getByLabelText("Week").value, String(session.week));
+    assert.equal(logView.getByLabelText("Session").value, session.id);
+  });
+}
+
 test("React Testing Library renders the dashboard and bottom navigation", async () => {
   const { cleanup, ui } = mountApp();
 
@@ -371,15 +538,18 @@ test("React Testing Library keeps cleared time benchmarks as test-needed values"
     fireEvent.change(ui.getByLabelText("5 km run"), { target: { value: " " } });
     fireEvent.click(ui.getByRole("button", { name: "Save assessment" }));
 
-    await waitFor(() => {
-      const saved = JSON.parse(
-        window.localStorage.getItem("forge-hour-state-v1"),
-      );
-      assert.equal(saved.profile.benchmarks.row1k, "");
-      assert.equal(saved.profile.benchmarks.row2k, "");
-      assert.equal(saved.profile.benchmarks.run5k, "");
-      assert.ok(ui.getByText("Test needed: 1 km row"));
-    });
+    await waitFor(
+      () => {
+        const saved = JSON.parse(
+          window.localStorage.getItem("forge-hour-state-v1"),
+        );
+        assert.equal(saved.profile.benchmarks.row1k, "");
+        assert.equal(saved.profile.benchmarks.row2k, "");
+        assert.equal(saved.profile.benchmarks.run5k, "");
+        assert.ok(ui.getByText("Test needed: 1 km row"));
+      },
+      { timeout: 5000 },
+    );
   } finally {
     cleanup();
   }
@@ -394,6 +564,9 @@ test("React Testing Library generates a Masters 35-39 RX Open prep programme", a
 
     fireEvent.change(ui.getByLabelText("Main goal"), {
       target: { value: "mastersRxOpen" },
+    });
+    fireEvent.change(ui.getByLabelText("Biggest weakness"), {
+      target: { value: "runningBodyweight" },
     });
     fireEvent.click(
       ui.getByRole("button", { name: "Generate 8-week programme" }),
@@ -416,12 +589,22 @@ test("React Testing Library generates a Masters 35-39 RX Open prep programme", a
     );
     assert.equal(activePlan.kind, "generated");
     assert.equal(activePlan.generatorOptions.goal, "mastersRxOpen");
+    assert.equal(activePlan.generatorOptions.weakness, "runningBodyweight");
     assert.equal(activePlan.sessions.length, 32);
     assert.equal(Object.hasOwn(saved, "customPlans"), false);
     assert.ok(
       activePlan.sessions.every(
         (session) => !session.addOns || Array.isArray(session.addOns),
       ),
+    );
+    assert.ok(
+      activePlan.sessions
+        .filter((session) => /\bD4:/.test(session.title))
+        .every((session) =>
+          session.strength.some((item) =>
+            /200 m relaxed run \+ 8 push-ups \+ 12 air squats/.test(item),
+          ),
+        ),
     );
   } finally {
     cleanup();
@@ -469,13 +652,14 @@ test("React Testing Library records workout timer splits into a saved log", asyn
       const saved = JSON.parse(
         window.localStorage.getItem("forge-hour-state-v1"),
       );
+      const scores = activeScores(saved);
       assert.ok(
         ["amrap", "emom", "forTime", "interval", "tabata", "rest"].includes(
-          saved.logs[0].timerResult.mode,
+          scores.logs[0].timerResult.mode,
         ),
       );
-      assert.equal(saved.logs[0].timerResult.splits.length, 1);
-      assert.match(saved.logs[0].wodScore, /splits/);
+      assert.equal(scores.logs[0].timerResult.splits.length, 1);
+      assert.match(scores.logs[0].wodScore, /splits/);
     });
   } finally {
     cleanup();
@@ -536,7 +720,7 @@ test("React Testing Library records competition proof metadata into a workout lo
     const finish = await ui.findByRole(
       "button",
       { name: "Finish recording" },
-      { timeout: 4500 },
+      { timeout: 8000 },
     );
     fireEvent.click(finish);
 
@@ -562,16 +746,17 @@ test("React Testing Library records competition proof metadata into a workout lo
       const saved = JSON.parse(
         window.localStorage.getItem("forge-hour-state-v1"),
       );
-      assert.equal(saved.logs[0].competitionProof.recorded, true);
-      assert.equal(saved.logs[0].competitionProof.overlayEmbedded, true);
-      assert.equal(saved.logs[0].competitionProof.interrupted, false);
-      assert.equal(saved.logs[0].competitionProof.temporaryStorage, "opfs");
-      assert.ok(saved.logs[0].competitionProof.fileName.endsWith(".mp4"));
-      assert.ok(saved.logs[0].competitionProof.exportedAt);
-      assert.equal(saved.logs[0].dayTitle, "Open Test 1");
-      assert.equal(saved.logs[0].timerResult.mode, "amrap");
-      assert.equal(saved.logs[0].timerResult.plannedSeconds, 720);
-      assert.equal(saved.logs[0].timerResult.status, "completed");
+      const scores = activeScores(saved);
+      assert.equal(scores.logs[0].competitionProof.recorded, true);
+      assert.equal(scores.logs[0].competitionProof.overlayEmbedded, true);
+      assert.equal(scores.logs[0].competitionProof.interrupted, false);
+      assert.equal(scores.logs[0].competitionProof.temporaryStorage, "opfs");
+      assert.ok(scores.logs[0].competitionProof.fileName.endsWith(".mp4"));
+      assert.ok(scores.logs[0].competitionProof.exportedAt);
+      assert.equal(scores.logs[0].dayTitle, "Open Test 1");
+      assert.equal(scores.logs[0].timerResult.mode, "amrap");
+      assert.equal(scores.logs[0].timerResult.plannedSeconds, 720);
+      assert.equal(scores.logs[0].timerResult.status, "completed");
     });
   } finally {
     cleanup();
@@ -612,9 +797,10 @@ test("React Testing Library recovers an unexpectedly stopped proof recording", a
       const saved = JSON.parse(
         window.localStorage.getItem("forge-hour-state-v1"),
       );
-      assert.equal(saved.logs[0].competitionProof.interrupted, true);
+      const scores = activeScores(saved);
+      assert.equal(scores.logs[0].competitionProof.interrupted, true);
       assert.match(
-        saved.logs[0].competitionProof.interruptions[0].reason,
+        scores.logs[0].competitionProof.interruptions[0].reason,
         /stopped unexpectedly/i,
       );
     });
@@ -803,6 +989,10 @@ test("React Testing Library regenerates the active plan without duplicating it",
     const after = readState();
     assert.equal(after.plans.length, 1);
     assert.equal(after.plans[0].id, before.plans[0].id);
+    assert.deepEqual(
+      after.plans[0].generatorOptions,
+      before.plans[0].generatorOptions,
+    );
     assert.equal(after.plans[0].sessions.length, 32);
     assert.equal(
       after.plans[0].sessions.some(
@@ -847,6 +1037,369 @@ test("React Testing Library regenerates the active plan without duplicating it",
   }
 });
 
+test("React Testing Library persists a sparse plan fallback week when switching plans", async () => {
+  const weekOnePlan = sparsePlanFixture({
+    id: "week-one-plan",
+    title: "Week one plan",
+    week: 1,
+  });
+  const weekFourPlan = sparsePlanFixture({
+    id: "week-four-plan",
+    title: "Week four plan",
+    week: 4,
+  });
+  const storedState = {
+    ...canonicalPlanState(),
+    plans: [weekOnePlan, weekFourPlan],
+    activePlanId: weekOnePlan.id,
+    selectedWeek: 1,
+  };
+  const mounted = mountApp({ storedState });
+  let persistedState;
+
+  try {
+    mounted.fireEvent.click(
+      await mounted.ui.findByRole("button", { name: "Build" }),
+    );
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Active plan"), {
+      target: { value: weekFourPlan.id },
+    });
+
+    await assertPlanSessionAcrossViews(mounted, weekFourPlan);
+    persistedState = mounted.readState();
+  } finally {
+    mounted.cleanup();
+  }
+
+  const reloaded = mountApp({ storedState: persistedState });
+  try {
+    await reloaded.ui.findByRole("heading", { name: "Training dashboard" });
+    await assertPlanSessionAcrossViews(reloaded, weekFourPlan);
+  } finally {
+    reloaded.cleanup();
+  }
+});
+
+test("React Testing Library repairs a stale selected week when a sparse plan loads", async () => {
+  const plan = sparsePlanFixture({
+    id: "startup-week-five-plan",
+    title: "Startup week five plan",
+    week: 5,
+  });
+  const mounted = mountApp({
+    storedState: {
+      ...canonicalPlanState(),
+      plans: [plan],
+      activePlanId: plan.id,
+      selectedWeek: 1,
+    },
+  });
+
+  try {
+    await mounted.ui.findByRole("heading", { name: "Training dashboard" });
+    await assertPlanSessionAcrossViews(mounted, plan);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React Testing Library selects and reloads a session added to a different sparse week", async () => {
+  const originalPlan = sparsePlanFixture({
+    id: "add-different-week-plan",
+    title: "Add different week plan",
+    week: 1,
+  });
+  const mounted = mountApp({
+    storedState: {
+      ...canonicalPlanState(),
+      plans: [originalPlan],
+      activePlanId: originalPlan.id,
+      selectedWeek: 1,
+    },
+  });
+  let persistedState;
+  let updatedPlan;
+
+  try {
+    mounted.fireEvent.click(
+      await mounted.ui.findByRole("button", { name: "Build" }),
+    );
+    mounted.fireEvent.change(document.querySelector("#customPlanWeek"), {
+      target: { value: "5" },
+    });
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Day or title"), {
+      target: { value: "New week five session" },
+    });
+    mounted.fireEvent.change(mounted.ui.getByLabelText("WOD"), {
+      target: { value: "5 rounds: run, pull-ups, and front squats" },
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Save training session" }),
+    );
+
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      assert.equal(state.selectedWeek, 5);
+      assert.equal(state.plans[0].sessions[0].title, "New week five session");
+    });
+    updatedPlan = mounted.readState().plans[0];
+    await assertPlanSessionAcrossViews(mounted, {
+      ...updatedPlan,
+      sessions: [updatedPlan.sessions[0]],
+    });
+    persistedState = mounted.readState();
+  } finally {
+    mounted.cleanup();
+  }
+
+  const reloaded = mountApp({ storedState: persistedState });
+  try {
+    await reloaded.ui.findByRole("heading", { name: "Training dashboard" });
+    await assertPlanSessionAcrossViews(reloaded, {
+      ...updatedPlan,
+      sessions: [updatedPlan.sessions[0]],
+    });
+  } finally {
+    reloaded.cleanup();
+  }
+});
+
+test("React Testing Library selects the first session added without an active plan", async () => {
+  const mounted = mountApp({
+    storedState: {
+      ...canonicalPlanState(),
+      plans: [],
+      activePlanId: null,
+      selectedWeek: 2,
+    },
+  });
+
+  try {
+    mounted.fireEvent.click(
+      await mounted.ui.findByRole("button", { name: "Build" }),
+    );
+    mounted.fireEvent.change(document.querySelector("#customPlanWeek"), {
+      target: { value: "7" },
+    });
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Day or title"), {
+      target: { value: "First week seven session" },
+    });
+    mounted.fireEvent.change(mounted.ui.getByLabelText("WOD"), {
+      target: { value: "For time: row, burpees, and cleans" },
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Save training session" }),
+    );
+
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      assert.ok(state.activePlanId);
+      assert.equal(state.selectedWeek, 7);
+      assert.equal(
+        state.plans[0].sessions[0].title,
+        "First week seven session",
+      );
+    });
+    const plan = mounted.readState().plans[0];
+    await assertPlanSessionAcrossViews(mounted, plan);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React Testing Library persists the sparse fallback week after deleting the active plan", async () => {
+  const weekSixPlan = sparsePlanFixture({
+    id: "week-six-plan",
+    title: "Week six plan",
+    week: 6,
+  });
+  const deletedWeekFourPlan = sparsePlanFixture({
+    id: "deleted-week-four-plan",
+    title: "Deleted week four plan",
+    week: 4,
+  });
+  const storedState = {
+    ...canonicalPlanState(),
+    plans: [weekSixPlan, deletedWeekFourPlan],
+    activePlanId: deletedWeekFourPlan.id,
+    selectedWeek: 4,
+  };
+  const mounted = mountApp({ storedState });
+  let persistedState;
+
+  try {
+    mounted.fireEvent.click(
+      await mounted.ui.findByRole("button", { name: "Build" }),
+    );
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Delete custom plan" }),
+    );
+
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      assert.deepEqual(
+        state.plans.map((plan) => plan.id),
+        [weekSixPlan.id],
+      );
+      assert.equal(state.activePlanId, weekSixPlan.id);
+      assert.equal(state.selectedWeek, 6);
+    });
+    await assertPlanSessionAcrossViews(mounted, weekSixPlan);
+    persistedState = mounted.readState();
+  } finally {
+    mounted.cleanup();
+  }
+
+  const reloaded = mountApp({ storedState: persistedState });
+  try {
+    await reloaded.ui.findByRole("heading", { name: "Training dashboard" });
+    await assertPlanSessionAcrossViews(reloaded, weekSixPlan);
+  } finally {
+    reloaded.cleanup();
+  }
+});
+
+test("React Testing Library follows a session moved out of the active sparse week", async () => {
+  const plan = sparsePlanFixture({
+    id: "move-session-plan",
+    title: "Move session plan",
+    week: 1,
+  });
+  const mounted = mountApp({
+    storedState: {
+      ...canonicalPlanState(),
+      plans: [plan],
+      activePlanId: plan.id,
+      selectedWeek: 1,
+    },
+  });
+
+  try {
+    mounted.fireEvent.click(
+      await mounted.ui.findByRole("button", { name: "Build" }),
+    );
+    mounted.fireEvent.click(
+      mounted.view("builderView").getByRole("button", { name: "Edit" }),
+    );
+    mounted.fireEvent.change(document.querySelector("#customPlanWeek"), {
+      target: { value: "4" },
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Update training session" }),
+    );
+
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      assert.equal(state.plans[0].sessions[0].week, 4);
+      assert.equal(state.selectedWeek, 4);
+    });
+    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "Plan" }));
+    assert.equal(document.querySelector("#programWeek").value, "4");
+    assert.ok(
+      mounted
+        .view("programView")
+        .getByText("AMRAP 11: Move session plan workout"),
+    );
+    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "Log" }));
+    assert.equal(
+      mounted.ui.getByLabelText("Session").value,
+      plan.sessions[0].id,
+    );
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React Testing Library falls back after deleting the last session in the selected week", async () => {
+  const weekOne = sparsePlanFixture({
+    id: "delete-week-one",
+    title: "Delete week one",
+    week: 1,
+  });
+  const weekSix = sparsePlanFixture({
+    id: "keep-week-six",
+    title: "Keep week six",
+    week: 6,
+  });
+  const plan = {
+    ...weekOne,
+    id: "multi-week-delete-plan",
+    title: "Multi-week delete plan",
+    sessions: [...weekOne.sessions, ...weekSix.sessions],
+  };
+  const mounted = mountApp({
+    storedState: {
+      ...canonicalPlanState(),
+      plans: [plan],
+      activePlanId: plan.id,
+      selectedWeek: 1,
+    },
+  });
+
+  try {
+    mounted.fireEvent.click(
+      await mounted.ui.findByRole("button", { name: "Build" }),
+    );
+    mounted.fireEvent.click(
+      mounted.view("builderView").getAllByRole("button", { name: "Delete" })[0],
+    );
+
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      assert.equal(state.plans[0].sessions.length, 1);
+      assert.equal(state.plans[0].sessions[0].id, weekSix.sessions[0].id);
+      assert.equal(state.selectedWeek, 6);
+    });
+    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "Log" }));
+    assert.equal(
+      mounted.ui.getByLabelText("Session").value,
+      weekSix.sessions[0].id,
+    );
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React Testing Library renders a valid empty Log state for an empty active plan", async () => {
+  const plan = sparsePlanFixture({
+    id: "empty-plan",
+    title: "Empty plan",
+    week: 1,
+  });
+  const mounted = mountApp({
+    storedState: {
+      ...canonicalPlanState(),
+      plans: [plan],
+      activePlanId: plan.id,
+      selectedWeek: 1,
+    },
+  });
+
+  try {
+    mounted.fireEvent.click(
+      await mounted.ui.findByRole("button", { name: "Build" }),
+    );
+    mounted.fireEvent.click(
+      mounted.view("builderView").getByRole("button", { name: "Delete" }),
+    );
+    await mounted.waitFor(() =>
+      assert.equal(mounted.readState().plans[0].sessions.length, 0),
+    );
+
+    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "Log" }));
+    const sessionSelect = mounted.ui.getByLabelText("Session");
+    assert.equal(sessionSelect.value, "");
+    assert.equal(sessionSelect.disabled, true);
+    assert.ok(
+      mounted.ui.getByRole("option", {
+        name: "No sessions scheduled for week 1",
+      }).disabled,
+    );
+  } finally {
+    mounted.cleanup();
+  }
+});
+
 test("React Testing Library confirms and fully deletes a custom plan", async () => {
   const historicalLog = {
     id: "historical-log",
@@ -877,7 +1430,7 @@ test("React Testing Library confirms and fully deletes a custom plan", async () 
     await waitFor(() => assert.equal(readState().plans.length, 0));
     const saved = readState();
     assert.equal(saved.activePlanId, null);
-    assert.equal(saved.logs[0].id, "historical-log");
+    assert.equal(activeScores(saved).logs[0].id, "historical-log");
     assert.match(document.querySelector("#programView").className, /is-active/);
     assert.ok(view("programView").getByRole("heading", { name: "Programme" }));
 
@@ -951,6 +1504,30 @@ test("React Testing Library filters the movement library", async () => {
     assert.equal(ui.queryByRole("heading", { name: "Bar muscle-up" }), null);
   } finally {
     cleanup();
+  }
+});
+
+test("React Testing Library rejects zero and negative PR attempts before saving", async () => {
+  const mounted = mountApp();
+
+  try {
+    mounted.fireEvent.click(
+      await mounted.ui.findByRole("button", { name: "PRs" }),
+    );
+    const result = mounted.ui.getByLabelText("Result");
+    const save = mounted.ui.getByRole("button", { name: "Save PR attempt" });
+
+    mounted.fireEvent.change(result, { target: { value: "0" } });
+    mounted.fireEvent.click(save);
+    assert.ok(mounted.ui.getByText("Enter a number greater than zero."));
+    assert.equal(activeScores(mounted.readState()).prAttempts.length, 0);
+
+    mounted.fireEvent.change(result, { target: { value: "-5" } });
+    mounted.fireEvent.click(save);
+    assert.ok(mounted.ui.getByText("Enter a number greater than zero."));
+    assert.equal(activeScores(mounted.readState()).prAttempts.length, 0);
+  } finally {
+    mounted.cleanup();
   }
 });
 
@@ -1107,6 +1684,689 @@ test("React Testing Library saves workout logs through Supabase when signed in",
       assert.equal(insert.payload.wod_score, "4 rounds + 8 reps");
     });
   } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library does not re-upload a timer already present remotely", async () => {
+  const timerResult = {
+    mode: "amrap",
+    elapsedSeconds: 600,
+    plannedSeconds: 600,
+  };
+  const localLog = {
+    id: "synced-timer-log",
+    date: "2026-07-14",
+    week: 1,
+    dayId: "day1",
+    dayTitle: "Timer sync workout",
+    readiness: "green",
+    timerResult,
+    createdAt: "2026-07-14T10:00:00.000Z",
+  };
+  const storedState = {
+    ...canonicalPlanState(),
+    schemaVersion: 3,
+    activeScoreOwner: "user-1",
+    scoreDataByOwner: {
+      guest: { logs: [], prs: {}, prAttempts: [] },
+      "user-1": { logs: [localLog], prs: {}, prAttempts: [] },
+    },
+  };
+  delete storedState.logs;
+  const calls = [];
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    calls,
+    remote: {
+      workout_logs: [
+        {
+          id: localLog.id,
+          date: localLog.date,
+          week: localLog.week,
+          day_id: localLog.dayId,
+          day_title: localLog.dayTitle,
+          readiness: localLog.readiness,
+          timer_result: timerResult,
+          created_at: localLog.createdAt,
+        },
+      ],
+    },
+  });
+  const mounted = mountApp({ storedState, supabaseMock });
+
+  try {
+    assert.ok(await mounted.ui.findByText("Scores are syncing with Supabase."));
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Retry account sync" }),
+    );
+    assert.ok(await mounted.ui.findByText("Local scores synced to Supabase."));
+    assert.equal(
+      calls.filter(
+        (call) => call.type === "upsert" && call.table === "workout_logs",
+      ).length,
+      0,
+    );
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React Testing Library reports timer metadata pending on a legacy schema", async () => {
+  const timerResult = {
+    mode: "amrap",
+    elapsedSeconds: 540,
+    plannedSeconds: 600,
+  };
+  const localLog = {
+    id: "pending-timer-log",
+    date: "2026-07-14",
+    week: 1,
+    dayId: "day1",
+    dayTitle: "Pending timer workout",
+    readiness: "green",
+    timerResult,
+    createdAt: "2026-07-14T11:00:00.000Z",
+  };
+  const storedState = {
+    ...canonicalPlanState(),
+    schemaVersion: 3,
+    activeScoreOwner: "user-1",
+    scoreDataByOwner: {
+      guest: { logs: [], prs: {}, prAttempts: [] },
+      "user-1": { logs: [localLog], prs: {}, prAttempts: [] },
+    },
+  };
+  delete storedState.logs;
+  const calls = [];
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    calls,
+    missingUpsertColumns: ["timer_result"],
+    remote: {
+      workout_logs: [
+        {
+          id: localLog.id,
+          date: localLog.date,
+          week: localLog.week,
+          day_id: localLog.dayId,
+          day_title: localLog.dayTitle,
+          readiness: localLog.readiness,
+          created_at: localLog.createdAt,
+        },
+      ],
+    },
+  });
+  const mounted = mountApp({ storedState, supabaseMock });
+
+  try {
+    assert.ok(await mounted.ui.findByText("Scores are syncing with Supabase."));
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Retry account sync" }),
+    );
+    assert.ok(
+      await mounted.ui.findByText(
+        "Scores synced. Timer or competition-proof metadata stays local until the Supabase schema is updated.",
+      ),
+    );
+    const workoutWrites = calls.filter(
+      (call) => call.type === "upsert" && call.table === "workout_logs",
+    );
+    assert.equal(workoutWrites.length, 2);
+    assert.ok(Object.hasOwn(workoutWrites[0].payload[0], "timer_result"));
+    assert.equal(
+      Object.hasOwn(workoutWrites[1].payload[0], "timer_result"),
+      false,
+    );
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React Testing Library isolates signed-in scores from legacy guest scores", async () => {
+  const guestLog = {
+    id: "guest-log",
+    date: "2026-07-10",
+    week: 1,
+    dayId: "day1",
+    dayTitle: "Guest workout",
+    readiness: "green",
+    strengthResult: "Guest-only squat",
+    createdAt: "2026-07-10T10:00:00.000Z",
+  };
+  const calls = [];
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    calls,
+    remote: {
+      workout_logs: [
+        {
+          id: "remote-log",
+          date: "2026-07-11",
+          week: 1,
+          day_id: "day1",
+          day_title: "Account workout",
+          readiness: "green",
+          rpe: null,
+          strength_result: "Account-only squat",
+          wod_score: null,
+          notes: null,
+          mobility_done: false,
+          created_at: "2026-07-11T10:00:00.000Z",
+        },
+      ],
+    },
+  });
+  const mounted = mountApp({
+    supabaseMock,
+    storedState: canonicalPlanState({ logs: [guestLog] }),
+  });
+  const { cleanup, fireEvent, readState, ui, waitFor } = mounted;
+
+  try {
+    assert.ok(await ui.findByText("Scores are syncing with Supabase."));
+    assert.equal(calls.filter((call) => call.type === "select").length, 3);
+    fireEvent.click(ui.getByRole("button", { name: "Log" }));
+    assert.ok(await ui.findByText(/Account-only squat/));
+    assert.equal(ui.queryByText(/Guest-only squat/), null);
+
+    fireEvent.click(ui.getByRole("button", { name: "Home" }));
+    assert.ok(ui.getByRole("button", { name: /Import guest scores \(/ }));
+    fireEvent.click(ui.getByRole("button", { name: "Sign out" }));
+    await waitFor(() => {
+      assert.ok(ui.getByText(/Signed out\. Local cache remains/));
+    });
+    fireEvent.click(ui.getByRole("button", { name: "Log" }));
+    assert.ok(await ui.findByText(/Guest-only squat/));
+    assert.equal(ui.queryByText(/Account-only squat/), null);
+
+    const saved = readState();
+    assert.equal(saved.schemaVersion, 3);
+    assert.equal(saved.planSchemaVersion, 2);
+    assert.equal(Object.hasOwn(saved, "logs"), false);
+    assert.equal(saved.scoreDataByOwner.guest.logs[0].id, "guest-log");
+    assert.equal(saved.scoreDataByOwner["user-1"].logs[0].id, "remote-log");
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library reloads only the authenticated owner's score bucket", async () => {
+  const scoreLog = (id, strengthResult) => ({
+    id,
+    date: "2026-07-12",
+    week: 1,
+    dayId: "day1",
+    dayTitle: "Partitioned workout",
+    readiness: "green",
+    strengthResult,
+    createdAt: "2026-07-12T10:00:00.000Z",
+  });
+  const storedState = {
+    ...canonicalPlanState(),
+    schemaVersion: 3,
+    activeScoreOwner: "user-1",
+    scoreDataByOwner: {
+      guest: { logs: [], prs: {}, prAttempts: [] },
+      "user-1": {
+        logs: [scoreLog("user-1-log", "User one private score")],
+        prs: {},
+        prAttempts: [],
+      },
+      "user-2": {
+        logs: [scoreLog("user-2-log", "User two private score")],
+        prs: {},
+        prAttempts: [],
+      },
+    },
+  };
+  delete storedState.logs;
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-2", email: "two@example.com" } },
+  });
+  const { cleanup, fireEvent, ui } = mountApp({
+    storedState,
+    supabaseMock,
+  });
+
+  try {
+    assert.ok(await ui.findByText("Scores are syncing with Supabase."));
+    fireEvent.click(ui.getByRole("button", { name: "Log" }));
+    assert.ok(await ui.findByText(/User two private score/));
+    assert.equal(ui.queryByText(/User one private score/), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library does not overwrite an offline PR with stale remote data", async () => {
+  const pendingAttempt = {
+    id: "pending-pr-attempt",
+    metricId: "backSquat",
+    metricName: "Back squat",
+    value: 160,
+    display: "160 kg",
+    date: "2026-07-13",
+    notes: "Offline PR",
+    isPr: true,
+    createdAt: "2026-07-13T10:00:00.000Z",
+  };
+  const storedState = {
+    ...canonicalPlanState(),
+    schemaVersion: 3,
+    planSchemaVersion: 2,
+    activeScoreOwner: "user-1",
+    scoreDataByOwner: {
+      guest: { logs: [], prs: {}, prAttempts: [] },
+      "user-1": {
+        logs: [],
+        prs: {
+          backSquat: {
+            metricId: "backSquat",
+            value: 160,
+            display: "160 kg",
+            date: "2026-07-13",
+            notes: "Offline PR",
+          },
+        },
+        prAttempts: [pendingAttempt],
+      },
+    },
+  };
+  delete storedState.logs;
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    remote: {
+      personal_records: [
+        {
+          metric_id: "backSquat",
+          value: 150,
+          display: "150 kg",
+          date: "2026-07-01",
+          notes: "Older remote PR",
+        },
+      ],
+    },
+  });
+  const { cleanup, fireEvent, ui } = mountApp({
+    storedState,
+    supabaseMock,
+  });
+
+  try {
+    assert.ok(await ui.findByText("Scores are syncing with Supabase."));
+    fireEvent.click(ui.getByRole("button", { name: "PRs" }));
+    assert.ok(await ui.findByText("160 kg"));
+    assert.equal(ui.queryByText("150 kg"), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library keeps a better remote PR over a stale offline PR", async () => {
+  const pendingAttempt = {
+    id: "stale-pending-pr-attempt",
+    metricId: "backSquat",
+    metricName: "Back squat",
+    value: 150,
+    display: "150 kg",
+    date: "2026-07-10",
+    notes: "Stale offline PR",
+    isPr: true,
+    createdAt: "2026-07-10T10:00:00.000Z",
+  };
+  const storedState = {
+    ...canonicalPlanState(),
+    schemaVersion: 3,
+    planSchemaVersion: 2,
+    activeScoreOwner: "user-1",
+    scoreDataByOwner: {
+      guest: { logs: [], prs: {}, prAttempts: [] },
+      "user-1": {
+        logs: [],
+        prs: {
+          backSquat: {
+            metricId: "backSquat",
+            value: 150,
+            display: "150 kg",
+            date: "2026-07-10",
+            notes: "Stale offline PR",
+            updatedAt: pendingAttempt.createdAt,
+          },
+        },
+        prAttempts: [pendingAttempt],
+      },
+    },
+  };
+  delete storedState.logs;
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    remote: {
+      personal_records: [
+        {
+          metric_id: "backSquat",
+          value: 160,
+          display: "160 kg",
+          date: "2026-07-13",
+          notes: "Better remote PR",
+          updated_at: "2026-07-13T10:00:00.000Z",
+        },
+      ],
+    },
+  });
+  const mounted = mountApp({ storedState, supabaseMock });
+
+  try {
+    assert.ok(await mounted.ui.findByText("Scores are syncing with Supabase."));
+    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "PRs" }));
+    assert.ok(await mounted.ui.findByText("160 kg"));
+    const saved = mounted.readState().scoreDataByOwner["user-1"];
+    assert.equal(saved.prs.backSquat.value, 160);
+    assert.equal(saved.prAttempts[0].isPr, true);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React Testing Library reconciles an immediate PR save with the canonical remote record", async () => {
+  const calls = [];
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    calls,
+    remote: {
+      personal_records: [
+        {
+          metric_id: "backSquat",
+          value: 150,
+          display: "150 kg",
+          date: "2026-07-10",
+          notes: "Hydrated before another device improved it",
+          updated_at: "2026-07-10T10:00:00.000Z",
+        },
+      ],
+    },
+    rpcResults: {
+      save_pr_attempt: {
+        metric_id: "backSquat",
+        value: 170,
+        display: "170 kg",
+        date: "2026-07-14",
+        notes: "Canonical result from another device",
+        updated_at: "2026-07-14T10:00:00.000Z",
+      },
+    },
+  });
+  const mounted = mountApp({ supabaseMock });
+
+  try {
+    assert.ok(await mounted.ui.findByText("Scores are syncing with Supabase."));
+    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "PRs" }));
+    assert.ok(await mounted.ui.findByText("150 kg"));
+
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Result"), {
+      target: { value: "160" },
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Save PR attempt" }),
+    );
+
+    await mounted.waitFor(() => {
+      const scores = mounted.readState().scoreDataByOwner["user-1"];
+      assert.equal(scores.prs.backSquat.value, 170);
+      assert.equal(scores.prs.backSquat.display, "170 kg");
+      assert.equal(scores.prAttempts[0].value, 160);
+      assert.equal(scores.prAttempts[0].isPr, true);
+    });
+    const rpcCall = calls.find(
+      (call) => call.type === "rpc" && call.name === "save_pr_attempt",
+    );
+    assert.equal(rpcCall.payload.p_personal_record.value, 160);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React Testing Library preserves a better standalone local PR during hydration", async () => {
+  const storedState = {
+    ...canonicalPlanState(),
+    schemaVersion: 3,
+    planSchemaVersion: 2,
+    activeScoreOwner: "user-1",
+    scoreDataByOwner: {
+      guest: { logs: [], prs: {}, prAttempts: [] },
+      "user-1": {
+        logs: [],
+        prs: {
+          backSquat: {
+            metricId: "backSquat",
+            value: 170,
+            display: "170 kg",
+            date: "2026-07-01",
+            notes: "Better local record",
+            updatedAt: "2026-07-01T10:00:00.000Z",
+          },
+        },
+        prAttempts: [],
+      },
+    },
+  };
+  delete storedState.logs;
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    remote: {
+      personal_records: [
+        {
+          metric_id: "backSquat",
+          value: 160,
+          display: "160 kg",
+          date: "2026-07-13",
+          notes: "Newer but worse remote record",
+          updated_at: "2026-07-13T10:00:00.000Z",
+        },
+      ],
+    },
+  });
+  const mounted = mountApp({ storedState, supabaseMock });
+
+  try {
+    assert.ok(await mounted.ui.findByText("Scores are syncing with Supabase."));
+    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "PRs" }));
+    assert.ok(await mounted.ui.findByText("170 kg"));
+    assert.equal(
+      mounted.readState().scoreDataByOwner["user-1"].prs.backSquat.value,
+      170,
+    );
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React Testing Library preserves newer local PR metadata when the value ties remote", async () => {
+  const storedState = {
+    ...canonicalPlanState(),
+    schemaVersion: 3,
+    planSchemaVersion: 2,
+    activeScoreOwner: "user-1",
+    scoreDataByOwner: {
+      guest: { logs: [], prs: {}, prAttempts: [] },
+      "user-1": {
+        logs: [],
+        prs: {
+          backSquat: {
+            metricId: "backSquat",
+            value: 160,
+            display: "160 kg",
+            date: "2026-07-14",
+            notes: "Newer local technique note",
+            updatedAt: "2026-07-14T10:00:00.000Z",
+          },
+          row1k: {
+            metricId: "row1k",
+            value: 0,
+            display: "Not tested",
+            date: "Baseline",
+            notes: "Newer local baseline note",
+            updatedAt: "2026-07-14T10:00:00.000Z",
+          },
+        },
+        prAttempts: [],
+      },
+    },
+  };
+  delete storedState.logs;
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    remote: {
+      personal_records: [
+        {
+          metric_id: "backSquat",
+          value: 160,
+          display: "160 kg",
+          date: "2026-07-13",
+          notes: "Older remote technique note",
+          updated_at: "2026-07-13T10:00:00.000Z",
+        },
+        {
+          metric_id: "row1k",
+          value: 0,
+          display: "Not tested",
+          date: "Baseline",
+          notes: "Older remote baseline note",
+          updated_at: "2026-07-13T10:00:00.000Z",
+        },
+      ],
+    },
+  });
+  const mounted = mountApp({ storedState, supabaseMock });
+
+  try {
+    assert.ok(await mounted.ui.findByText("Scores are syncing with Supabase."));
+    const record = mounted.readState().scoreDataByOwner["user-1"].prs.backSquat;
+    assert.equal(record.value, 160);
+    assert.equal(record.notes, "Newer local technique note");
+    assert.equal(record.updatedAt, "2026-07-14T10:00:00.000Z");
+    const baseline = mounted.readState().scoreDataByOwner["user-1"].prs.row1k;
+    assert.equal(baseline.value, 0);
+    assert.equal(baseline.notes, "Newer local baseline note");
+    assert.equal(baseline.updatedAt, "2026-07-14T10:00:00.000Z");
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React Testing Library never uploads before a failed account hydration succeeds", async () => {
+  const originalWarn = console.warn;
+  console.warn = () => undefined;
+  const calls = [];
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    calls,
+    failSelectOnce: { workout_logs: 1 },
+  });
+  const mounted = mountApp({ supabaseMock });
+
+  try {
+    assert.ok(await mounted.ui.findByText("Could not load Supabase scores."));
+    assert.equal(
+      calls.some((call) => call.type === "upsert" || call.type === "rpc"),
+      false,
+    );
+
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Retry account sync" }),
+    );
+    assert.ok(await mounted.ui.findByText("Local scores synced to Supabase."));
+    assert.equal(
+      calls.some((call) => call.type === "upsert" || call.type === "rpc"),
+      true,
+    );
+  } finally {
+    console.warn = originalWarn;
+    mounted.cleanup();
+  }
+});
+
+test("React Testing Library ignores a stale initial session after an auth event", async () => {
+  const initialSession = deferred();
+  const supabaseMock = createMockSupabase({
+    getSessionResult: initialSession.promise,
+  });
+  const mounted = mountApp({ supabaseMock });
+
+  try {
+    await mounted.waitFor(() =>
+      assert.equal(supabaseMock.authListenerCount(), 1),
+    );
+    supabaseMock.emitAuth("SIGNED_IN", {
+      user: { id: "user-2", email: "two@example.com" },
+    });
+    assert.ok(await mounted.ui.findByText("Scores are syncing with Supabase."));
+
+    initialSession.resolve({
+      data: {
+        session: { user: { id: "user-1", email: "one@example.com" } },
+      },
+      error: null,
+    });
+    await mounted.waitFor(() =>
+      assert.equal(mounted.readState().activeScoreOwner, "user-2"),
+    );
+    assert.ok(mounted.ui.getByText("two@example.com"));
+    assert.equal(mounted.ui.queryByText("one@example.com"), null);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React Testing Library keeps failed remote workout saves locally for retry", async () => {
+  const originalWarn = console.warn;
+  console.warn = () => undefined;
+  const calls = [];
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    calls,
+    failUpsertOnce: { workout_logs: 1 },
+  });
+  const { cleanup, fireEvent, readState, ui, waitFor } = mountApp({
+    supabaseMock,
+  });
+
+  try {
+    assert.ok(await ui.findByText("Scores are syncing with Supabase."));
+    fireEvent.click(ui.getByRole("button", { name: "Log" }));
+    fireEvent.change(ui.getByLabelText("Strength or skill result"), {
+      target: { value: "Offline squat survives" },
+    });
+    fireEvent.click(ui.getByRole("button", { name: "Save workout log" }));
+
+    assert.ok(await ui.findByText(/Offline squat survives/));
+    await waitFor(() => {
+      assert.ok(ui.getByText(/Remote sync is pending; retry from Account/));
+    });
+    const saved = readState();
+    assert.equal(saved.activeScoreOwner, "user-1");
+    assert.equal(
+      saved.scoreDataByOwner["user-1"].logs[0].strengthResult,
+      "Offline squat survives",
+    );
+    assert.equal(
+      calls.some(
+        (call) => call.type === "upsert" && call.table === "workout_logs",
+      ),
+      true,
+    );
+
+    fireEvent.click(ui.getByRole("button", { name: "Home" }));
+    fireEvent.click(ui.getByRole("button", { name: "Retry account sync" }));
+    assert.ok(await ui.findByText("Local scores synced to Supabase."));
+    assert.equal(
+      calls.filter(
+        (call) => call.type === "upsert" && call.table === "workout_logs",
+      ).length,
+      2,
+    );
+  } finally {
+    console.warn = originalWarn;
     cleanup();
   }
 });

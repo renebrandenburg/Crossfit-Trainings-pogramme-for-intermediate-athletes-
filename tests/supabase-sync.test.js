@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 
 const {
   createSupabaseStore,
+  isBetterPersonalRecord,
   logToRow,
   mergeById,
   mergePrs,
@@ -42,11 +43,12 @@ test("Supabase sync helpers merge remote records without duplicates", () => {
   );
 });
 
-test("Supabase sync preserves local proof metadata until the remote schema catches up", () => {
+test("Supabase sync preserves local timer and proof metadata until the remote schema catches up", () => {
   const local = [
     {
       id: "proof-log",
       createdAt: "2026-07-11T10:00:00.000Z",
+      timerResult: { mode: "amrap", elapsedSeconds: 600 },
       competitionProof: { proofId: "proof-1", recorded: true },
     },
   ];
@@ -54,6 +56,7 @@ test("Supabase sync preserves local proof metadata until the remote schema catch
     {
       id: "proof-log",
       createdAt: "2026-07-11T10:00:00.000Z",
+      timerResult: null,
       competitionProof: null,
     },
   ];
@@ -62,6 +65,7 @@ test("Supabase sync preserves local proof metadata until the remote schema catch
   const pending = unsyncedById(local, remote);
 
   assert.equal(merged[0].competitionProof.proofId, "proof-1");
+  assert.equal(merged[0].timerResult.elapsedSeconds, 600);
   assert.deepEqual(
     pending.map((record) => record.id),
     ["proof-log"],
@@ -114,19 +118,20 @@ test("Supabase sync helpers map workout logs to database rows and back", () => {
   assert.equal("competition_proof" in ordinaryRow, false);
 });
 
-test("Supabase sync falls back safely when competition_proof is not migrated", async () => {
+test("Supabase sync omits optional log columns missing from a legacy schema", async () => {
   const calls = [];
   const client = {
     from: () => ({
       upsert: async (payload) => {
         calls.push(payload);
-        if (calls.length === 1) {
+        if (calls.length <= 2) {
+          const missingColumn =
+            calls.length === 1 ? "competition_proof" : "timer_result";
           return {
             data: null,
             error: {
               code: "PGRST204",
-              message:
-                "Could not find the 'competition_proof' column in the schema cache",
+              message: `Could not find the '${missingColumn}' column in the schema cache`,
             },
           };
         }
@@ -143,6 +148,7 @@ test("Supabase sync falls back safely when competition_proof is not migrated", a
       dayId: "day1",
       dayTitle: "Competition WOD",
       readiness: "green",
+      timerResult: { mode: "amrap", elapsedSeconds: 600 },
       competitionProof: { recorded: true, proofId: "proof-1" },
       createdAt: "2026-07-11T10:00:00.000Z",
     },
@@ -150,9 +156,280 @@ test("Supabase sync falls back safely when competition_proof is not migrated", a
   );
 
   assert.equal(result.competitionProofSynced, false);
-  assert.equal(calls.length, 2);
+  assert.equal(result.timerResultSynced, false);
+  assert.equal(calls.length, 3);
   assert.equal(calls[0].competition_proof.proofId, "proof-1");
   assert.equal("competition_proof" in calls[1], false);
+  assert.equal("timer_result" in calls[1], true);
+  assert.equal("competition_proof" in calls[2], false);
+  assert.equal("timer_result" in calls[2], false);
+});
+
+test("Supabase retry sends timer and proof payloads after a legacy schema upgrade", async () => {
+  const calls = [];
+  const client = {
+    from: () => ({
+      upsert: async (payload) => {
+        calls.push(payload);
+        const attempt = calls.length - 1;
+        if (attempt < 2) {
+          const missingColumn =
+            attempt === 0 ? "competition_proof" : "timer_result";
+          return {
+            data: null,
+            error: {
+              code: "PGRST204",
+              message: `Could not find the '${missingColumn}' column in the schema cache`,
+            },
+          };
+        }
+        return { data: payload, error: null };
+      },
+    }),
+  };
+  const log = {
+    id: "pending-optional-log",
+    date: "2026-07-11",
+    week: 1,
+    dayId: "day1",
+    dayTitle: "Competition WOD",
+    readiness: "green",
+    timerResult: { mode: "amrap", elapsedSeconds: 600 },
+    competitionProof: { recorded: true, proofId: "proof-1" },
+    createdAt: "2026-07-11T10:00:00.000Z",
+  };
+  const state = { logs: [log], prAttempts: [], prs: {} };
+  const remoteState = {
+    ownerId: "user-1",
+    hydrated: true,
+    logs: [
+      {
+        id: log.id,
+        timerResult: null,
+        competitionProof: null,
+      },
+    ],
+    prAttempts: [],
+    prs: {},
+  };
+  const store = createSupabaseStore(client);
+
+  const first = await store.uploadLocalScores(state, "user-1", remoteState);
+  const retry = await store.uploadLocalScores(state, "user-1", remoteState);
+
+  assert.deepEqual(first, {
+    logs: 1,
+    prAttempts: 0,
+    prs: 0,
+    competitionProofPending: 1,
+    timerResultPending: 1,
+  });
+  assert.deepEqual(retry, {
+    logs: 1,
+    prAttempts: 0,
+    prs: 0,
+    competitionProofPending: 0,
+    timerResultPending: 0,
+  });
+  assert.equal(calls.length, 4);
+  assert.equal(calls[0][0].competition_proof.proofId, "proof-1");
+  assert.equal(calls[0][0].timer_result.elapsedSeconds, 600);
+  assert.equal(calls[3][0].competition_proof.proofId, "proof-1");
+  assert.equal(calls[3][0].timer_result.elapsedSeconds, 600);
+});
+
+test("Supabase sync loads workout logs while a schema migration is rolling out", async () => {
+  const selectedColumns = [];
+  const client = {
+    from(table) {
+      return {
+        select(columns) {
+          if (table === "personal_records") {
+            return Promise.resolve({ data: [], error: null });
+          }
+          const builder = {
+            order: () => builder,
+            range: async () => {
+              if (table === "pr_attempts") return { data: [], error: null };
+              selectedColumns.push(columns);
+              if (selectedColumns.length <= 2) {
+                const missingColumn =
+                  selectedColumns.length === 1
+                    ? "competition_proof"
+                    : "timer_result";
+                return {
+                  data: null,
+                  error: {
+                    code: "PGRST204",
+                    message: `Could not find the '${missingColumn}' column in the schema cache`,
+                  },
+                };
+              }
+              return {
+                data: [
+                  {
+                    id: "legacy-log",
+                    date: "2026-07-11",
+                    week: 1,
+                    day_id: "day1",
+                    day_title: "Legacy workout",
+                    readiness: "green",
+                    created_at: "2026-07-11T10:00:00.000Z",
+                  },
+                ],
+                error: null,
+              };
+            },
+          };
+          return builder;
+        },
+      };
+    },
+  };
+
+  const scores = await createSupabaseStore(client).loadUserData();
+
+  assert.equal(selectedColumns.length, 3);
+  assert.match(selectedColumns[0], /competition_proof/);
+  assert.doesNotMatch(selectedColumns[1], /competition_proof/);
+  assert.doesNotMatch(selectedColumns[2], /timer_result/);
+  assert.equal(scores.logs[0].id, "legacy-log");
+  assert.equal(scores.logs[0].timerResult, null);
+});
+
+test("Supabase sync paginates logs and attempts with deterministic tie-breakers", async () => {
+  const createdAt = "2026-07-14T10:00:00.000Z";
+  const workoutRows = Array.from({ length: 1005 }, (_, index) => ({
+    id: `log-${String(index).padStart(4, "0")}`,
+    date: "2026-07-14",
+    week: 1,
+    day_id: "day1",
+    day_title: "Paginated workout",
+    readiness: "green",
+    created_at: createdAt,
+  }));
+  const attemptRows = Array.from({ length: 1003 }, (_, index) => ({
+    id: `attempt-${String(index).padStart(4, "0")}`,
+    metric_id: "backSquat",
+    metric_name: "Back squat",
+    value: index + 1,
+    display: `${index + 1} kg`,
+    date: "2026-07-14",
+    notes: null,
+    is_pr: false,
+    created_at: createdAt,
+  }));
+  const rowsByTable = {
+    workout_logs: workoutRows,
+    pr_attempts: attemptRows,
+  };
+  const queries = [];
+  const client = {
+    from(table) {
+      return {
+        select() {
+          if (table === "personal_records") {
+            return Promise.resolve({ data: [], error: null });
+          }
+          const orders = [];
+          const builder = {
+            order(column, options) {
+              orders.push({ column, ascending: options?.ascending });
+              return builder;
+            },
+            range(from, to) {
+              queries.push({ table, from, to, orders: [...orders] });
+              const rows = [...rowsByTable[table]].sort((left, right) =>
+                right.id.localeCompare(left.id),
+              );
+              return Promise.resolve({
+                data: rows.slice(from, to + 1),
+                error: null,
+              });
+            },
+          };
+          return builder;
+        },
+      };
+    },
+  };
+
+  const scores = await createSupabaseStore(client).loadUserData();
+
+  assert.equal(scores.logs.length, 1005);
+  assert.equal(scores.prAttempts.length, 1003);
+  assert.equal(new Set(scores.logs.map((log) => log.id)).size, 1005);
+  assert.equal(
+    new Set(scores.prAttempts.map((attempt) => attempt.id)).size,
+    1003,
+  );
+  assert.equal(scores.logs[0].id, "log-1004");
+  assert.equal(scores.logs.at(-1).id, "log-0000");
+  assert.equal(scores.prAttempts[0].id, "attempt-1002");
+  assert.equal(scores.prAttempts.at(-1).id, "attempt-0000");
+  for (const table of ["workout_logs", "pr_attempts"]) {
+    const tableQueries = queries.filter((query) => query.table === table);
+    assert.deepEqual(
+      tableQueries.map(({ from, to }) => [from, to]),
+      [
+        [0, 999],
+        [1000, 1999],
+      ],
+    );
+    tableQueries.forEach((query) =>
+      assert.deepEqual(query.orders, [
+        { column: "created_at", ascending: false },
+        { column: "id", ascending: false },
+      ]),
+    );
+  }
+});
+
+test("Supabase sync rejects malformed remote records at the trust boundary", () => {
+  assert.throws(
+    () =>
+      rowToLog({
+        id: "bad-log",
+        date: "2026-07-11",
+        week: 99,
+        day_id: "day1",
+        day_title: "Bad workout",
+        readiness: "green",
+        created_at: "2026-07-11T10:00:00.000Z",
+      }),
+    (error) =>
+      error.name === "ForgeHourSyncError" &&
+      error.operation === "validate_remote_data",
+  );
+});
+
+test("Supabase sync rejects malformed local writes before contacting Supabase", async () => {
+  let contacted = false;
+  const store = createSupabaseStore({
+    from() {
+      contacted = true;
+      throw new Error("The malformed record reached Supabase");
+    },
+  });
+
+  await assert.rejects(
+    store.saveLog(
+      {
+        id: "bad-local-log",
+        date: "2026-07-11",
+        week: 0,
+        dayId: "day1",
+        dayTitle: "Bad workout",
+        readiness: "unknown",
+        createdAt: "2026-07-11T10:00:00.000Z",
+      },
+      "user-1",
+    ),
+    (error) =>
+      error.name === "ForgeHourSyncError" &&
+      error.operation === "validate_local_data",
+  );
+  assert.equal(contacted, false);
 });
 
 test("Supabase score sync never uploads canonical training plans", async () => {
@@ -179,7 +456,13 @@ test("Supabase score sync never uploads canonical training plans", async () => {
       prs: {},
     },
     "user-1",
-    { logs: [], prAttempts: [], prs: {} },
+    {
+      ownerId: "user-1",
+      hydrated: true,
+      logs: [],
+      prAttempts: [],
+      prs: {},
+    },
   );
 
   assert.deepEqual(result, {
@@ -187,6 +470,7 @@ test("Supabase score sync never uploads canonical training plans", async () => {
     prAttempts: 0,
     prs: 0,
     competitionProofPending: 0,
+    timerResultPending: 0,
   });
   assert.deepEqual(tables, []);
 });
@@ -214,6 +498,7 @@ test("Supabase sync helpers map PR attempts and personal records", () => {
         display: "150 kg",
         date: "2026-07-08",
         notes: "Fast",
+        updated_at: "2026-07-08T10:00:00.000Z",
       },
     ]),
   );
@@ -223,4 +508,343 @@ test("Supabase sync helpers map PR attempts and personal records", () => {
   assert.deepEqual(rowToPrAttempt(row), attempt);
   assert.equal(prs.backSquat.display, "150 kg");
   assert.equal(prs.snatch.display, "75 kg");
+});
+
+test("Supabase PR saves use the atomic ownership-safe database function", async () => {
+  const calls = [];
+  const client = {
+    rpc(name, payload) {
+      calls.push({ name, payload });
+      return Promise.resolve({ data: null, error: null });
+    },
+  };
+  const store = createSupabaseStore(client);
+  const attempt = {
+    id: "attempt-atomic",
+    metricId: "backSquat",
+    metricName: "Back squat",
+    value: 155,
+    display: "155 kg",
+    date: "2026-07-12",
+    notes: "Smooth",
+    isPr: true,
+    createdAt: "2026-07-12T10:00:00.000Z",
+  };
+
+  const canonicalRecord = await store.savePrAttempt(
+    attempt,
+    {
+      backSquat: {
+        metricId: "backSquat",
+        value: 155,
+        display: "155 kg",
+        date: "2026-07-12",
+        notes: "Smooth",
+        updatedAt: "2026-07-12T10:00:00.000Z",
+      },
+    },
+    "untrusted-client-user-id",
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].name, "save_pr_attempt");
+  assert.equal("user_id" in calls[0].payload.p_attempt, false);
+  assert.equal("user_id" in calls[0].payload.p_personal_record, false);
+  assert.equal(calls[0].payload.p_attempt.metric_id, "backSquat");
+  assert.equal(canonicalRecord, null);
+});
+
+test("Supabase PR saves return the validated canonical database record", async () => {
+  const client = {
+    rpc() {
+      return Promise.resolve({
+        data: {
+          metric_id: "backSquat",
+          value: 165,
+          display: "165 kg",
+          date: "2026-07-13",
+          notes: "Existing database winner",
+          updated_at: "2026-07-13T10:00:00.000Z",
+        },
+        error: null,
+      });
+    },
+  };
+  const attempt = {
+    id: "attempt-canonical",
+    metricId: "backSquat",
+    metricName: "Back squat",
+    value: 160,
+    display: "160 kg",
+    date: "2026-07-14",
+    notes: "Client candidate",
+    isPr: true,
+    createdAt: "2026-07-14T10:00:00.000Z",
+  };
+
+  const canonicalRecord = await createSupabaseStore(client).savePrAttempt(
+    attempt,
+    {
+      backSquat: {
+        metricId: "backSquat",
+        value: 160,
+        display: "160 kg",
+        date: "2026-07-14",
+        notes: "Client candidate",
+        updatedAt: attempt.createdAt,
+      },
+    },
+    "user-1",
+  );
+
+  assert.deepEqual(canonicalRecord, {
+    metricId: "backSquat",
+    value: 165,
+    display: "165 kg",
+    date: "2026-07-13",
+    notes: "Existing database winner",
+    updatedAt: "2026-07-13T10:00:00.000Z",
+  });
+});
+
+test("Supabase PR saves reject malformed canonical RPC records", async () => {
+  const client = {
+    rpc() {
+      return Promise.resolve({
+        data: { metric_id: "backSquat", value: 165 },
+        error: null,
+      });
+    },
+  };
+  const attempt = {
+    id: "attempt-malformed-canonical",
+    metricId: "backSquat",
+    metricName: "Back squat",
+    value: 165,
+    display: "165 kg",
+    date: "2026-07-14",
+    isPr: false,
+    createdAt: "2026-07-14T10:00:00.000Z",
+  };
+
+  await assert.rejects(
+    createSupabaseStore(client).savePrAttempt(attempt, {}, "user-1"),
+    (error) =>
+      error.name === "ForgeHourSyncError" &&
+      error.operation === "validate_remote_data",
+  );
+});
+
+test("Supabase retry sync also saves PR attempts through the atomic function", async () => {
+  const calls = [];
+  const client = {
+    rpc(name, payload) {
+      calls.push({ type: "rpc", name, payload });
+      return Promise.resolve({ data: null, error: null });
+    },
+    from(table) {
+      return {
+        upsert(payload) {
+          calls.push({ type: "upsert", table, payload });
+          return Promise.resolve({ data: payload, error: null });
+        },
+      };
+    },
+  };
+  const attempt = {
+    id: "retry-attempt",
+    metricId: "backSquat",
+    metricName: "Back squat",
+    value: 160,
+    display: "160 kg",
+    date: "2026-07-13",
+    notes: "Offline PR",
+    isPr: true,
+    createdAt: "2026-07-13T10:00:00.000Z",
+  };
+  const scores = {
+    logs: [],
+    prAttempts: [attempt],
+    prs: {
+      backSquat: {
+        metricId: "backSquat",
+        value: 160,
+        display: "160 kg",
+        date: "2026-07-13",
+        notes: "Offline PR",
+        updatedAt: "2026-07-13T10:00:00.000Z",
+      },
+    },
+  };
+
+  await createSupabaseStore(client).uploadLocalScores(scores, "user-1", {
+    ownerId: "user-1",
+    hydrated: true,
+    logs: [],
+    prAttempts: [],
+    prs: {},
+  });
+
+  assert.equal(calls[0].type, "rpc");
+  assert.equal(calls[0].name, "save_pr_attempt");
+  assert.equal(
+    calls.some(
+      (call) => call.type === "upsert" && call.table === "pr_attempts",
+    ),
+    false,
+  );
+});
+
+test("Supabase retry requires a hydrated index for the same authenticated owner", async () => {
+  const store = createSupabaseStore({});
+  const scores = { logs: [], prAttempts: [], prs: {} };
+
+  await assert.rejects(
+    store.uploadLocalScores(scores, "user-1", {
+      ownerId: "user-2",
+      hydrated: true,
+      logs: [],
+      prAttempts: [],
+      prs: {},
+    }),
+    (error) =>
+      error.name === "ForgeHourSyncError" &&
+      error.operation === "prepare_score_sync",
+  );
+});
+
+test("Supabase local validation rejects nonpositive PR attempts before RPC", async () => {
+  let contacted = false;
+  const store = createSupabaseStore({
+    rpc() {
+      contacted = true;
+      return Promise.resolve({ data: null, error: null });
+    },
+  });
+  const attempt = {
+    id: "invalid-attempt",
+    metricId: "backSquat",
+    metricName: "Back squat",
+    value: 0,
+    display: "0 kg",
+    date: "2026-07-13",
+    isPr: false,
+    createdAt: "2026-07-13T10:00:00.000Z",
+  };
+
+  await assert.rejects(
+    store.savePrAttempt(attempt, {}, "user-1"),
+    (error) =>
+      error.name === "ForgeHourSyncError" &&
+      error.operation === "validate_local_data",
+  );
+  assert.equal(contacted, false);
+});
+
+test("Supabase retry uploads historical PR attempts without mismatched current records", async () => {
+  const calls = [];
+  const client = {
+    rpc(name, payload) {
+      calls.push({ name, payload });
+      return Promise.resolve({ data: null, error: null });
+    },
+  };
+  const attempt = (id, value, createdAt) => ({
+    id,
+    metricId: "backSquat",
+    metricName: "Back squat",
+    value,
+    display: `${value} kg`,
+    date: createdAt.slice(0, 10),
+    isPr: true,
+    createdAt,
+  });
+  const historical = attempt("historical-pr", 150, "2026-07-12T10:00:00.000Z");
+  const current = attempt("current-pr", 160, "2026-07-13T10:00:00.000Z");
+
+  await createSupabaseStore(client).uploadLocalScores(
+    {
+      logs: [],
+      prAttempts: [historical, current],
+      prs: {
+        backSquat: {
+          metricId: "backSquat",
+          value: 160,
+          display: "160 kg",
+          date: "2026-07-13",
+          notes: "",
+          updatedAt: current.createdAt,
+        },
+      },
+    },
+    "user-1",
+    {
+      ownerId: "user-1",
+      hydrated: true,
+      logs: [],
+      prAttempts: [],
+      prs: {},
+    },
+  );
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].payload.p_personal_record, null);
+  assert.equal(calls[1].payload.p_personal_record.value, 160);
+});
+
+test("Supabase retry sends standalone records only when they improve remote state", async () => {
+  const calls = [];
+  const client = {
+    rpc(name, payload) {
+      calls.push({ name, payload });
+      return Promise.resolve({ data: null, error: null });
+    },
+  };
+  const store = createSupabaseStore(client);
+  const record = (value, updatedAt) => ({
+    metricId: "row1k",
+    value,
+    display: `${value} sec`,
+    date: "2026-07-13",
+    notes: "",
+    updatedAt,
+  });
+
+  assert.equal(
+    isBetterPersonalRecord(
+      record(205, "2026-07-13T10:00:00.000Z"),
+      record(210, "2026-07-12T10:00:00.000Z"),
+      "row1k",
+    ),
+    true,
+  );
+  assert.equal(
+    isBetterPersonalRecord(
+      record(215, "2026-07-14T10:00:00.000Z"),
+      record(210, "2026-07-12T10:00:00.000Z"),
+      "row1k",
+    ),
+    false,
+  );
+
+  await store.uploadLocalScores(
+    {
+      logs: [],
+      prAttempts: [],
+      prs: { row1k: record(205, "2026-07-13T10:00:00.000Z") },
+    },
+    "user-1",
+    {
+      ownerId: "user-1",
+      hydrated: true,
+      logs: [],
+      prAttempts: [],
+      prs: { row1k: record(210, "2026-07-12T10:00:00.000Z") },
+    },
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].name, "save_personal_record");
+  assert.equal(calls[0].payload.p_personal_record.value, 205);
+  assert.equal("user_id" in calls[0].payload.p_personal_record, false);
 });

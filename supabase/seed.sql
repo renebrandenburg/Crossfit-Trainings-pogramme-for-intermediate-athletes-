@@ -1,0 +1,1 @@
+-- Application data is intentionally not seeded. Database tests create isolated fixtures.

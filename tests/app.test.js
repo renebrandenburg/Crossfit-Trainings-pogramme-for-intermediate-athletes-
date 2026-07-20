@@ -9,6 +9,7 @@ const {
   MOVEMENT_LIBRARY,
   PR_METRICS,
   WEEK_META,
+  WOD_SCHEMA_VERSION,
   buildGeneratedProgramme,
   buildRxReadiness,
   buildSession,
@@ -32,6 +33,7 @@ const {
   selectActivePlan,
   selectActiveWeekSessions,
   splitLines,
+  structuralWodSignature,
   timerDisplaySeconds,
   trimNumber,
 } = require("../app.js");
@@ -265,15 +267,47 @@ test("needs-based generator changes bias by goal and clamps options", () => {
   assert.equal(gymnasticsPlans[0].duration, 45);
 });
 
+test("needs-based generator programs running and bodyweight weaknesses directly", () => {
+  const profile = cloneDefaultProfile();
+  const plans = buildGeneratedProgramme(
+    {
+      goal: "balanced",
+      daysPerWeek: 4,
+      weakness: "runningBodyweight",
+      duration: 60,
+    },
+    profile,
+    (seed) => seed,
+    "running-bodyweight-focus",
+  );
+  const runningDays = plans.filter((plan) => /\bD(?:2|4):/.test(plan.title));
+  const serialized = JSON.stringify(plans);
+
+  assert.equal(plans.length, 32);
+  assert.ok(
+    runningDays.every((plan) => /\brun\b/i.test(plan.wod[0])),
+    "day two and day four conditioning should include running",
+  );
+  assert.match(serialized, /Running and bodyweight capacity/);
+  assert.match(serialized, /200 m relaxed run \+ 8 push-ups \+ 12 air squats/);
+  assert.match(serialized, /burpees/);
+});
+
 test("generated WODs use calories only for machines", () => {
   const profile = cloneDefaultProfile();
-  const plans = ["stronger", "endurance", "gymnastics", "balanced"].flatMap(
-    (goal) =>
-      buildGeneratedProgramme(
-        { goal, daysPerWeek: 5, weakness: "pulling", duration: 60 },
-        profile,
-        (seed) => `${goal}-${seed}`,
-      ),
+  const plans = [
+    "stronger",
+    "endurance",
+    "gymnastics",
+    "balanced",
+    "mastersRxOpen",
+  ].flatMap((goal) =>
+    buildGeneratedProgramme(
+      { goal, daysPerWeek: 5, weakness: "pulling", duration: 60 },
+      profile,
+      (seed) => `${goal}-${seed}`,
+      `movement-validity-${goal}`,
+    ),
   );
   const workouts = plans.map((plan) => plan.wod[0]).join(" ");
 
@@ -324,6 +358,35 @@ test("Masters RX generator creates Open prep sessions with separate add-ons", ()
   const serialized = JSON.stringify(plans);
   assert.match(serialized, /wall balls|shuttle runs|thrusters|bar muscle-ups/);
   assert.match(serialized, /Optional|add-on|Engine add-on|Skill add-on/i);
+});
+
+test("Masters RX last scheduled day uses the selected weakness focus", () => {
+  const plans = buildGeneratedProgramme(
+    {
+      goal: "mastersRxOpen",
+      daysPerWeek: 4,
+      weakness: "runningBodyweight",
+      duration: 60,
+    },
+    cloneDefaultProfile(),
+    (seed) => seed,
+    "masters-running-bodyweight",
+  );
+  const weaknessDays = plans.filter((plan) => /\bD4:/.test(plan.title));
+
+  assert.equal(weaknessDays.length, 8);
+  assert.ok(
+    weaknessDays.every((plan) =>
+      plan.strength.some((item) =>
+        /200 m relaxed run \+ 8 push-ups \+ 12 air squats/.test(item),
+      ),
+    ),
+  );
+  assert.ok(
+    weaknessDays.every((plan) =>
+      /running and bodyweight capacity priority/i.test(plan.focus),
+    ),
+  );
 });
 
 test("RX readiness scoring reports RX Level, weakest categories, and missing tests", () => {
@@ -516,7 +579,7 @@ test("generated programme migration refreshes old WOD schema without changing ID
   assert.equal(migration.migrated, true);
   assert.equal(migration.plans[0].id, "generated-stronger-w2-d3");
   assert.equal(migration.plans[0].createdAt, "2026-01-01T00:00:00.000Z");
-  assert.equal(migration.plans[0].wodSchemaVersion, 4);
+  assert.equal(migration.plans[0].wodSchemaVersion, WOD_SCHEMA_VERSION);
   assert.match(migration.plans[0].wod[1], /Stimulus:/);
   assert.match(migration.plans[0].wod[2], /Score:/);
   assert.equal(migration.plans[1], oldPlans[1]);
@@ -622,6 +685,198 @@ test("seeded generation is reproducible, immutable, and materially varied", () =
     new Set(beta.map((session) => session.wod[0])).size,
     beta.length,
   );
+});
+
+test("WOD identity ignores numeric targets but preserves format and movements", () => {
+  const base = [
+    "AMRAP 12: 20 wall balls, 12 box jump-overs, 8 toes-to-bar. Target 80+ wall balls total.",
+  ];
+  const higherTargets = [
+    "AMRAP 18: 30 wall balls, 15 box jump-overs, 10 toes-to-bar. Target 150+ wall balls total.",
+  ];
+
+  assert.equal(
+    structuralWodSignature(base),
+    structuralWodSignature(higherTargets),
+  );
+  assert.notEqual(
+    structuralWodSignature(base),
+    structuralWodSignature([
+      "Every 3 min x 4: 20 wall balls, 12 box jump-overs, 8 toes-to-bar",
+    ]),
+  );
+  assert.notEqual(
+    structuralWodSignature(base),
+    structuralWodSignature([
+      "AMRAP 12: 8 power cleans, 10 burpees, 12 shuttle runs",
+    ]),
+  );
+});
+
+test("seeded Masters RX generation is structurally unique and changes across cycles", () => {
+  const options = {
+    goal: "mastersRxOpen",
+    daysPerWeek: 5,
+    weakness: "pulling",
+    duration: 60,
+  };
+  const profile = cloneDefaultProfile();
+  const buildSignatures = (seed, daysPerWeek = 5) =>
+    buildGeneratedProgramme(
+      { ...options, daysPerWeek },
+      profile,
+      (id) => id,
+      seed,
+    ).map((session) => structuralWodSignature(session.wod));
+  const alpha = buildSignatures("masters-alpha");
+  const alphaAgain = buildSignatures("masters-alpha");
+  const beta = buildSignatures("masters-beta");
+  const betaSet = new Set(beta);
+  const overlap = alpha.filter((signature) => betaSet.has(signature));
+
+  assert.equal(alpha.length, 40);
+  assert.equal(new Set(alpha).size, alpha.length);
+  assert.equal(new Set(beta).size, beta.length);
+  assert.deepEqual(alphaAgain, alpha);
+  assert.ok(
+    overlap.length < alpha.length / 2,
+    "regeneration must change movements, not just reorder the same templates",
+  );
+
+  const structuralCatalog = new Set();
+  let previousFullCycle = null;
+  for (const daysPerWeek of [3, 4, 5]) {
+    for (let seedIndex = 0; seedIndex < 32; seedIndex += 1) {
+      const signatures = buildSignatures(
+        `masters-sweep-${seedIndex}`,
+        daysPerWeek,
+      );
+      assert.equal(signatures.length, daysPerWeek * 8);
+      assert.equal(new Set(signatures).size, signatures.length);
+      if (daysPerWeek === 5) {
+        if (previousFullCycle) {
+          const previousOverlap = signatures.filter((signature) =>
+            previousFullCycle.has(signature),
+          );
+          assert.ok(
+            previousOverlap.length < signatures.length / 2,
+            `seed ${seedIndex} must materially change the prior cycle`,
+          );
+        }
+        signatures.forEach((signature) => structuralCatalog.add(signature));
+        previousFullCycle = new Set(signatures);
+      }
+    }
+  }
+  assert.ok(
+    structuralCatalog.size > 200,
+    "the Masters generator should expose a deep cross-cycle workout catalog",
+  );
+});
+
+test("canonical generated-plan migration is plan-wide, lossless, and idempotent", () => {
+  const profile = cloneDefaultProfile();
+  const oldSessions = buildGeneratedProgramme(
+    {
+      goal: "mastersRxOpen",
+      daysPerWeek: 5,
+      weakness: "pulling",
+      duration: 60,
+    },
+    profile,
+    (seed) => seed,
+    "seed-195",
+  ).map((session, index) => ({
+    ...session,
+    id: `old-session-${index + 1}`,
+    wodSchemaVersion: WOD_SCHEMA_VERSION - 1,
+    createdAt: `2026-01-${String((index % 28) + 1).padStart(2, "0")}T08:00:00.000Z`,
+    updatedAt: `2026-02-${String((index % 28) + 1).padStart(2, "0")}T09:00:00.000Z`,
+  }));
+  const customized = {
+    ...oldSessions[0],
+    customized: true,
+    wod: ["Keep this customized WOD exactly"],
+  };
+  const manual = {
+    id: "manual-session",
+    week: 1,
+    title: "Manual session",
+    focus: "Athlete choice",
+    warmup: ["Easy bike"],
+    strength: [],
+    wod: ["Manual WOD stays exact"],
+    mobility: [],
+    duration: 45,
+    origin: "manual",
+    customized: true,
+    createdAt: "2026-03-01T08:00:00.000Z",
+    updatedAt: "2026-03-02T08:00:00.000Z",
+  };
+  const sessions = [customized, ...oldSessions.slice(1), manual];
+  const source = {
+    schemaVersion: 2,
+    profile,
+    plans: [
+      {
+        id: "canonical-generated-plan",
+        title: "Masters generated plan",
+        kind: "generated",
+        generatorOptions: {
+          goal: "mastersRxOpen",
+          daysPerWeek: 5,
+          weakness: "pulling",
+          duration: 60,
+        },
+        generationSeed: "seed-195",
+        createdAt: "2026-01-01T07:00:00.000Z",
+        updatedAt: "2026-03-03T07:00:00.000Z",
+        sessions,
+      },
+    ],
+    activePlanId: "canonical-generated-plan",
+    selectedWeek: 1,
+  };
+
+  const first = migratePlanState(source);
+  const migratedPlan = first.state.plans[0];
+  const migratedGenerated = migratedPlan.sessions.filter(
+    (session) => session.origin === "generated" && !session.customized,
+  );
+
+  assert.equal(first.migrated, true);
+  assert.equal(migratedPlan.id, source.plans[0].id);
+  assert.equal(migratedPlan.createdAt, source.plans[0].createdAt);
+  assert.equal(migratedPlan.updatedAt, source.plans[0].updatedAt);
+  assert.deepEqual(migratedPlan.sessions[0], customized);
+  assert.deepEqual(migratedPlan.sessions.at(-1), manual);
+  assert.deepEqual(
+    migratedGenerated.map((session) => session.id),
+    oldSessions.slice(1).map((session) => session.id),
+  );
+  assert.deepEqual(
+    migratedGenerated.map((session) => session.createdAt),
+    oldSessions.slice(1).map((session) => session.createdAt),
+  );
+  assert.deepEqual(
+    migratedGenerated.map((session) => session.updatedAt),
+    oldSessions.slice(1).map((session) => session.updatedAt),
+  );
+  assert.ok(
+    migratedGenerated.every(
+      (session) => session.wodSchemaVersion === WOD_SCHEMA_VERSION,
+    ),
+  );
+  assert.equal(
+    new Set(
+      migratedGenerated.map((session) => structuralWodSignature(session.wod)),
+    ).size,
+    migratedGenerated.length,
+  );
+
+  const second = migratePlanState(first.state);
+  assert.equal(second.migrated, false);
+  assert.equal(second.state, first.state);
 });
 
 test("custom programme helpers turn phone text areas into renderable segments", () => {

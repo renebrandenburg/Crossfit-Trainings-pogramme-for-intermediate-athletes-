@@ -4,11 +4,80 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const vm = require("node:vm");
 
 const ROOT = path.join(__dirname, "..");
 
 function read(file) {
   return fs.readFileSync(path.join(ROOT, file), "utf8");
+}
+
+function runServiceWorker({ fetchImpl, matchImpl, cacheKeys = [] } = {}) {
+  const listeners = {};
+  const calls = {
+    added: [],
+    addedAll: [],
+    deleted: [],
+    fetched: [],
+    matched: [],
+    put: [],
+  };
+  const cache = {
+    async add(asset) {
+      calls.added.push(asset);
+    },
+    async addAll(assets) {
+      calls.addedAll.push([...assets]);
+    },
+    async match(request, options) {
+      calls.matched.push({ request, options });
+      return matchImpl ? matchImpl(request, options) : undefined;
+    },
+    async put(request, response) {
+      calls.put.push({ request, response });
+    },
+  };
+  const context = {
+    URL,
+    caches: {
+      async delete(key) {
+        calls.deleted.push(key);
+      },
+      async keys() {
+        return cacheKeys;
+      },
+      async open() {
+        return cache;
+      },
+    },
+    async fetch(...args) {
+      calls.fetched.push(args);
+      if (fetchImpl) return fetchImpl(...args);
+      throw new Error("Unexpected network request");
+    },
+    self: {
+      addEventListener(type, listener) {
+        listeners[type] = listener;
+      },
+      clients: { claim: async () => undefined },
+      registration: { scope: "https://example.test/training/" },
+      skipWaiting: async () => undefined,
+    },
+  };
+
+  vm.runInNewContext(read("sw.js"), context, { filename: "sw.js" });
+  return { calls, listeners };
+}
+
+function successfulResponse(name) {
+  return {
+    name,
+    ok: true,
+    type: "basic",
+    clone() {
+      return this;
+    },
+  };
 }
 
 test("HTML mounts the React app and references the required assets", () => {
@@ -24,12 +93,17 @@ test("HTML mounts the React app and references the required assets", () => {
   assert.match(html, /react-dom@18\.3\.1\/umd\/react-dom\.production\.min\.js/);
   assert.match(
     html,
-    /@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/,
+    /cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.js/,
   );
   assert.match(
     html,
-    /cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/,
+    /if \(!window\.supabase\)[\s\S]*unpkg\.com\/@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.js/,
   );
+  assert.doesNotMatch(
+    html,
+    /unpkg\.com\/@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/,
+  );
+  assert.equal((html.match(/integrity="sha384-/g) || []).length, 4);
   assert.match(html, /<script src="\.\/supabase-config\.js" defer><\/script>/);
   assert.match(html, /<script src="\.\/app\.js" defer><\/script>/);
   assert.match(html, /<script src="\.\/supabase-sync\.js" defer><\/script>/);
@@ -108,7 +182,7 @@ test("manifest is valid JSON and points to an existing icon", () => {
   assert.ok(fs.existsSync(path.join(ROOT, icon.src.replace("./", ""))));
 });
 
-test("service worker caches the files needed to run offline", () => {
+test("service worker precaches the app and only the primary CDN runtimes", async () => {
   const serviceWorker = read("sw.js");
   const assets = [
     "index.html",
@@ -120,29 +194,98 @@ test("service worker caches the files needed to run offline", () => {
     "manifest.webmanifest",
     "icon.svg",
   ];
+  const { calls, listeners } = runServiceWorker();
+  let installPromise;
 
-  assert.match(serviceWorker, /crossfit-training-programme-v8/);
-  assert.match(
-    serviceWorker,
-    /react@18\.3\.1\/umd\/react\.production\.min\.js/,
+  listeners.install({
+    waitUntil(promise) {
+      installPromise = promise;
+    },
+  });
+  await installPromise;
+
+  assert.match(serviceWorker, /crossfit-training-programme-/);
+  assert.equal(calls.addedAll.length, 1);
+  assert.equal(calls.added.length, 3);
+  assert.ok(
+    calls.added.some((asset) => asset.includes("react@18.3.1")),
+    "React should be available offline",
   );
-  assert.match(
-    serviceWorker,
-    /react-dom@18\.3\.1\/umd\/react-dom\.production\.min\.js/,
+  assert.ok(
+    calls.added.some((asset) =>
+      asset.includes("cdn.jsdelivr.net/npm/@supabase"),
+    ),
+    "the primary Supabase runtime should be available offline",
   );
-  assert.match(
-    serviceWorker,
-    /@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/,
-  );
-  assert.match(
-    serviceWorker,
-    /cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/,
+  assert.ok(
+    !calls.added.some((asset) => asset.includes("unpkg.com/@supabase")),
+    "the fallback Supabase runtime must not be downloaded unconditionally",
   );
 
   for (const asset of assets) {
-    assert.match(serviceWorker, new RegExp(`"\\./${asset}"`));
+    assert.ok(calls.addedAll[0].includes(`./${asset}`));
     assert.ok(fs.existsSync(path.join(ROOT, asset)), `${asset} should exist`);
   }
+});
+
+test("service worker revalidates app code and falls back to its offline cache", async () => {
+  const fresh = successfulResponse("fresh");
+  const cached = successfulResponse("cached");
+  const request = {
+    method: "GET",
+    mode: "same-origin",
+    url: "https://example.test/training/react-app.js",
+  };
+  const online = runServiceWorker({ fetchImpl: async () => fresh });
+  let onlineResponse;
+
+  online.listeners.fetch({
+    request,
+    respondWith(promise) {
+      onlineResponse = promise;
+    },
+  });
+
+  assert.equal(await onlineResponse, fresh);
+  assert.equal(online.calls.fetched.length, 1);
+  assert.equal(online.calls.fetched[0][1].cache, "no-cache");
+  assert.equal(online.calls.put.length, 1);
+
+  const offline = runServiceWorker({
+    fetchImpl: async () => {
+      throw new Error("offline");
+    },
+    matchImpl: async () => cached,
+  });
+  let offlineResponse;
+  offline.listeners.fetch({
+    request,
+    respondWith(promise) {
+      offlineResponse = promise;
+    },
+  });
+
+  assert.equal(await offlineResponse, cached);
+});
+
+test("service worker preserves unrelated caches during version transitions", async () => {
+  const { calls, listeners } = runServiceWorker({
+    cacheKeys: [
+      "crossfit-training-programme-v8",
+      "crossfit-training-programme-v9",
+      "another-application-v1",
+    ],
+  });
+  let activationPromise;
+
+  listeners.activate({
+    waitUntil(promise) {
+      activationPromise = promise;
+    },
+  });
+  await activationPromise;
+
+  assert.deepEqual(calls.deleted, ["crossfit-training-programme-v8"]);
 });
 
 test("project documentation describes the current feature set", () => {
@@ -165,15 +308,38 @@ test("GitHub Pages workflow checks and publishes the static app", () => {
   const workflow = read(".github/workflows/pages.yml");
 
   assert.match(workflow, /Deploy to GitHub Pages/);
+  assert.match(workflow, /pull_request:/);
   assert.match(workflow, /branches:/);
   assert.match(workflow, /master/);
   assert.match(workflow, /main/);
   assert.match(workflow, /npm run check/);
-  assert.match(workflow, /actions\/checkout@v7/);
+  assert.match(workflow, /actions\/checkout@v6/);
   assert.match(workflow, /actions\/setup-node@v6/);
   assert.match(workflow, /actions\/configure-pages@v6/);
   assert.match(workflow, /actions\/upload-pages-artifact@v5/);
   assert.match(workflow, /actions\/deploy-pages@v5/);
+  assert.match(workflow, /checks:[\s\S]*npm run check/);
+  assert.match(
+    workflow,
+    /deploy:[\s\S]*if: github\.event_name != 'pull_request'/,
+  );
+  assert.match(workflow, /database:[\s\S]*supabase\/setup-cli@v2/);
+  assert.match(workflow, /database:[\s\S]*SUPABASE_TELEMETRY_DISABLED: "1"/);
+  assert.match(workflow, /database:[\s\S]*supabase db start/);
+  assert.match(workflow, /database:[\s\S]*supabase test db/);
+  assert.match(
+    workflow,
+    /supabase db lint --local --schema public --level warning --fail-on warning/,
+  );
+  assert.match(
+    workflow,
+    /supabase gen types typescript --local --schema public/,
+  );
+  assert.match(
+    workflow,
+    /diff -u types\/database\.types\.ts \/tmp\/database\.types\.ts/,
+  );
+  assert.match(workflow, /deploy:[\s\S]*needs: \[checks, database\]/);
   assert.match(
     workflow,
     /cp index\.html styles\.css app\.js supabase-config\.js supabase-sync\.js react-app\.js manifest\.webmanifest sw\.js icon\.svg dist\//,
@@ -182,15 +348,15 @@ test("GitHub Pages workflow checks and publishes the static app", () => {
 
 test("Supabase schema scopes policies to authenticated owners", () => {
   const schema = read("supabase-schema.sql");
-  const policyCount = (schema.match(/create policy/g) || []).length;
+  const policies = schema.match(/create policy[\s\S]*?;/g) || [];
 
-  assert.equal(policyCount, 12);
-  assert.equal((schema.match(/to authenticated/g) || []).length, policyCount);
+  assert.equal(policies.length, 12);
+  for (const policy of policies) {
+    assert.match(policy, /to authenticated/);
+    assert.match(policy, /\(select auth\.uid\(\)\) = user_id/);
+  }
   assert.equal(
-    (
-      schema.match(/auth\.uid\(\) is not null and auth\.uid\(\) = user_id/g) ||
-      []
-    ).length,
+    (schema.match(/\(select auth\.uid\(\)\) = user_id/g) || []).length,
     15,
   );
   assert.match(
@@ -206,5 +372,27 @@ test("Supabase schema scopes policies to authenticated owners", () => {
   assert.match(
     schema,
     /alter table public\.personal_records enable row level security/,
+  );
+});
+
+test("generated Supabase types include the deployed score schema and RPC", () => {
+  const databaseTypes = read("types/database.types.ts");
+
+  assert.match(databaseTypes, /competition_proof: Json \| null/);
+  assert.match(databaseTypes, /timer_result: Json \| null/);
+  assert.match(databaseTypes, /save_pr_attempt:/);
+  assert.match(databaseTypes, /p_attempt: Json/);
+  assert.match(databaseTypes, /p_personal_record\?: Json/);
+  assert.match(databaseTypes, /save_pr_attempt:[\s\S]*?Returns: Json\b/);
+  assert.match(databaseTypes, /save_personal_record:/);
+});
+
+test("local Supabase Auth redirects match the documented development server", () => {
+  const config = read("supabase/config.toml");
+
+  assert.match(config, /site_url = "http:\/\/localhost:4173"/);
+  assert.match(
+    config,
+    /additional_redirect_urls = \["http:\/\/127\.0\.0\.1:4173"\]/,
   );
 });

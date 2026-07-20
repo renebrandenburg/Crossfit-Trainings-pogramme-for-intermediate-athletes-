@@ -5,26 +5,21 @@ on:
     branches:
       - master
       - main
+  pull_request:
+    branches:
+      - master
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: github-pages
-  cancel-in-progress: false
 
 jobs:
-  deploy:
+  checks:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v6
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -37,6 +32,52 @@ jobs:
 
       - name: Run checks
         run: npm run check
+
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_TELEMETRY_DISABLED: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@v2
+        with:
+          version: 2.109.1
+
+      - name: Start local database
+        run: supabase db start
+
+      - name: Test migrations, constraints, RPC, and RLS
+        run: supabase test db
+
+      - name: Lint public database schema
+        run: supabase db lint --local --schema public --level warning --fail-on warning
+
+      - name: Verify generated database types
+        run: |
+          supabase gen types typescript --local --schema public > /tmp/database.types.ts
+          diff -u types/database.types.ts /tmp/database.types.ts
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: [checks, database]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
 
       - name: Prepare static site
         run: |

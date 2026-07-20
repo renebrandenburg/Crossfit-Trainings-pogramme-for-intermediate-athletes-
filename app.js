@@ -385,6 +385,7 @@ const WEAKNESS_LABELS = {
   olympic: "Olympic lifting",
   rowing: "Rowing engine",
   running: "Running stamina",
+  runningBodyweight: "Running and bodyweight capacity",
   pulling: "Pull-ups and chest-to-bar",
   muscleup: "Muscle-up skill",
   t2b: "Toes-to-bar",
@@ -933,8 +934,135 @@ const MOVEMENT_LIBRARY = [
   },
 ];
 
-const WOD_SCHEMA_VERSION = 4;
+const WOD_SCHEMA_VERSION = 6;
 const PLAN_SCHEMA_VERSION = 2;
+const MASTERS_RX_MOVEMENT_VARIATIONS = [
+  {
+    matches: /wall balls?/i,
+    instruction:
+      "replace every wall-ball rep with one light dumbbell-thruster rep",
+  },
+  {
+    matches: /wall balls?/i,
+    instruction:
+      "replace every wall-ball rep with one light sandbag-to-shoulder rep, alternating sides",
+  },
+  {
+    matches: /box (?:jump|step)-overs?/i,
+    instruction:
+      "replace every box jump-over or step-over rep with one lateral burpee over a line",
+  },
+  {
+    matches: /box (?:jump|step)-overs?/i,
+    instruction:
+      "replace every box jump-over or step-over rep with one alternating dumbbell step-over",
+  },
+  {
+    matches: /toes-to-bar/i,
+    instruction: "replace every toes-to-bar rep with one chest-to-bar pull-up",
+  },
+  {
+    matches: /toes-to-bar/i,
+    instruction:
+      "replace every toes-to-bar rep with one controlled knee-to-elbow rep",
+  },
+  {
+    matches: /overhead squats?/i,
+    instruction:
+      "replace every overhead-squat rep with one front squat at a comparable effort",
+  },
+  {
+    matches: /overhead squats?/i,
+    instruction:
+      "replace every overhead-squat rep with one alternating single-arm dumbbell overhead squat",
+  },
+  {
+    matches: /shuttle runs?|\b\d+\s*m run\b/i,
+    instruction:
+      "replace each running segment with an equal-duration bike or ski effort",
+  },
+  {
+    matches: /shuttle runs?|\b\d+\s*m run\b/i,
+    instruction:
+      "replace each running segment with an equal-duration rowing effort",
+  },
+  {
+    matches: /burpees?(?: over bar| to target)?/i,
+    instruction: "replace every burpee rep with one box jump-over",
+  },
+  {
+    matches: /burpees?(?: over bar| to target)?/i,
+    instruction:
+      "replace every burpee rep with one alternating dumbbell snatch",
+  },
+  {
+    matches: /chest-to-bar pull-ups?/i,
+    instruction: "replace every chest-to-bar pull-up with one toes-to-bar rep",
+  },
+  {
+    matches: /chest-to-bar pull-ups?/i,
+    instruction: "replace every chest-to-bar pull-up with one strict pull-up",
+  },
+  {
+    matches: /\b(?:row|bike|ski)\b/i,
+    instruction:
+      "change the named machine to a different machine while keeping the listed calories or distance",
+  },
+  {
+    matches: /\b(?:row|bike|ski)\b/i,
+    instruction:
+      "replace the named machine segment with an equal-duration shuttle-run effort",
+  },
+  {
+    matches: /thrusters?/i,
+    instruction:
+      "replace every barbell-thruster rep with one dumbbell thruster using a sustainable pair",
+  },
+  {
+    matches: /thrusters?/i,
+    instruction:
+      "replace every barbell-thruster rep with one dumbbell clean and push press",
+  },
+  {
+    matches: /bar muscle-ups?/i,
+    instruction:
+      "replace every bar muscle-up with one ring muscle-up or low-ring transition",
+  },
+  {
+    matches: /bar muscle-ups?/i,
+    instruction:
+      "replace every bar muscle-up with one chest-to-bar pull-up plus one box dip",
+  },
+  {
+    matches: /double-unders?/i,
+    instruction: "replace every double-under rep with one crossover",
+  },
+  {
+    matches: /double-unders?/i,
+    instruction:
+      "replace every double-under rep with two fast single-unders and keep moving",
+  },
+  {
+    matches: /(?:clean and jerks?|power cleans?|power snatches?)/i,
+    instruction:
+      "replace the named barbell reps with alternating dumbbell snatches at a repeatable load",
+  },
+  {
+    matches: /(?:clean and jerks?|power cleans?|power snatches?)/i,
+    instruction:
+      "replace the named barbell reps with sandbag cleans at a repeatable load",
+  },
+  {
+    matches: /(?:wall walks?|strict HSPU|pike press(?:es)?|handstand hold)/i,
+    instruction:
+      "replace the inverted-pressing station with strict dumbbell presses at the same work target",
+  },
+  {
+    matches: /(?:wall walks?|strict HSPU|pike press(?:es)?|handstand hold)/i,
+    instruction:
+      "replace the inverted-pressing station with hand-release push-ups at the same work target",
+  },
+];
 
 const canUseDOM = typeof document !== "undefined";
 const legacyVanillaRoot = canUseDOM
@@ -1804,8 +1932,12 @@ function migratePlanState(inputState) {
 
   if (useCanonicalPlans) {
     const normalized = normalizeCanonicalPlans(source.plans);
-    plans = normalized.plans;
-    plansChanged = normalized.changed;
+    const refreshed = migrateCanonicalGeneratedPlans(
+      normalized.plans,
+      profileForGeneration(source.profile),
+    );
+    plans = refreshed.plans;
+    plansChanged = normalized.changed || refreshed.migrated;
   } else {
     const profile = profileForGeneration(source.profile);
     const refreshed = migrateGeneratedProgrammePlans(
@@ -1833,7 +1965,7 @@ function migratePlanState(inputState) {
         : null;
 
   const migrated =
-    source.schemaVersion !== PLAN_SCHEMA_VERSION ||
+    source.planSchemaVersion !== PLAN_SCHEMA_VERSION ||
     !useCanonicalPlans ||
     Object.prototype.hasOwnProperty.call(source, "customPlans") ||
     Object.prototype.hasOwnProperty.call(source, "selectedPlanId") ||
@@ -1851,7 +1983,7 @@ function migratePlanState(inputState) {
   return {
     state: {
       ...rest,
-      schemaVersion: PLAN_SCHEMA_VERSION,
+      planSchemaVersion: PLAN_SCHEMA_VERSION,
       plans,
       activePlanId,
     },
@@ -1978,6 +2110,88 @@ function normalizeCanonicalPlan(plan, index) {
     },
     changed: true,
   };
+}
+
+function migrateCanonicalGeneratedPlans(plans, profile) {
+  let migrated = false;
+  const nextPlans = plans.map((plan) => {
+    if (plan.kind !== "generated" || !Array.isArray(plan.sessions)) return plan;
+
+    const staleSessions = plan.sessions
+      .filter(
+        (session) =>
+          session &&
+          (session.origin === "generated" || session.generated) &&
+          !session.customized &&
+          session.wodSchemaVersion !== WOD_SCHEMA_VERSION,
+      )
+      .sort(compareGeneratedSessionSlots);
+    if (!staleSessions.length) return plan;
+
+    const options = normalizeGeneratorOptions(
+      plan.generatorOptions || generatorOptionsFromSessions(plan.sessions),
+    );
+    const generationContext = {
+      seed: normalizeGenerationSeed(plan.generationSeed),
+      variationEnabled: true,
+      usedWodSignatures: new Set(
+        plan.sessions
+          .filter(
+            (session) =>
+              session &&
+              (session.origin === "generated" || session.generated) &&
+              !session.customized &&
+              session.wodSchemaVersion === WOD_SCHEMA_VERSION,
+          )
+          .map((session) => structuralWodSignature(session.wod)),
+      ),
+    };
+    const replacements = new Map();
+
+    staleSessions.forEach((session) => {
+      const replacement = buildGeneratedSession(
+        options,
+        profile,
+        clamp(parsePlanWeek(session), 1, 8),
+        clamp(parsePlanDay(session), 1, 5),
+        () => session.id || createId(),
+        generationContext,
+      );
+      replacements.set(
+        session,
+        preserveGeneratedSessionIdentity(session, replacement),
+      );
+    });
+
+    migrated = true;
+    return {
+      ...plan,
+      sessions: plan.sessions.map(
+        (session) => replacements.get(session) || session,
+      ),
+    };
+  });
+
+  return { plans: migrated ? nextPlans : plans, migrated };
+}
+
+function compareGeneratedSessionSlots(left, right) {
+  return (
+    parsePlanWeek(left) - parsePlanWeek(right) ||
+    parsePlanDay(left) - parsePlanDay(right)
+  );
+}
+
+function preserveGeneratedSessionIdentity(session, replacement) {
+  const migrated = {
+    ...replacement,
+    id: session.id || replacement.id,
+    createdAt: session.createdAt || replacement.createdAt,
+  };
+  if (Object.prototype.hasOwnProperty.call(session, "updatedAt")) {
+    migrated.updatedAt = session.updatedAt;
+  }
+  return migrated;
 }
 
 function sameGeneratorOptions(left, right) {
@@ -2314,7 +2528,7 @@ function claimUniqueGeneratedWod(factory, generationContext) {
 
   for (let collisionSalt = 0; collisionSalt < 64; collisionSalt += 1) {
     const wod = factory(collisionSalt);
-    const signature = normalizedWodSignature(wod);
+    const signature = structuralWodSignature(wod);
     if (signatures.has(signature)) continue;
     signatures.add(signature);
     return wod;
@@ -2323,11 +2537,12 @@ function claimUniqueGeneratedWod(factory, generationContext) {
   throw new Error("Could not create a unique workout for this programme.");
 }
 
-function normalizedWodSignature(wod) {
+function structuralWodSignature(wod) {
   const workout = Array.isArray(wod) ? wod[0] : wod;
   return String(workout || "")
     .trim()
     .toLowerCase()
+    .replace(/\d+(?:\.\d+)?(?:\s*(?:-|\/|:)\s*\d+(?:\.\d+)?)*(?:\+|%)?/g, "#")
     .replace(/\s+/g, " ");
 }
 
@@ -2368,6 +2583,15 @@ function variationOffset(variation, label, length) {
 function seededIndex(seed, length) {
   if (!Number.isFinite(length) || length <= 0) return 0;
   return stableHash(seed) % length;
+}
+
+function seededPermutation(length, seed) {
+  const values = Array.from({ length }, (_value, index) => index);
+  for (let index = values.length - 1; index > 0; index -= 1) {
+    const swapIndex = seededIndex(`${seed}|shuffle-${index}`, index + 1);
+    [values[index], values[swapIndex]] = [values[swapIndex], values[index]];
+  }
+  return values;
 }
 
 function stableHash(value) {
@@ -2852,15 +3076,18 @@ function generatedWodMovementPool(
     goal === "endurance"
       ? ["row", "bike", "run", "ski", "shuttle run"]
       : ["row", "bike", "run", "double unders", "ski"];
-  const mono =
-    weakness === "rowing" && day === 2
-      ? "row"
-      : pick(
-          monoOptions,
-          week +
-            day +
-            variationOffset(variation, "monostructural", monoOptions.length),
-        );
+  const mono = (() => {
+    if (weakness === "rowing" && day === 2) return "row";
+    if (["running", "runningBodyweight"].includes(weakness) && day % 2 === 0) {
+      return "run";
+    }
+    return pick(
+      monoOptions,
+      week +
+        day +
+        variationOffset(variation, "monostructural", monoOptions.length),
+    );
+  })();
   const gymOptions = {
     stronger: [
       "8 toes-to-bar",
@@ -3062,6 +3289,7 @@ function weaknessWodMovement(weakness, week) {
     olympic: `${reps} hang power clean drills`,
     rowing: "250 m technique row",
     running: "200 m relaxed run",
+    runningBodyweight: `${reps} burpees`,
     pulling: `${reps} strict pull-ups or ring rows`,
     muscleup: `${Math.max(3, Number(reps) - 3)} bar muscle-up transitions`,
     t2b: `${reps} toes-to-bar or hanging knee raises`,
@@ -3111,6 +3339,8 @@ function weaknessPrep(weakness) {
     olympic: "PVC high pulls, muscle snatch, and front rack",
     rowing: "pause row drill and stroke-rate control",
     running: "ankle hops, calf raises, and relaxed strides",
+    runningBodyweight:
+      "ankle hops, relaxed strides, push-ups, and controlled air squats",
     pulling: "scap pull-ups and active hangs",
     muscleup: "false grip or low-bar transition rehearsal",
     t2b: "hollow/arch swings and hanging knee raises",
@@ -3125,6 +3355,7 @@ function weaknessAccessory(weakness, week) {
     olympic: `${reps}: tall clean/snatch pulls + overhead or front rack holds`,
     rowing: `${reps}: 90 sec row at perfect technique, easy rest`,
     running: `${reps}: 200 m relaxed strides or incline treadmill walk`,
+    runningBodyweight: `${reps}: 200 m relaxed run + 8 push-ups + 12 air squats`,
     pulling: `${reps}: strict pull-up negatives, ring rows, and active hang`,
     muscleup: `${reps}: low-bar transitions, deep dips, and slow negatives`,
     t2b: `${reps}: kip swings, hanging knee raises, and hollow rocks`,
@@ -3145,6 +3376,10 @@ function gymnasticsSkillBlock(weakness, week) {
     return week >= 6
       ? "Pulling density: 8 min submax pull-up or chest-to-bar sets"
       : "Pulling base: strict pulls, ring rows, active hangs";
+  if (weakness === "runningBodyweight")
+    return week >= 6
+      ? "Bodyweight density: 8 min of submax push-up, pull-up, and air-squat sets"
+      : "Bodyweight base: strict push-ups, ring rows, air squats, and hollow holds";
   return "Gymnastics skill: hollow/arch control, strict pulling, and midline strength";
 }
 
@@ -3154,6 +3389,8 @@ function weaknessMobility(weakness) {
     olympic: "Front rack, lats, pecs, T-spine extension",
     rowing: "Hamstrings, hip flexors, and easy thoracic rotation",
     running: "Calves, hip flexors, and foot/ankle tissue work",
+    runningBodyweight:
+      "Calves, hip flexors, ankles, pecs, and easy thoracic rotation",
     pulling: "Lats, pecs, forearms, and 60 sec active-passive hang",
     muscleup: "Pecs, lats, triceps, forearms, and gentle shoulder extension",
     t2b: "Lats, hip flexors, hamstrings, and hollow breathing",
@@ -3176,7 +3413,26 @@ function buildMastersRxOpenSession(
     day === 2 ? "endurance" : day === 4 ? "gymnastics" : "balanced",
   );
   const templates = mastersRxSessionTemplates(profile, week, phase);
-  const selected = templates[day] || templates[1];
+  const template = templates[day] || templates[1];
+  const isWeaknessDay = day === options.daysPerWeek;
+  const selected = isWeaknessDay
+    ? {
+        ...template,
+        warmup: [
+          template.warmup[0],
+          `${WEAKNESS_LABELS[options.weakness]} prep: ${weaknessPrep(options.weakness)}`,
+          ...template.warmup.slice(2),
+        ],
+        strength: [
+          ...template.strength.slice(0, -1),
+          weaknessAccessory(options.weakness, week),
+        ],
+        mobility: [
+          weaknessMobility(options.weakness),
+          ...template.mobility.slice(1),
+        ],
+      }
+    : template;
   const wod = claimUniqueGeneratedWod(
     (collisionSalt) =>
       mastersRxWod(
@@ -3193,7 +3449,7 @@ function buildMastersRxOpenSession(
     id: idFactory(`generated-masters-rx-open-w${week}-d${day}`),
     week,
     title: `W${week} D${day}: ${title}`,
-    focus: `Men Masters 35-39 RX prep. ${phase.note} Build Open standards without failed skill reps.`,
+    focus: `Men Masters 35-39 RX prep with ${WEAKNESS_LABELS[options.weakness].toLowerCase()} priority. ${phase.note} Build Open standards without failed skill reps.`,
     warmup: selected.warmup,
     strength: selected.strength,
     wod,
@@ -3550,19 +3806,57 @@ function mastersRxWod(week, day, profile, wallBallVolume, variation) {
       ],
     },
   };
-  const variedDay = variation
-    ? ((day - 1 + variationOffset(variation, "masters-movements", 5)) % 5) + 1
-    : day;
-  const dayPatterns = patterns[variedDay] || patterns[1];
   const variablePatternWeeks = [1, 2, 3, 5, 6, 7];
   const variableIndex = variablePatternWeeks.indexOf(week);
-  const variedWeek =
-    variation && variableIndex >= 0
-      ? variablePatternWeeks[
-          (variableIndex + variation.formatOffset) % variablePatternWeeks.length
-        ]
-      : week;
-  return dayPatterns[variedWeek] || dayPatterns[1];
+  let variedDay = day;
+  let variedWeek = week;
+
+  if (variation && variableIndex >= 0) {
+    const assignments = seededPermutation(
+      5 * variablePatternWeeks.length,
+      `${variation.seed}|masters-rx-variable`,
+    );
+    const slot = variableIndex * 5 + (day - 1);
+    const assignedPattern = assignments[slot];
+    variedDay = Math.floor(assignedPattern / variablePatternWeeks.length) + 1;
+    variedWeek =
+      variablePatternWeeks[assignedPattern % variablePatternWeeks.length];
+  } else if (variation) {
+    const assignments = seededPermutation(
+      5,
+      `${variation.seed}|masters-rx-fixed-week-${week}`,
+    );
+    variedDay = assignments[day - 1] + 1;
+  }
+
+  const dayPatterns = patterns[variedDay] || patterns[1];
+  return varyMastersRxWodStructure(
+    dayPatterns[variedWeek] || dayPatterns[1],
+    variation,
+  );
+}
+
+function varyMastersRxWodStructure(wod, variation) {
+  if (!variation || !Array.isArray(wod) || !wod.length) return wod;
+
+  const movementVariations = MASTERS_RX_MOVEMENT_VARIATIONS.filter(
+    (candidate) => candidate.matches.test(wod[0]),
+  );
+  if (!movementVariations.length) return wod;
+
+  const structuralSeed = [
+    "masters-rx-movement-variation",
+    structuralWodSignature(wod),
+    variation.seed,
+    variation.collisionSalt,
+  ].join("|");
+  const movementVariation =
+    movementVariations[seededIndex(structuralSeed, movementVariations.length)];
+
+  return [
+    `${wod[0]} Movement variation for this cycle: ${movementVariation.instruction}. Keep the listed clock and score method.`,
+    ...wod.slice(1),
+  ];
 }
 
 function mastersRxAddOns(week, day) {
@@ -4316,6 +4610,7 @@ const FORGE_HOUR_API = {
   READINESS_LABELS,
   WEEK_META,
   WEAKNESS_LABELS,
+  WOD_SCHEMA_VERSION,
   buildGeneratedProgramme,
   buildRxReadiness,
   buildSession,
@@ -4347,6 +4642,7 @@ const FORGE_HOUR_API = {
   selectActiveWeekSessions,
   selectPlanWeekSessions,
   splitLines,
+  structuralWodSignature,
   trimNumber,
   valueFromPath,
 };

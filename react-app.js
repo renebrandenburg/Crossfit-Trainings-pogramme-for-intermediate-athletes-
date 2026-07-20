@@ -18,6 +18,7 @@
   const {
     DIVISION_LABELS,
     GOAL_LABELS,
+    PLAN_SCHEMA_VERSION,
     PR_METRICS,
     READINESS_LABELS,
     WEEK_META,
@@ -52,6 +53,8 @@
   const { createSupabaseStore, mergeById, mergePrs } = syncApi;
 
   const STORAGE_KEY = "forge-hour-state-v1";
+  const GUEST_SCORE_OWNER = "guest";
+  const BASELINE_UPDATED_AT = "1970-01-01T00:00:00.000Z";
   const SUPABASE_CONFIG = {
     url: "https://wvypnaojkysxrftuqrnu.supabase.co",
     anonKey: "sb_publishable_lUuIsYjeWwY9Wsr15-_Z4Q_VqNGALR4",
@@ -75,6 +78,7 @@
    * @property {number} duration
    * @property {string=} intensity
    * @property {"generated"|"manual"=} origin
+   * @property {boolean=} generated
    * @property {boolean=} customized
    * @property {string=} createdAt
    */
@@ -92,14 +96,21 @@
    */
 
   /**
-   * @typedef {Object} AppState
-   * @property {number} schemaVersion
-   * @property {any} profile
+   * @typedef {Object} ScoreData
    * @property {any[]} logs
-   * @property {TrainingPlan[]} plans
-   * @property {string|null} activePlanId
    * @property {Object<string, any>} prs
    * @property {any[]} prAttempts
+   */
+
+  /**
+   * @typedef {Object} AppState
+   * @property {number} schemaVersion
+   * @property {number} planSchemaVersion
+   * @property {any} profile
+   * @property {TrainingPlan[]} plans
+   * @property {string|null} activePlanId
+   * @property {Object<string, ScoreData>} scoreDataByOwner
+   * @property {string} activeScoreOwner
    * @property {number} selectedWeek
    * @property {string} themePreference
    */
@@ -107,13 +118,15 @@
   /** @returns {AppState} */
   function fallbackState() {
     return {
-      schemaVersion: 2,
+      schemaVersion: 3,
+      planSchemaVersion: PLAN_SCHEMA_VERSION,
       profile: cloneDefaultProfile(),
-      logs: [],
       plans: [],
       activePlanId: null,
-      prs: {},
-      prAttempts: [],
+      scoreDataByOwner: {
+        [GUEST_SCORE_OWNER]: emptyScoreData(),
+      },
+      activeScoreOwner: GUEST_SCORE_OWNER,
       selectedWeek: 1,
       themePreference: "system",
     };
@@ -131,6 +144,7 @@
       const merged = {
         ...fallback,
         ...parsed,
+        activeScoreOwner: GUEST_SCORE_OWNER,
         selectedWeek: clamp(
           Number(parsed.selectedWeek) || fallback.selectedWeek,
           1,
@@ -160,31 +174,155 @@
 
   /** @param {AppState} state @returns {AppState} */
   function seedState(state) {
-    let next = seedPrs(state);
+    let next = migrateScoreState(state);
     const migration = migratePlanState(next);
     next = migration.state;
+    const activePlan = selectActivePlan(next);
+    if (activePlan) {
+      const selection = resolvePlanTransition(activePlan, next.selectedWeek);
+      next = { ...next, selectedWeek: selection.selectedWeek };
+    }
+    next = seedPrs(next);
 
     saveState(next);
     return next;
   }
 
-  /** @param {AppState} state */
+  /** @param {AppState} state @returns {boolean} */
   function saveState(state) {
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      return true;
     } catch (error) {
       console.warn("Could not save state.", error);
+      return false;
     }
   }
 
-  function seedPrs(state) {
-    const prs = { ...(state.prs || {}) };
+  /** @returns {ScoreData} */
+  function emptyScoreData() {
+    return { logs: [], prs: {}, prAttempts: [] };
+  }
+
+  /** @param {unknown} value @returns {ScoreData} */
+  function normalizeScoreData(value) {
+    /** @type {any} */
+    const source =
+      value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const logs = Array.isArray(source.logs)
+      ? source.logs.filter(
+          (record) =>
+            record && typeof record === "object" && String(record.id || ""),
+        )
+      : [];
+    const prAttempts = Array.isArray(source.prAttempts)
+      ? source.prAttempts.filter(
+          (record) =>
+            record && typeof record === "object" && String(record.id || ""),
+        )
+      : [];
+    const prs =
+      source.prs && typeof source.prs === "object" && !Array.isArray(source.prs)
+        ? Object.fromEntries(
+            Object.entries(source.prs).filter(
+              ([metricId, record]) =>
+                metricId && record && typeof record === "object",
+            ),
+          )
+        : {};
+    return { logs, prs, prAttempts };
+  }
+
+  /** @param {AppState|any} state @returns {AppState} */
+  function migrateScoreState(state) {
+    const sourceBuckets =
+      state.scoreDataByOwner &&
+      typeof state.scoreDataByOwner === "object" &&
+      !Array.isArray(state.scoreDataByOwner)
+        ? state.scoreDataByOwner
+        : {};
+    const scoreDataByOwner = Object.fromEntries(
+      Object.entries(sourceBuckets).map(([ownerId, scores]) => [
+        ownerId,
+        normalizeScoreData(scores),
+      ]),
+    );
+    const legacyScores = normalizeScoreData({
+      logs: state.logs,
+      prs: state.prs,
+      prAttempts: state.prAttempts,
+    });
+    const guestScores = normalizeScoreData(scoreDataByOwner[GUEST_SCORE_OWNER]);
+    scoreDataByOwner[GUEST_SCORE_OWNER] = {
+      logs: mergeById(legacyScores.logs, guestScores.logs),
+      prs: mergePrs(legacyScores.prs, guestScores.prs),
+      prAttempts: mergeById(legacyScores.prAttempts, guestScores.prAttempts),
+    };
+
+    const activeScoreOwner =
+      typeof state.activeScoreOwner === "string" && state.activeScoreOwner
+        ? state.activeScoreOwner
+        : GUEST_SCORE_OWNER;
+    if (!scoreDataByOwner[activeScoreOwner]) {
+      scoreDataByOwner[activeScoreOwner] = emptyScoreData();
+    }
+
+    const next = {
+      ...state,
+      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 3),
+      scoreDataByOwner,
+      activeScoreOwner,
+    };
+    delete next.logs;
+    delete next.prs;
+    delete next.prAttempts;
+    return next;
+  }
+
+  /** @param {AppState} state @param {string=} ownerId @returns {ScoreData} */
+  function selectScoreData(state, ownerId = state.activeScoreOwner) {
+    return normalizeScoreData(
+      state.scoreDataByOwner?.[ownerId || GUEST_SCORE_OWNER],
+    );
+  }
+
+  /**
+   * @param {AppState} state
+   * @param {(scores: ScoreData) => ScoreData} updater
+   * @param {string=} ownerId
+   * @returns {AppState}
+   */
+  function updateScoreData(state, updater, ownerId = state.activeScoreOwner) {
+    const resolvedOwner = ownerId || GUEST_SCORE_OWNER;
+    return {
+      ...state,
+      scoreDataByOwner: {
+        ...state.scoreDataByOwner,
+        [resolvedOwner]: normalizeScoreData(
+          updater(selectScoreData(state, resolvedOwner)),
+        ),
+      },
+    };
+  }
+
+  /** @param {ScoreData} scores @param {any} profile @returns {ScoreData} */
+  function seedScorePrs(scores, profile) {
+    const prs = { ...(scores.prs || {}) };
     let changed = false;
 
     PR_METRICS.forEach((metric) => {
-      if (prs[metric.id]) return;
+      if (prs[metric.id]) {
+        if (prs[metric.id].date === "Baseline" && !prs[metric.id].updatedAt) {
+          prs[metric.id] = {
+            ...prs[metric.id],
+            updatedAt: BASELINE_UPDATED_AT,
+          };
+          changed = true;
+        }
+        return;
+      }
       const value = normalizePrValue(
-        valueFromPath(state.profile, metric.seed),
+        valueFromPath(profile, metric.seed),
         metric,
       );
       prs[metric.id] = {
@@ -193,20 +331,31 @@
         display: formatPrValue(value, metric),
         date: "Baseline",
         notes: "Seeded from initial research numbers.",
+        updatedAt: BASELINE_UPDATED_AT,
       };
       changed = true;
     });
 
-    return changed ? { ...state, prs } : state;
+    return changed ? { ...scores, prs } : scores;
+  }
+
+  function seedPrs(state, ownerId = state.activeScoreOwner) {
+    return updateScoreData(
+      state,
+      (scores) => seedScorePrs(scores, state.profile),
+      ownerId,
+    );
   }
 
   function syncBaselinePrsFromProfile(state) {
-    const prs = { ...(state.prs || {}) };
+    const scores = selectScoreData(state);
+    const prs = { ...scores.prs };
+    const updatedAt = new Date().toISOString();
     let changed = false;
 
     PR_METRICS.forEach((metric) => {
       const current = prs[metric.id];
-      const hasAttempts = state.prAttempts.some(
+      const hasAttempts = scores.prAttempts.some(
         (attempt) => attempt.metricId === metric.id,
       );
       if (!current || current.date !== "Baseline" || hasAttempts) return;
@@ -219,11 +368,14 @@
         ...current,
         value,
         display: formatPrValue(value, metric),
+        updatedAt,
       };
       changed = true;
     });
 
-    return changed ? { ...state, prs } : state;
+    return changed
+      ? updateScoreData(state, (current) => ({ ...current, prs }))
+      : state;
   }
 
   function todayInputValue() {
@@ -281,6 +433,13 @@
     return "Supabase SDK could not load. Refresh the page or check whether your browser is blocking the Supabase script.";
   }
 
+  function authRedirectUrl() {
+    const redirect = new URL(window.location.href);
+    redirect.search = "";
+    redirect.hash = "";
+    return redirect.toString();
+  }
+
   function weekOptions() {
     return WEEK_META.map((week) =>
       h(
@@ -297,25 +456,112 @@
 
   function defaultSessionSelection(state, week = state.selectedWeek) {
     const selectedWeek = clamp(Number(week) || 1, 1, 8);
+    const activePlan = selectActivePlan(state);
     const activeSessions = selectActiveWeekSessions(state, selectedWeek);
     return {
-      week: selectedWeek,
-      dayId: activeSessions[0]?.id || getNextDayForToday().id,
+      dayId:
+        activeSessions[0]?.id || (activePlan ? "" : getNextDayForToday().id),
+    };
+  }
+
+  function resolvePlanTransition(plan, preferredWeek) {
+    const currentWeek = clamp(Number(preferredWeek) || 1, 1, 8);
+    const session =
+      plan?.sessions.find((item) => Number(item.week) === currentWeek) ||
+      plan?.sessions[0];
+    return {
+      selectedWeek: clamp(Number(session?.week) || currentWeek, 1, 8),
+      dayId: session?.id || (plan ? "" : getNextDayForToday().id),
+    };
+  }
+
+  function indexRemoteScores(scores, ownerId) {
+    const normalized = normalizeScoreData(scores);
+    return {
+      ownerId,
+      hydrated: true,
+      logs: normalized.logs.map((log) => ({
+        id: log.id,
+        timerResult: log.timerResult || null,
+        competitionProof: log.competitionProof || null,
+      })),
+      prAttempts: normalized.prAttempts.map((attempt) => ({ id: attempt.id })),
+      prs: Object.fromEntries(
+        Object.entries(normalized.prs).map(([metricId, record]) => [
+          metricId,
+          {
+            value: record.value,
+            updatedAt: record.updatedAt || BASELINE_UPDATED_AT,
+          },
+        ]),
+      ),
+    };
+  }
+
+  function prMetric(metricId) {
+    return PR_METRICS.find((metric) => metric.id === metricId) || null;
+  }
+
+  function isStrictlyBetterRecord(candidate, current, metricId) {
+    if (!candidate) return false;
+    const metric = prMetric(metricId);
+    const candidateValue = Number(candidate.value);
+    if (!metric || !Number.isFinite(candidateValue) || candidateValue < 0) {
+      return false;
+    }
+    if (!current) return true;
+    const currentValue = Number(current.value);
+    if (candidateValue === currentValue) return false;
+    if (!Number.isFinite(currentValue) || currentValue < 0) return true;
+    if (candidateValue === 0) return false;
+    if (currentValue === 0) return true;
+    return isBetterPr(candidateValue, currentValue, metric);
+  }
+
+  function mergeBestPrs(leftPrs = {}, rightPrs = {}, preferRightOnTie = false) {
+    const merged = { ...leftPrs };
+    Object.entries(rightPrs).forEach(([metricId, candidate]) => {
+      const current = merged[metricId];
+      if (isStrictlyBetterRecord(candidate, current, metricId)) {
+        merged[metricId] = candidate;
+        return;
+      }
+      if (current && Number(candidate?.value) === Number(current.value)) {
+        const candidateUpdatedAt = Date.parse(
+          String(candidate?.updatedAt || BASELINE_UPDATED_AT),
+        );
+        const currentUpdatedAt = Date.parse(
+          String(current.updatedAt || BASELINE_UPDATED_AT),
+        );
+        if (
+          candidateUpdatedAt > currentUpdatedAt ||
+          (candidateUpdatedAt === currentUpdatedAt && preferRightOnTie)
+        ) {
+          merged[metricId] = candidate;
+        }
+      }
+    });
+    return merged;
+  }
+
+  function mergeAccountScores(localScores, remoteScores) {
+    return {
+      logs: mergeById(localScores.logs, remoteScores.logs),
+      prAttempts: mergeById(localScores.prAttempts, remoteScores.prAttempts),
+      prs: mergeBestPrs(localScores.prs, remoteScores.prs, true),
     };
   }
 
   function App() {
     const [appState, setAppState] = ReactRuntime.useState(loadState);
+    const appStateRef = ReactRuntime.useRef(appState);
+    appStateRef.current = appState;
     const [activeView, setActiveView] = ReactRuntime.useState("dashboardView");
     const [toast, setToast] = ReactRuntime.useState("");
     const [systemTheme, setSystemTheme] = ReactRuntime.useState(getSystemTheme);
     const [remoteStore] = ReactRuntime.useState(createRemoteStore);
     const [remoteUser, setRemoteUser] = ReactRuntime.useState(null);
-    const [remoteSnapshot, setRemoteSnapshot] = ReactRuntime.useState({
-      logs: [],
-      prAttempts: [],
-      prs: {},
-    });
+    const [localSaveError, setLocalSaveError] = ReactRuntime.useState("");
     const [syncStatus, setSyncStatus] = ReactRuntime.useState(() => ({
       state: remoteStore ? "signed-out" : "not-configured",
       message: remoteStore
@@ -328,57 +574,159 @@
       defaultSessionSelection(appState),
     );
     const toastTimer = ReactRuntime.useRef(null);
+    const authenticatedOwnerRef = ReactRuntime.useRef(null);
+    const loadingOwnerRef = ReactRuntime.useRef(null);
+    const loadedOwnerRef = ReactRuntime.useRef(null);
+    const authEpochRef = ReactRuntime.useRef(0);
     const themePreference = normalizeThemePreference(appState.themePreference);
     const activeTheme = resolveTheme(themePreference, systemTheme);
+    const scoreData = selectScoreData(appState);
+    const viewState = { ...appState, ...scoreData };
 
     const updateAppState = ReactRuntime.useCallback((updater) => {
-      setAppState((current) => {
-        const next = typeof updater === "function" ? updater(current) : updater;
-        saveState(next);
-        return next;
-      });
+      const current = appStateRef.current;
+      const next = typeof updater === "function" ? updater(current) : updater;
+      appStateRef.current = next;
+      const saved = saveState(next);
+      setAppState(next);
+      window.setTimeout(
+        () =>
+          setLocalSaveError(
+            saved
+              ? ""
+              : "Changes could not be saved on this device. Free storage and retry.",
+          ),
+        0,
+      );
+    }, []);
+
+    const isCurrentAuth = ReactRuntime.useCallback((ownerId, authEpoch) => {
+      return (
+        authenticatedOwnerRef.current === ownerId &&
+        authEpochRef.current === authEpoch
+      );
     }, []);
 
     const mergeRemoteState = ReactRuntime.useCallback(
-      (remoteData) => {
-        updateAppState((current) => ({
-          ...current,
-          logs: mergeById(current.logs, remoteData.logs),
-          prAttempts: mergeById(current.prAttempts, remoteData.prAttempts),
-          prs: seedPrs({
-            ...current,
-            prs: mergePrs(current.prs, remoteData.prs),
-          }).prs,
-        }));
-        setRemoteSnapshot(remoteData);
+      (remoteData, ownerId, authEpoch, transformScores = null) => {
+        if (!isCurrentAuth(ownerId, authEpoch)) return null;
+        const current = appStateRef.current;
+        let mergedScores = mergeAccountScores(
+          selectScoreData(current, ownerId),
+          remoteData,
+        );
+        if (typeof transformScores === "function") {
+          mergedScores = transformScores(mergedScores, current);
+          mergedScores = mergeAccountScores(mergedScores, remoteData);
+        }
+        mergedScores = seedScorePrs(mergedScores, current.profile);
+        updateAppState(
+          updateScoreData(
+            { ...current, activeScoreOwner: ownerId },
+            () => mergedScores,
+            ownerId,
+          ),
+        );
+        const nextRemoteIndex = indexRemoteScores(remoteData, ownerId);
+        return { scores: mergedScores, remoteIndex: nextRemoteIndex };
       },
-      [updateAppState],
+      [isCurrentAuth, updateAppState],
+    );
+
+    const hydrateRemoteScores = ReactRuntime.useCallback(
+      async (ownerId, authEpoch, transformScores = null) => {
+        if (!remoteStore || !isCurrentAuth(ownerId, authEpoch)) return null;
+        const remoteData = await remoteStore.loadUserData();
+        if (!isCurrentAuth(ownerId, authEpoch)) return null;
+        return mergeRemoteState(
+          remoteData,
+          ownerId,
+          authEpoch,
+          transformScores,
+        );
+      },
+      [isCurrentAuth, mergeRemoteState, remoteStore],
     );
 
     const loadRemoteScores = ReactRuntime.useCallback(
-      async (session) => {
+      async (session, authEpoch = authEpochRef.current) => {
         if (!remoteStore || !session || !session.user) return;
+        const ownerId = String(session.user.id || "");
+        if (!ownerId || !isCurrentAuth(ownerId, authEpoch)) return;
+        const authToken = { ownerId, authEpoch };
+        if (
+          loadingOwnerRef.current?.ownerId === ownerId &&
+          loadingOwnerRef.current?.authEpoch === authEpoch
+        ) {
+          return;
+        }
+        if (
+          loadedOwnerRef.current?.ownerId === ownerId &&
+          loadedOwnerRef.current?.authEpoch === authEpoch
+        ) {
+          setRemoteUser(session.user);
+          return;
+        }
+        loadingOwnerRef.current = authToken;
+        setRemoteUser(session.user);
+        updateAppState((current) =>
+          seedPrs(
+            {
+              ...current,
+              activeScoreOwner: ownerId,
+              scoreDataByOwner: {
+                ...current.scoreDataByOwner,
+                [ownerId]: selectScoreData(current, ownerId),
+              },
+            },
+            ownerId,
+          ),
+        );
         setSyncStatus({
           state: "loading",
           message: "Loading scores from Supabase...",
         });
         try {
-          const remoteData = await remoteStore.loadUserData();
-          setRemoteUser(session.user);
-          mergeRemoteState(remoteData);
+          const hydrated = await hydrateRemoteScores(ownerId, authEpoch);
+          if (!hydrated || !isCurrentAuth(ownerId, authEpoch)) return;
+          loadedOwnerRef.current = authToken;
           setSyncStatus({
             state: "signed-in",
             message: "Scores are syncing with Supabase.",
           });
         } catch (error) {
           console.warn("Could not load Supabase scores.", error);
+          if (!isCurrentAuth(ownerId, authEpoch)) return;
           setSyncStatus({
             state: "error",
             message: "Could not load Supabase scores.",
           });
+        } finally {
+          if (
+            loadingOwnerRef.current?.ownerId === ownerId &&
+            loadingOwnerRef.current?.authEpoch === authEpoch
+          ) {
+            loadingOwnerRef.current = null;
+          }
         }
       },
-      [mergeRemoteState, remoteStore],
+      [hydrateRemoteScores, isCurrentAuth, remoteStore, updateAppState],
+    );
+
+    const transitionToSignedOut = ReactRuntime.useCallback(
+      (message = "Sign in to sync logs and PRs.") => {
+        authEpochRef.current += 1;
+        authenticatedOwnerRef.current = null;
+        loadingOwnerRef.current = null;
+        loadedOwnerRef.current = null;
+        setRemoteUser(null);
+        updateAppState((current) => ({
+          ...current,
+          activeScoreOwner: GUEST_SCORE_OWNER,
+        }));
+        setSyncStatus({ state: "signed-out", message });
+      },
+      [updateAppState],
     );
 
     const notify = ReactRuntime.useCallback((message) => {
@@ -397,7 +745,6 @@
     const setSelectedWeek = ReactRuntime.useCallback(
       (week) => {
         const selectedWeek = clamp(Number(week) || 1, 1, 8);
-        setLogSelection((current) => ({ ...current, week: selectedWeek }));
         updateAppState((current) => ({ ...current, selectedWeek }));
       },
       [updateAppState],
@@ -406,7 +753,7 @@
     const jumpToLog = ReactRuntime.useCallback(
       (dayId, weekNumber) => {
         const week = clamp(Number(weekNumber) || appState.selectedWeek, 1, 8);
-        setLogSelection({ dayId, week });
+        setLogSelection({ dayId });
         updateAppState((current) => ({ ...current, selectedWeek: week }));
         activateView("logView");
       },
@@ -423,7 +770,7 @@
           dayId: session.id,
           week,
         });
-        setLogSelection({ dayId: session.id, week });
+        setLogSelection({ dayId: session.id });
         updateAppState((current) => ({ ...current, selectedWeek: week }));
         activateView("logView");
         notify("Timer result ready to save.");
@@ -433,6 +780,7 @@
 
     ReactRuntime.useEffect(() => {
       setLogSelection((current) => {
+        const activePlan = selectActivePlan(appState);
         const sessions = selectActiveWeekSessions(
           appState,
           appState.selectedWeek,
@@ -440,10 +788,12 @@
         const validIds = new Set(
           sessions.length
             ? sessions.map((session) => session.id)
-            : getProgramDays().map((day) => day.id),
+            : activePlan
+              ? [""]
+              : getProgramDays().map((day) => day.id),
         );
         return validIds.has(current.dayId)
-          ? { ...current, week: appState.selectedWeek }
+          ? current
           : defaultSessionSelection(appState);
       });
     }, [appState.activePlanId, appState.selectedWeek, appState.plans]);
@@ -456,47 +806,56 @@
     ReactRuntime.useEffect(() => {
       if (!remoteStore) return undefined;
       let isMounted = true;
+      let authEventSeen = false;
+
+      const applySession = (session) => {
+        if (!isMounted) return;
+        if (!session || !session.user) {
+          transitionToSignedOut();
+          return;
+        }
+
+        const ownerId = String(session.user.id || "");
+        if (!ownerId) {
+          transitionToSignedOut();
+          return;
+        }
+        if (authenticatedOwnerRef.current !== ownerId) {
+          authEpochRef.current += 1;
+          authenticatedOwnerRef.current = ownerId;
+          loadingOwnerRef.current = null;
+          loadedOwnerRef.current = null;
+        }
+        setRemoteUser(session.user);
+        loadRemoteScores(session, authEpochRef.current);
+      };
+
+      const unsubscribe = remoteStore.onAuthStateChange((event, session) => {
+        if (!isMounted) return;
+        authEventSeen = true;
+        applySession(session);
+      });
 
       remoteStore
         .getSession()
         .then((session) => {
-          if (!isMounted) return;
-          if (session && session.user) {
-            loadRemoteScores(session);
-          } else {
-            setSyncStatus({
-              state: "signed-out",
-              message: "Sign in to sync logs and PRs.",
-            });
-          }
+          if (!isMounted || authEventSeen) return;
+          applySession(session);
         })
         .catch((error) => {
           console.warn("Could not read Supabase session.", error);
-          if (isMounted)
+          if (isMounted && !authEventSeen)
             setSyncStatus({
               state: "error",
               message: "Could not read Supabase session.",
             });
         });
 
-      const unsubscribe = remoteStore.onAuthStateChange((event, session) => {
-        if (session && session.user) {
-          loadRemoteScores(session);
-        } else {
-          setRemoteUser(null);
-          setRemoteSnapshot({ logs: [], prAttempts: [], prs: {} });
-          setSyncStatus({
-            state: "signed-out",
-            message: "Sign in to sync logs and PRs.",
-          });
-        }
-      });
-
       return () => {
         isMounted = false;
         unsubscribe();
       };
-    }, [loadRemoteScores, remoteStore]);
+    }, [loadRemoteScores, remoteStore, transitionToSignedOut]);
 
     ReactRuntime.useEffect(() => {
       if (typeof window.matchMedia !== "function") return undefined;
@@ -573,7 +932,6 @@
         selectedWeek: 1,
       }));
       setLogSelection({
-        week: 1,
         dayId: normalizedSessions[0]?.id || getNextDayForToday().id,
       });
       setPendingTimerResult(null);
@@ -590,32 +948,41 @@
       const now = new Date().toISOString();
 
       if (activePlan && editingSessionId) {
-        updateAppState((current) => ({
-          ...current,
-          plans: current.plans.map((plan) =>
-            plan.id !== activePlan.id
-              ? plan
+        const current = appStateRef.current;
+        const storedPlan = current.plans.find(
+          (plan) => plan.id === activePlan.id,
+        );
+        if (!storedPlan) return;
+        const updatedPlan = {
+          ...storedPlan,
+          updatedAt: now,
+          sessions: storedPlan.sessions.map((existing) =>
+            existing.id !== editingSessionId
+              ? existing
               : {
-                  ...plan,
-                  updatedAt: now,
-                  sessions: plan.sessions.map((existing) =>
-                    existing.id !== editingSessionId
-                      ? existing
-                      : {
-                          ...existing,
-                          ...session,
-                          id: existing.id,
-                          createdAt: existing.createdAt,
-                          customized:
-                            existing.origin === "generated" ||
-                            existing.generated
-                              ? true
-                              : existing.customized,
-                        },
-                  ),
+                  ...existing,
+                  ...session,
+                  id: existing.id,
+                  createdAt: existing.createdAt,
+                  customized:
+                    existing.origin === "generated" || existing.generated
+                      ? true
+                      : existing.customized,
                 },
           ),
-        }));
+        };
+        const selection = resolvePlanTransition(
+          updatedPlan,
+          current.selectedWeek,
+        );
+        updateAppState({
+          ...current,
+          plans: current.plans.map((plan) =>
+            plan.id === updatedPlan.id ? updatedPlan : plan,
+          ),
+          selectedWeek: selection.selectedWeek,
+        });
+        setLogSelection({ dayId: selection.dayId });
         notify("Training session updated.");
         return;
       }
@@ -626,6 +993,7 @@
         customized: true,
       };
       if (activePlan) {
+        const selectedWeek = clamp(Number(nextSession.week) || 1, 1, 8);
         updateAppState((current) => ({
           ...current,
           plans: current.plans.map((plan) =>
@@ -637,7 +1005,9 @@
                 }
               : plan,
           ),
+          selectedWeek,
         }));
+        setLogSelection({ dayId: nextSession.id });
       } else {
         const plan = {
           id: createId(),
@@ -653,7 +1023,9 @@
           ...current,
           plans: [plan, ...current.plans],
           activePlanId: plan.id,
+          selectedWeek: clamp(Number(nextSession.week) || 1, 1, 8),
         }));
+        setLogSelection({ dayId: nextSession.id });
       }
       notify("Training session saved.");
     }
@@ -662,18 +1034,13 @@
     function handleSelectPlan(planId) {
       const plan = appState.plans.find((item) => item.id === planId);
       if (!plan) return;
+      const selection = resolvePlanTransition(plan, appState.selectedWeek);
       updateAppState((current) => ({
         ...current,
         activePlanId: plan.id,
+        selectedWeek: selection.selectedWeek,
       }));
-      const firstSession =
-        plan.sessions.find(
-          (session) => Number(session.week) === appState.selectedWeek,
-        ) || plan.sessions[0];
-      setLogSelection({
-        week: firstSession?.week || appState.selectedWeek,
-        dayId: firstSession?.id || getNextDayForToday().id,
-      });
+      setLogSelection({ dayId: selection.dayId });
       setPendingTimerResult(null);
     }
 
@@ -710,7 +1077,9 @@
       const remainingPlans = appState.plans.filter(
         (item) => item.id !== planId,
       );
-      const nextPlan = remainingPlans[0] || null;
+      const deletingActivePlan = appState.activePlanId === planId;
+      const nextPlan = deletingActivePlan ? remainingPlans[0] || null : null;
+      const selection = resolvePlanTransition(nextPlan, appState.selectedWeek);
       updateAppState((current) => ({
         ...current,
         plans: current.plans.filter((item) => item.id !== planId),
@@ -718,15 +1087,12 @@
           current.activePlanId === planId
             ? nextPlan?.id || null
             : current.activePlanId,
+        selectedWeek:
+          current.activePlanId === planId
+            ? selection.selectedWeek
+            : current.selectedWeek,
       }));
-      const nextSession =
-        nextPlan?.sessions.find(
-          (session) => Number(session.week) === appState.selectedWeek,
-        ) || nextPlan?.sessions[0];
-      setLogSelection({
-        week: nextSession?.week || appState.selectedWeek,
-        dayId: nextSession?.id || getNextDayForToday().id,
-      });
+      if (deletingActivePlan) setLogSelection({ dayId: selection.dayId });
       if (
         pendingTimerResult &&
         deletedSessionIds.has(pendingTimerResult.dayId)
@@ -749,18 +1115,28 @@
         !window.confirm(`Delete "${session.title}"?`)
       )
         return;
-      updateAppState((current) => ({
+      const current = appStateRef.current;
+      const storedPlan = current.plans.find(
+        (plan) => plan.id === activePlan.id,
+      );
+      if (!storedPlan) return;
+      const updatedPlan = {
+        ...storedPlan,
+        updatedAt: new Date().toISOString(),
+        sessions: storedPlan.sessions.filter((item) => item.id !== sessionId),
+      };
+      const selection = resolvePlanTransition(
+        updatedPlan,
+        current.selectedWeek,
+      );
+      updateAppState({
         ...current,
         plans: current.plans.map((plan) =>
-          plan.id === activePlan.id
-            ? {
-                ...plan,
-                updatedAt: new Date().toISOString(),
-                sessions: plan.sessions.filter((item) => item.id !== sessionId),
-              }
-            : plan,
+          plan.id === updatedPlan.id ? updatedPlan : plan,
         ),
-      }));
+        selectedWeek: selection.selectedWeek,
+      });
+      setLogSelection({ dayId: selection.dayId });
       if (pendingTimerResult?.dayId === sessionId) setPendingTimerResult(null);
       notify("Custom session deleted.");
     }
@@ -783,7 +1159,14 @@
           h(
             "div",
             { className: "topbar-actions" },
-            h("div", { className: "status-pill" }, "Local save"),
+            h(
+              "div",
+              {
+                className: `status-pill${localSaveError ? " status-error" : ""}`,
+                title: localSaveError || "Changes are saved on this device.",
+              },
+              localSaveError ? "Local save failed" : "Saved locally",
+            ),
             h(ThemeControl, {
               value: themePreference,
               onChange: (nextPreference) => {
@@ -799,7 +1182,7 @@
           "main",
           null,
           h(DashboardView, {
-            appState,
+            appState: viewState,
             activeView,
             onWeekChange: setSelectedWeek,
             onJumpLog: jumpToLog,
@@ -819,27 +1202,34 @@
               )
                 return;
               window.localStorage.removeItem(STORAGE_KEY);
-              const next = loadState();
-              setAppState(next);
-              setLogSelection({
-                week: next.selectedWeek,
-                dayId: getNextDayForToday().id,
-              });
+              let next = loadState();
+              const ownerId = String(remoteUser?.id || "");
+              if (ownerId) {
+                next = seedPrs({ ...next, activeScoreOwner: ownerId }, ownerId);
+                loadedOwnerRef.current = null;
+              }
+              updateAppState(next);
+              setLogSelection(defaultSessionSelection(next));
+              if (remoteUser && isCurrentAuth(ownerId, authEpochRef.current)) {
+                loadRemoteScores({ user: remoteUser }, authEpochRef.current);
+              }
               notify("Demo data reset.");
             },
             accountSyncPanel: h(AccountSyncPanel, {
-              appState,
+              appState: viewState,
               remoteStore,
               remoteUser,
               syncStatus,
               onSignIn: async (email) => {
                 if (!remoteStore) return;
+                const authEpoch = authEpochRef.current;
                 setSyncStatus({
                   state: "loading",
                   message: "Sending sign-in email...",
                 });
                 try {
-                  await remoteStore.signIn(email, window.location.href);
+                  await remoteStore.signIn(email, authRedirectUrl());
+                  if (authEpochRef.current !== authEpoch) return;
                   setSyncStatus({
                     state: "signed-out",
                     message: "Check your email for the sign-in link.",
@@ -847,6 +1237,7 @@
                   notify("Check your email for the sign-in link.");
                 } catch (error) {
                   console.warn("Could not send Supabase sign-in link.", error);
+                  if (authEpochRef.current !== authEpoch) return;
                   setSyncStatus({
                     state: "error",
                     message: "Could not send sign-in email.",
@@ -856,16 +1247,28 @@
               },
               onSignOut: async () => {
                 if (!remoteStore) return;
+                const ownerId = authenticatedOwnerRef.current;
+                const authEpoch = authEpochRef.current;
                 try {
                   await remoteStore.signOut();
-                  setRemoteUser(null);
-                  setSyncStatus({
-                    state: "signed-out",
-                    message: "Signed out. Local cache remains on this device.",
-                  });
+                  if (
+                    authEpochRef.current !== authEpoch ||
+                    authenticatedOwnerRef.current !== ownerId
+                  ) {
+                    return;
+                  }
+                  transitionToSignedOut(
+                    "Signed out. Local cache remains on this device.",
+                  );
                   notify("Signed out.");
                 } catch (error) {
                   console.warn("Could not sign out.", error);
+                  if (
+                    authEpochRef.current !== authEpoch ||
+                    authenticatedOwnerRef.current !== ownerId
+                  ) {
+                    return;
+                  }
                   setSyncStatus({
                     state: "error",
                     message: "Could not sign out.",
@@ -875,32 +1278,47 @@
               },
               onSyncLocal: async () => {
                 if (!remoteStore || !remoteUser) return;
+                const ownerId = String(remoteUser.id || "");
+                const authEpoch = authEpochRef.current;
+                if (!ownerId || !isCurrentAuth(ownerId, authEpoch)) return;
                 setSyncStatus({
                   state: "loading",
-                  message: "Uploading local scores...",
+                  message: "Refreshing account scores before sync...",
                 });
                 try {
-                  const uploaded = await remoteStore.uploadLocalScores(
-                    appState,
-                    remoteUser.id,
-                    remoteSnapshot,
+                  const hydrated = await hydrateRemoteScores(
+                    ownerId,
+                    authEpoch,
                   );
-                  const remoteData = await remoteStore.loadUserData();
-                  mergeRemoteState(remoteData);
+                  if (!hydrated || !isCurrentAuth(ownerId, authEpoch)) return;
+                  const uploaded = await remoteStore.uploadLocalScores(
+                    hydrated.scores,
+                    ownerId,
+                    hydrated.remoteIndex,
+                  );
+                  if (!isCurrentAuth(ownerId, authEpoch)) return;
+                  const refreshed = await hydrateRemoteScores(
+                    ownerId,
+                    authEpoch,
+                  );
+                  if (!refreshed || !isCurrentAuth(ownerId, authEpoch)) return;
                   const proofPending = uploaded.competitionProofPending || 0;
+                  const timerPending = uploaded.timerResultPending || 0;
+                  const optionalMetadataPending = proofPending + timerPending;
                   setSyncStatus({
                     state: "signed-in",
-                    message: proofPending
-                      ? "Scores synced. Competition proof metadata stays local until the Supabase schema is updated."
+                    message: optionalMetadataPending
+                      ? "Scores synced. Timer or competition-proof metadata stays local until the Supabase schema is updated."
                       : "Local scores synced to Supabase.",
                   });
                   notify(
-                    proofPending
-                      ? `Synced local records; ${proofPending} proof record${proofPending === 1 ? "" : "s"} still need the Supabase schema update.`
+                    optionalMetadataPending
+                      ? `Synced local records; ${optionalMetadataPending} optional metadata item${optionalMetadataPending === 1 ? "" : "s"} still need the Supabase schema update.`
                       : `Synced ${uploaded.logs + uploaded.prAttempts + uploaded.prs} local records.`,
                   );
                 } catch (error) {
                   console.warn("Could not sync local scores.", error);
+                  if (!isCurrentAuth(ownerId, authEpoch)) return;
                   setSyncStatus({
                     state: "error",
                     message: "Could not sync local scores.",
@@ -908,17 +1326,81 @@
                   notify("Could not sync local scores.");
                 }
               },
+              onImportGuest: async () => {
+                if (!remoteStore || !remoteUser) return;
+                const ownerId = String(remoteUser.id || "");
+                const authEpoch = authEpochRef.current;
+                if (!ownerId || !isCurrentAuth(ownerId, authEpoch)) return;
+                setSyncStatus({
+                  state: "loading",
+                  message: "Refreshing account scores before import...",
+                });
+                try {
+                  const hydrated = await hydrateRemoteScores(
+                    ownerId,
+                    authEpoch,
+                    (accountScores, current) => {
+                      const guestScores = selectScoreData(
+                        current,
+                        GUEST_SCORE_OWNER,
+                      );
+                      return {
+                        logs: mergeById(accountScores.logs, guestScores.logs),
+                        prAttempts: mergeById(
+                          accountScores.prAttempts,
+                          guestScores.prAttempts,
+                        ),
+                        prs: mergeBestPrs(accountScores.prs, guestScores.prs),
+                      };
+                    },
+                  );
+                  if (!hydrated || !isCurrentAuth(ownerId, authEpoch)) return;
+                  const uploaded = await remoteStore.uploadLocalScores(
+                    hydrated.scores,
+                    ownerId,
+                    hydrated.remoteIndex,
+                  );
+                  if (!isCurrentAuth(ownerId, authEpoch)) return;
+                  const refreshed = await hydrateRemoteScores(
+                    ownerId,
+                    authEpoch,
+                  );
+                  if (!refreshed || !isCurrentAuth(ownerId, authEpoch)) return;
+                  const optionalMetadataPending =
+                    (uploaded.competitionProofPending || 0) +
+                    (uploaded.timerResultPending || 0);
+                  setSyncStatus({
+                    state: "signed-in",
+                    message: optionalMetadataPending
+                      ? "Guest scores imported. Timer or competition-proof metadata stays local until the Supabase schema is updated."
+                      : "Guest scores imported and synced.",
+                  });
+                  notify(
+                    optionalMetadataPending
+                      ? `Imported guest scores; ${optionalMetadataPending} optional metadata item${optionalMetadataPending === 1 ? "" : "s"} still need the Supabase schema update.`
+                      : `Imported ${uploaded.logs + uploaded.prAttempts + uploaded.prs} guest records.`,
+                  );
+                } catch (error) {
+                  console.warn("Could not import guest scores.", error);
+                  if (!isCurrentAuth(ownerId, authEpoch)) return;
+                  setSyncStatus({
+                    state: "error",
+                    message: "Could not safely import guest scores.",
+                  });
+                  notify("Guest scores were not imported. Retry when online.");
+                }
+              },
             }),
           }),
           h(ProgramView, {
-            appState,
+            appState: viewState,
             activeView,
             onWeekChange: setSelectedWeek,
             onLogSession: jumpToLog,
             onTimerFinish: finishTimerToLog,
           }),
           h(BuilderView, {
-            appState,
+            appState: viewState,
             activeView,
             onNotify: notify,
             onGenerate: handleGenerateProgramme,
@@ -932,12 +1414,12 @@
           }),
           h(LearnView, { activeView }),
           h(ProofView, {
-            appState,
+            appState: viewState,
             activeView,
             onFinish: finishTimerToLog,
           }),
           h(LogView, {
-            appState,
+            appState: viewState,
             activeView,
             logSelection,
             pendingTimerResult,
@@ -945,6 +1427,15 @@
             onWeekChange: setSelectedWeek,
             onNotify: notify,
             onSaveLog: (log) => {
+              const localOwnerId = appState.activeScoreOwner;
+              const ownerId = remoteUser ? String(remoteUser.id || "") : "";
+              const authEpoch = authEpochRef.current;
+              const syncRemotely = Boolean(
+                remoteStore &&
+                ownerId &&
+                localOwnerId === ownerId &&
+                isCurrentAuth(ownerId, authEpoch),
+              );
               const clearMatchingTimer = () => {
                 if (
                   pendingTimerResult &&
@@ -954,26 +1445,39 @@
                   setPendingTimerResult(null);
                 }
               };
-              if (remoteStore && remoteUser) {
-                return remoteStore
-                  .saveLog(log, remoteUser.id)
+              updateAppState((current) =>
+                updateScoreData(
+                  current,
+                  (scores) => ({
+                    ...scores,
+                    logs: mergeById(scores.logs, [log]),
+                  }),
+                  localOwnerId,
+                ),
+              );
+              clearMatchingTimer();
+              notify(
+                syncRemotely
+                  ? "Workout saved locally. Syncing..."
+                  : "Workout log saved.",
+              );
+              if (syncRemotely) {
+                remoteStore
+                  .saveLog(log, ownerId)
                   .then((syncResult) => {
-                    const remoteLog =
-                      syncResult?.competitionProofSynced === false
-                        ? { ...log, competitionProof: null }
-                        : log;
-                    setRemoteSnapshot((current) => ({
-                      ...current,
-                      logs: mergeById(current.logs, [remoteLog]),
-                    }));
-                    updateAppState((current) => ({
-                      ...current,
-                      logs: mergeById(current.logs, [log]),
-                    }));
-                    clearMatchingTimer();
+                    if (!isCurrentAuth(ownerId, authEpoch)) return;
+                    const optionalMetadataPending =
+                      syncResult?.competitionProofSynced === false ||
+                      syncResult?.timerResultSynced === false;
+                    setSyncStatus({
+                      state: "signed-in",
+                      message: optionalMetadataPending
+                        ? "Workout saved. Timer or competition-proof metadata remains local until the Supabase schema is updated."
+                        : "Scores are syncing with Supabase.",
+                    });
                     notify(
-                      syncResult?.competitionProofSynced === false
-                        ? "Workout saved. Proof metadata stays local until the Supabase schema is updated."
+                      optionalMetadataPending
+                        ? "Workout saved. Timer or proof metadata stays local until the Supabase schema is updated."
                         : "Workout log saved.",
                     );
                   })
@@ -982,36 +1486,57 @@
                       "Could not save workout log to Supabase.",
                       error,
                     );
-                    notify("Could not save workout log to Supabase.");
-                    throw error;
+                    if (!isCurrentAuth(ownerId, authEpoch)) return;
+                    setSyncStatus({
+                      state: "error",
+                      message:
+                        "Workout is saved locally. Remote sync is pending; retry from Account.",
+                    });
+                    notify("Workout saved locally. Remote sync is pending.");
                   });
               }
-              updateAppState((current) => ({
-                ...current,
-                logs: [log, ...current.logs],
-              }));
-              clearMatchingTimer();
-              notify("Workout log saved.");
               return Promise.resolve();
             },
             onClearLogs: () => {
-              if (!appState.logs.length) return;
+              if (!scoreData.logs.length) return;
               if (!window.confirm("Clear all workout logs on this device?"))
                 return;
-              const clearLocalLogs = () => {
-                setRemoteSnapshot((current) => ({ ...current, logs: [] }));
-                updateAppState((current) => ({ ...current, logs: [] }));
-                notify("Workout logs cleared.");
+              const localOwnerId = appState.activeScoreOwner;
+              const ownerId = remoteUser ? String(remoteUser.id || "") : "";
+              const authEpoch = authEpochRef.current;
+              const syncRemotely = Boolean(
+                remoteStore &&
+                ownerId &&
+                localOwnerId === ownerId &&
+                isCurrentAuth(ownerId, authEpoch),
+              );
+              const clearLocalLogs = (showNotice = true) => {
+                updateAppState((current) =>
+                  updateScoreData(
+                    current,
+                    (scores) => ({
+                      ...scores,
+                      logs: [],
+                    }),
+                    localOwnerId,
+                  ),
+                );
+                if (showNotice) notify("Workout logs cleared.");
               };
-              if (remoteStore && remoteUser) {
+              if (syncRemotely) {
                 remoteStore
                   .clearLogs()
-                  .then(clearLocalLogs)
+                  .then(() => {
+                    const isCurrent = isCurrentAuth(ownerId, authEpoch);
+                    clearLocalLogs(isCurrent);
+                    if (!isCurrent) return;
+                  })
                   .catch((error) => {
                     console.warn(
                       "Could not clear Supabase workout logs.",
                       error,
                     );
+                    if (!isCurrentAuth(ownerId, authEpoch)) return;
                     notify("Could not clear Supabase workout logs.");
                   });
                 return;
@@ -1020,11 +1545,16 @@
             },
           }),
           h(PrView, {
-            appState,
+            appState: viewState,
             activeView,
             onNotify: notify,
             onSaveAttempt: (attempt) => {
-              const prs = { ...appState.prs };
+              const localOwnerId = appState.activeScoreOwner;
+              const ownerScores = selectScoreData(
+                appStateRef.current,
+                localOwnerId,
+              );
+              const prs = { ...ownerScores.prs };
               if (attempt.isPr) {
                 prs[attempt.metricId] = {
                   metricId: attempt.metricId,
@@ -1032,38 +1562,89 @@
                   display: attempt.display,
                   date: attempt.date,
                   notes: attempt.notes,
+                  updatedAt: attempt.createdAt,
                 };
               }
 
+              const ownerId = remoteUser ? String(remoteUser.id || "") : "";
+              const authEpoch = authEpochRef.current;
+              const syncRemotely = Boolean(
+                remoteStore &&
+                ownerId &&
+                localOwnerId === ownerId &&
+                isCurrentAuth(ownerId, authEpoch),
+              );
+
               const saveLocalAttempt = () => {
-                setRemoteSnapshot((current) => ({
-                  ...current,
-                  prs: mergePrs(current.prs, prs),
-                  prAttempts: mergeById(current.prAttempts, [attempt]),
-                }));
-                updateAppState((current) => ({
-                  ...current,
-                  prs,
-                  prAttempts: mergeById(current.prAttempts, [attempt]),
-                }));
-                notify(attempt.isPr ? "New PR saved." : "Attempt saved.");
+                updateAppState((current) =>
+                  updateScoreData(
+                    current,
+                    (scores) => ({
+                      ...scores,
+                      prs: attempt.isPr
+                        ? {
+                            ...scores.prs,
+                            [attempt.metricId]: prs[attempt.metricId],
+                          }
+                        : scores.prs,
+                      prAttempts: mergeById(scores.prAttempts, [attempt]),
+                    }),
+                    localOwnerId,
+                  ),
+                );
+                notify(
+                  syncRemotely
+                    ? `${attempt.isPr ? "New PR" : "Attempt"} saved locally. Syncing...`
+                    : attempt.isPr
+                      ? "New PR saved."
+                      : "Attempt saved.",
+                );
               };
 
-              if (remoteStore && remoteUser) {
-                return remoteStore
-                  .savePrAttempt(attempt, prs, remoteUser.id)
-                  .then(saveLocalAttempt)
+              saveLocalAttempt();
+              if (syncRemotely) {
+                remoteStore
+                  .savePrAttempt(attempt, prs, ownerId)
+                  .then((canonicalRecord) => {
+                    if (!isCurrentAuth(ownerId, authEpoch)) return;
+                    if (canonicalRecord) {
+                      updateAppState((current) =>
+                        updateScoreData(
+                          current,
+                          (scores) => ({
+                            ...scores,
+                            prs: mergeBestPrs(
+                              scores.prs,
+                              {
+                                [canonicalRecord.metricId]: canonicalRecord,
+                              },
+                              true,
+                            ),
+                          }),
+                          localOwnerId,
+                        ),
+                      );
+                    }
+                    setSyncStatus({
+                      state: "signed-in",
+                      message: "Scores are syncing with Supabase.",
+                    });
+                    notify(attempt.isPr ? "New PR synced." : "Attempt synced.");
+                  })
                   .catch((error) => {
                     console.warn(
                       "Could not save PR attempt to Supabase.",
                       error,
                     );
-                    notify("Could not save PR attempt to Supabase.");
-                    throw error;
+                    if (!isCurrentAuth(ownerId, authEpoch)) return;
+                    setSyncStatus({
+                      state: "error",
+                      message:
+                        "PR attempt is saved locally. Remote sync is pending; retry from Account.",
+                    });
+                    notify("PR attempt saved locally. Remote sync is pending.");
                   });
               }
-
-              saveLocalAttempt();
               return Promise.resolve();
             },
           }),
@@ -1091,12 +1672,20 @@
     onSignIn,
     onSignOut,
     onSyncLocal,
+    onImportGuest,
   }) {
     const [email, setEmail] = ReactRuntime.useState("");
     const localRecordCount =
       appState.logs.length +
       appState.prAttempts.length +
       Object.keys(appState.prs || {}).length;
+    const guestScores = normalizeScoreData(
+      appState.scoreDataByOwner?.[GUEST_SCORE_OWNER],
+    );
+    const guestRecordCount =
+      guestScores.logs.length +
+      guestScores.prAttempts.length +
+      Object.keys(guestScores.prs).length;
 
     return h(
       "section",
@@ -1176,8 +1765,20 @@
                   disabled:
                     syncStatus.state === "loading" || localRecordCount === 0,
                 },
-                "Sync local scores",
+                "Retry account sync",
               ),
+              guestRecordCount
+                ? h(
+                    "button",
+                    {
+                      className: "ghost-button",
+                      type: "button",
+                      onClick: onImportGuest,
+                      disabled: syncStatus.state === "loading",
+                    },
+                    `Import guest scores (${guestRecordCount})`,
+                  )
+                : null,
               h(
                 "button",
                 {
@@ -3615,9 +4216,12 @@
         ),
       ),
       h(GeneratorForm, {
+        key: activePlan?.id || "new-generated-plan",
         profile: appState.profile,
         onGenerate,
         regenerating: activePlan?.kind === "generated",
+        initialOptions:
+          activePlan?.kind === "generated" ? activePlan.generatorOptions : null,
       }),
       appState.plans.length
         ? h(
@@ -3744,7 +4348,18 @@
     );
   }
 
-  function GeneratorForm({ profile, onGenerate, regenerating }) {
+  function GeneratorForm({
+    profile,
+    onGenerate,
+    regenerating,
+    initialOptions,
+  }) {
+    const defaults = {
+      goal: initialOptions?.goal || "stronger",
+      daysPerWeek: Number(initialOptions?.daysPerWeek) || 4,
+      weakness: initialOptions?.weakness || "squat",
+      duration: positiveNumber(initialOptions?.duration, 60),
+    };
     return h(
       "form",
       {
@@ -3799,7 +4414,7 @@
               id: "generatorGoal",
               name: "generatorGoal",
               required: true,
-              defaultValue: "stronger",
+              defaultValue: defaults.goal,
             },
             h("option", { value: "stronger" }, "Get stronger"),
             h("option", { value: "endurance" }, "More endurance"),
@@ -3822,7 +4437,7 @@
               id: "generatorDays",
               name: "generatorDays",
               required: true,
-              defaultValue: "4",
+              defaultValue: String(defaults.daysPerWeek),
             },
             h("option", { value: "4" }, "4 days"),
             h("option", { value: "3" }, "3 days"),
@@ -3843,7 +4458,7 @@
               id: "generatorWeakness",
               name: "generatorWeakness",
               required: true,
-              defaultValue: "squat",
+              defaultValue: defaults.weakness,
             },
             Object.entries(WEAKNESS_LABELS).map(([value, label]) =>
               h("option", { key: value, value }, label),
@@ -3862,7 +4477,7 @@
             max: "60",
             step: "5",
             inputMode: "numeric",
-            defaultValue: "60",
+            defaultValue: String(defaults.duration),
           }),
         ),
       ),
@@ -4270,12 +4885,10 @@
     onClearLogs,
   }) {
     const [formVersion, setFormVersion] = ReactRuntime.useState(0);
-    const selectedWeek = clamp(
-      Number(logSelection.week) || appState.selectedWeek,
-      1,
-      8,
-    );
-    const selectedDayId = logSelection.dayId || getProgramDays()[0].id;
+    const selectedWeek = appState.selectedWeek;
+    const activePlan = selectActivePlan(appState);
+    const selectedDayId =
+      logSelection.dayId || (activePlan ? "" : getProgramDays()[0].id);
     const matchingTimer =
       pendingTimerResult &&
       pendingTimerResult.dayId === selectedDayId &&
@@ -4283,7 +4896,6 @@
         ? pendingTimerResult
         : null;
     const timerSummary = matchingTimer ? formatTimerResult(matchingTimer) : "";
-    const activePlan = selectActivePlan(appState);
     const activeSessions = selectActiveWeekSessions(appState, selectedWeek);
 
     return h(
@@ -4385,7 +4997,6 @@
                 value: String(selectedWeek),
                 onChange: (event) => {
                   const week = Number(event.target.value);
-                  onLogSelectionChange({ ...logSelection, week });
                   onWeekChange(week);
                 },
               },
@@ -4403,25 +5014,34 @@
               id: "logDay",
               name: "logDay",
               required: true,
+              disabled: Boolean(
+                activePlan &&
+                !activeSessions.length &&
+                !matchingTimer?.sessionSnapshot,
+              ),
               value: selectedDayId,
               onChange: (event) =>
                 onLogSelectionChange({
-                  ...logSelection,
                   dayId: event.target.value,
-                  week: selectedWeek,
                 }),
             },
             h(
               "optgroup",
               { label: activePlan?.title || "CrossFit Training Programme" },
               activePlan
-                ? activeSessions.map((session) =>
-                    h(
+                ? activeSessions.length
+                  ? activeSessions.map((session) =>
+                      h(
+                        "option",
+                        { key: session.id, value: session.id },
+                        `Week ${session.week}: ${session.title}`,
+                      ),
+                    )
+                  : h(
                       "option",
-                      { key: session.id, value: session.id },
-                      `Week ${session.week}: ${session.title}`,
-                    ),
-                  )
+                      { value: "", disabled: true },
+                      `No sessions scheduled for week ${selectedWeek}`,
+                    )
                 : getProgramDays().map((day) =>
                     h(
                       "option",
@@ -4722,11 +5342,11 @@
               metric,
             );
 
-            if (!Number.isFinite(normalized)) {
+            if (!Number.isFinite(normalized) || normalized <= 0) {
               onNotify(
                 metric.type === "time"
-                  ? "Use time like 3:30 or 14:36."
-                  : "Enter a valid number.",
+                  ? "Use a time greater than zero, like 3:30 or 14:36."
+                  : "Enter a number greater than zero.",
               );
               return;
             }
@@ -4900,6 +5520,51 @@
     );
   }
 
+  class AppErrorBoundary extends ReactRuntime.Component {
+    constructor(props) {
+      super(props);
+      this.state = { hasError: false };
+    }
+
+    static getDerivedStateFromError() {
+      return { hasError: true };
+    }
+
+    componentDidCatch(error) {
+      console.error("Application render failed.", {
+        name: error?.name || "Error",
+        message: error?.message || "Unknown render failure",
+      });
+    }
+
+    render() {
+      if (!this.state.hasError) return this.props.children;
+      return h(
+        "main",
+        { className: "app-shell" },
+        h(
+          "section",
+          { className: "panel", role: "alert" },
+          h("h1", null, "The app could not finish rendering"),
+          h(
+            "p",
+            { className: "muted-copy" },
+            "Your saved data remains on this device. Reload to try again.",
+          ),
+          h(
+            "button",
+            {
+              className: "primary-button",
+              type: "button",
+              onClick: () => window.location.reload(),
+            },
+            "Reload app",
+          ),
+        ),
+      );
+    }
+  }
+
   const root = ReactDOMRuntime.createRoot(rootElement);
-  root.render(h(App));
+  root.render(h(AppErrorBoundary, null, h(App)));
 })();

@@ -6,7 +6,7 @@ A phone-first CrossFit training programme and PR tracker for intermediate athlet
 
 - Four-day CrossFit programme capped at 60 minutes per session.
 - Eight-week progression cycle with recalculated loads from the athlete's 1RMs.
-- Needs-based programme generator for strength, endurance, gymnastics, or all-round goals.
+- Needs-based programme generator for strength, endurance, gymnastics, running and bodyweight capacity, or all-round goals.
 - Masters 35-39 RX/Open prep generator with readiness targets, assessment fields, and optional engine or skill add-ons.
 - WOD variation across time domains and formats: AMRAP, intervals, for-time, EMOM, ladder, repeat sets, chipper, and benchmark.
 - Manual training programme builder for adding your own sessions.
@@ -70,23 +70,48 @@ selected week, and theme remain local to the browser in
 `forge-hour-state-v1`. Plan, Build, Proof, and Log resolve workouts from that
 same active-plan record; Supabase never receives programme definitions.
 
+Score data in that key is partitioned by authenticated user ID. Legacy scores
+are migrated into a separate `guest` bucket and are never shown in a signed-in
+account unless the athlete explicitly chooses **Import guest scores**. A remote
+failure does not discard a completed workout or PR attempt: it remains saved in
+the account's local bucket and can be retried from the Account panel.
+
 1. Create a Supabase project.
-2. Run `supabase-schema.sql` in the Supabase SQL editor.
+2. Apply the files in `supabase/migrations` with the Supabase CLI. For a fresh
+   local database, run `supabase db start`; for an existing linked project, use
+   the normal reviewed `supabase db push` workflow. `supabase-schema.sql` is an
+   equivalent cumulative SQL-editor fallback.
 3. In `supabase-config.js`, set your project URL and public anon key. Never put
    a Supabase service-role key in this static app.
 4. In Supabase Auth settings, allow both `http://localhost:4173` and your
    deployed GitHub Pages URL as redirect URLs.
-5. Keep Row Level Security enabled on the Supabase tables. The provided schema
-   restricts reads and writes to authenticated users where `auth.uid()` matches
-   the row `user_id`.
+5. Keep Row Level Security enabled on the Supabase tables. The migration defines
+   separate SELECT, INSERT, UPDATE, and DELETE policies, removes anonymous table
+   grants, and restricts every operation to rows where `auth.uid()` matches
+   `user_id`. PR attempts and current records are saved together by the
+   ownership-safe `save_pr_attempt` database function.
 6. Review Supabase Auth rate limits and CAPTCHA settings before making a public
    deployment.
 7. Serve or deploy the app, then use the Database sync panel to email a sign-in
    link and upload existing local scores.
 
-Run the updated `supabase-schema.sql` again on an existing project to add the
-nullable `competition_proof` metadata column. The script uses idempotent
-`add column if not exists` statements and does not create video storage.
+The migrations add nullable `timer_result` and `competition_proof` JSON metadata
+without creating video storage. They also add non-empty and finite-value data
+constraints plus owner/recency indexes. Generated public-schema types are committed at
+`types/database.types.ts`.
+
+Run the local database authorization and constraint suites with:
+
+```sh
+supabase db start
+supabase test db
+supabase db lint --local --schema public --level warning --fail-on warning
+supabase gen types typescript --local --schema public > types/database.types.ts
+```
+
+The pgTAP suites use two distinct users and cover all four RLS operations,
+ownership spoofing, anonymous access, constraints, and atomic rollback. GitHub
+Actions runs the same database tests before deployment.
 
 ## Host on GitHub Pages
 
