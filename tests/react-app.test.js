@@ -624,6 +624,9 @@ test("React Testing Library generates a level-aware bar muscle-up programme", as
     const level = ui.getByLabelText("Current bar muscle-up level");
     assert.equal(level.value, "highPull");
     fireEvent.change(level, { target: { value: "assisted" } });
+    const athleteLevel = ui.getByLabelText("Athlete programming level");
+    assert.equal(athleteLevel.value, "intermediate");
+    fireEvent.change(athleteLevel, { target: { value: "rxPlus" } });
     fireEvent.click(
       ui.getByRole("button", { name: "Generate 8-week programme" }),
     );
@@ -649,12 +652,15 @@ test("React Testing Library generates a level-aware bar muscle-up programme", as
       daysPerWeek: 4,
       weakness: "muscleup",
       duration: 60,
+      athleteLevel: "rxPlus",
       barMuscleUpLevel: "assisted",
     });
     assert.equal(activePlan.sessions.length, 32);
     assert.ok(
       activePlan.sessions.every(
-        (session) => session.sourceBarMuscleUpLevel === "assisted",
+        (session) =>
+          session.sourceBarMuscleUpLevel === "assisted" &&
+          session.sourceAthleteLevel === "rxPlus",
       ),
     );
   } finally {
@@ -1081,7 +1087,7 @@ test("React Testing Library edits one canonical session across every consumer", 
   }
 });
 
-test("React Testing Library regenerates the active plan without duplicating it", async () => {
+test("React Testing Library regenerates once and renders the same saved WOD in Plan and Build", async () => {
   const { cleanup, fireEvent, readState, ui, view, waitFor } = mountApp({
     storedState: canonicalPlanState({ kind: "generated", customized: false }),
   });

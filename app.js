@@ -941,9 +941,21 @@ const MOVEMENT_LIBRARY = [
   },
 ];
 
-const WOD_SCHEMA_VERSION = 7;
+const WOD_SCHEMA_VERSION = 8;
 const PLAN_SCHEMA_VERSION = 3;
 const WORKOUT_DEFINITION_VERSION = 1;
+const ATHLETE_LEVELS = {
+  accessible: "Accessible / scaled",
+  intermediate: "Intermediate",
+  rx: "RX",
+  rxPlus: "RX+",
+};
+const TIME_DOMAINS = {
+  short: { min: 6, max: 10 },
+  medium: { min: 11, max: 18 },
+  long: { min: 20, max: 30 },
+  extraLong: { min: 30, max: 45 },
+};
 const MASTERS_RX_MOVEMENT_VARIATIONS = [
   {
     matches: /wall balls?/i,
@@ -2144,6 +2156,27 @@ function workoutDefinitionErrors(definition) {
     errors.push(`${format.type} workouts cannot contain a progression`);
   }
 
+  if (definition.timeDomain != null) {
+    if (!TIME_DOMAINS[definition.timeDomain]) {
+      errors.push("workout time domain is invalid");
+    }
+    requirePositiveFinite(
+      definition.expectedDurationSeconds,
+      "expected workout duration",
+      errors,
+    );
+    const actualDuration = workoutExpectedDurationSeconds(definition);
+    if (Number(definition.expectedDurationSeconds) !== Number(actualDuration)) {
+      errors.push("expected workout duration does not match its format");
+    }
+    if (
+      TIME_DOMAINS[definition.timeDomain] &&
+      !timeDomainContains(definition.timeDomain, actualDuration)
+    ) {
+      errors.push("workout duration does not match its time domain");
+    }
+  }
+
   [...buyIn, ...cashOut, ...afterEachRound].forEach((exercise) => {
     if (exercise?.target?.type === "progressive_reps") {
       errors.push(
@@ -2171,6 +2204,88 @@ function validateWorkoutDefinition(definition) {
   const errors = workoutDefinitionErrors(definition);
   if (errors.length) throw new WorkoutValidationError(errors);
   return definition;
+}
+
+function generatedWeekErrors(sessions, requirements = {}) {
+  const errors = [];
+  if (!Array.isArray(sessions) || !sessions.length) {
+    return ["generated week requires sessions"];
+  }
+  const requiredTimeDomains = requirements.requiredTimeDomains || [
+    "short",
+    "medium",
+    "long",
+  ];
+  const represented = new Set();
+  const amrapDurations = new Map();
+
+  sessions.forEach((session, index) => {
+    const label = `session ${index + 1}`;
+    const definition = session?.workoutDefinition;
+    const definitionErrors = workoutDefinitionErrors(definition);
+    definitionErrors.forEach((error) => errors.push(`${label}: ${error}`));
+    if (!definition || definitionErrors.length) return;
+    represented.add(definition.timeDomain);
+    const expected = workoutExpectedDurationSeconds(definition);
+    if (
+      ["long", "extraLong"].includes(definition.timeDomain) &&
+      expected < 20 * 60
+    ) {
+      errors.push(`${label}: long work must last at least 20 minutes`);
+    }
+    if (Number(session?.segmentMinutes?.wod) * 60 !== expected) {
+      errors.push(`${label}: WOD segment does not match workout duration`);
+    }
+    if (
+      /\bshort\b/i.test(session.title || "") &&
+      definition.timeDomain !== "short"
+    ) {
+      errors.push(`${label}: short label does not match workout structure`);
+    }
+    if (
+      /\blong(?:er)?\b/i.test(session.title || "") &&
+      !["long", "extraLong"].includes(definition.timeDomain)
+    ) {
+      errors.push(`${label}: long label does not match workout structure`);
+    }
+    if (definition.format.type === "amrap") {
+      const duration = Number(definition.format.durationSeconds);
+      amrapDurations.set(duration, (amrapDurations.get(duration) || 0) + 1);
+    }
+    allWorkoutExercises(definition)
+      .filter((exercise) =>
+        /(?:DB|dumbbell) snatches?/i.test(exercise?.movement || ""),
+      )
+      .forEach((exercise) => {
+        const actual = Number.parseFloat(exercise.load?.display || "");
+        const expectedLoad = selectDumbbellSnatchLoad(definition, exercise);
+        if (!Number.isFinite(actual) || actual !== expectedLoad) {
+          errors.push(
+            `${label}: dumbbell snatch load is not volume-appropriate`,
+          );
+        }
+      });
+  });
+
+  requiredTimeDomains.forEach((timeDomain) => {
+    if (!represented.has(timeDomain)) {
+      errors.push(`generated week is missing the ${timeDomain} time domain`);
+    }
+  });
+  if (!requirements.allowDuplicateAmrapDurations) {
+    amrapDurations.forEach((count, duration) => {
+      if (count > 1) {
+        errors.push(`generated week repeats a ${duration / 60}-minute AMRAP`);
+      }
+    });
+  }
+  return [...new Set(errors)];
+}
+
+function validateGeneratedWeek(sessions, requirements) {
+  const errors = generatedWeekErrors(sessions, requirements);
+  if (errors.length) throw new WorkoutValidationError(errors);
+  return sessions;
 }
 
 function requirePositiveFinite(value, label, errors) {
@@ -2264,7 +2379,10 @@ function renderWorkoutDescription(definition) {
   } else if (format.type === "intervals") {
     description = `Every ${formatClock(format.intervalSeconds)} x ${format.rounds}: ${main}${format.restRemaining ? "; rest remaining time" : ""}`;
   } else if (format.type === "repeat_sets") {
-    description = `${format.sets} sets, rest ${formatClock(format.restSeconds)} between sets: ${main}`;
+    const cap = format.durationSeconds
+      ? `, ${formatDurationMinutes(format.durationSeconds)} min total cap`
+      : "";
+    description = `${format.sets} sets${cap}, rest ${formatClock(format.restSeconds)} between sets: ${main}`;
   } else if (format.type === "emom") {
     const stationText = format.stations
       .map((station, index) =>
@@ -2380,6 +2498,130 @@ function formatClock(seconds) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")} min`;
 }
 
+function weeklyTimeDomains(options) {
+  const days = clamp(Number(options?.daysPerWeek) || 4, 3, 5);
+  if (days === 3) return ["short", "medium", "long"];
+  if (days === 4) return ["short", "medium", "medium", "long"];
+  const extraLongEligible =
+    Number(options?.duration) >= 60 &&
+    ["endurance", "barMuscleUp"].includes(options?.goal);
+  return [
+    "short",
+    "medium",
+    "medium",
+    "long",
+    extraLongEligible ? "extraLong" : "long",
+  ];
+}
+
+function generatedTimeDomain(options, day) {
+  const schedule = weeklyTimeDomains(options);
+  return schedule[clamp(Number(day) || 1, 1, schedule.length) - 1];
+}
+
+function selectTimeDomainDuration(
+  timeDomain,
+  sessionDuration,
+  week,
+  day,
+  variation,
+) {
+  const range = TIME_DOMAINS[timeDomain];
+  if (!range) throw new Error(`Unknown workout time domain: ${timeDomain}`);
+  const warmup = Number(sessionDuration) >= 55 ? 8 : 7;
+  const mobility = Number(sessionDuration) >= 55 ? 8 : 6;
+  const maximum = Math.max(
+    range.min,
+    Number(sessionDuration) - warmup - mobility - 8,
+  );
+  const upper = Math.min(range.max, maximum);
+  const choices = Array.from(
+    { length: upper - range.min + 1 },
+    (_value, index) => range.min + index,
+  );
+  if (!choices.length) {
+    throw new Error(`${timeDomain} work does not fit this session length.`);
+  }
+  const seed = variation?.seed || "forge-hour-default-generation";
+  const salt = Number(variation?.weekAttempt) || 0;
+  return choices[
+    seededIndex(
+      `${seed}|duration|${timeDomain}|week-${week}|day-${day}|attempt-${salt}`,
+      choices.length,
+    )
+  ];
+}
+
+function timeDomainContains(timeDomain, seconds) {
+  const range = TIME_DOMAINS[timeDomain];
+  const minutes = Number(seconds) / 60;
+  return Boolean(range && minutes >= range.min && minutes <= range.max);
+}
+
+function workoutExpectedDurationSeconds(definition) {
+  const format = definition?.format || {};
+  if (format.type === "emom") {
+    return (
+      Number(format.rounds) *
+      Number(format.intervalSeconds) *
+      arrayOrEmpty(format.stations).length
+    );
+  }
+  if (format.type === "intervals") {
+    return Number(format.rounds) * Number(format.intervalSeconds);
+  }
+  if (format.type === "repeat_sets") {
+    return Number(format.durationSeconds) || 0;
+  }
+  return Number(format.durationSeconds) || 0;
+}
+
+function applyTimeDomainDuration(definition, timeDomain, requestedMinutes) {
+  const next = structuredClone(definition);
+  const requestedSeconds = Number(requestedMinutes) * 60;
+  const range = TIME_DOMAINS[timeDomain];
+  const format = next.format;
+  if (format.type === "intervals") {
+    format.rounds = closestWholeCyclesInDomain(
+      requestedSeconds,
+      Number(format.intervalSeconds),
+      range,
+    );
+  } else if (format.type === "emom") {
+    const cycleSeconds =
+      Number(format.intervalSeconds) * arrayOrEmpty(format.stations).length;
+    format.rounds = closestWholeCyclesInDomain(
+      requestedSeconds,
+      cycleSeconds,
+      range,
+    );
+  } else if (format.type === "repeat_sets") {
+    format.durationSeconds = requestedSeconds;
+  } else {
+    format.durationSeconds = requestedSeconds;
+  }
+  const expectedDurationSeconds = workoutExpectedDurationSeconds(next);
+  if (!timeDomainContains(timeDomain, expectedDurationSeconds)) {
+    throw new Error(
+      `${format.type} could not satisfy the ${timeDomain} time domain.`,
+    );
+  }
+  return {
+    ...next,
+    timeDomain,
+    expectedDurationSeconds,
+  };
+}
+
+function closestWholeCyclesInDomain(requestedSeconds, cycleSeconds, range) {
+  const minimum = Math.max(1, Math.ceil((range.min * 60) / cycleSeconds));
+  const maximum = Math.max(
+    minimum,
+    Math.floor((range.max * 60) / cycleSeconds),
+  );
+  return clamp(Math.round(requestedSeconds / cycleSeconds), minimum, maximum);
+}
+
 function buildGeneratedProgramme(
   options,
   profile,
@@ -2399,18 +2641,41 @@ function buildGeneratedProgramme(
   };
 
   for (let week = 1; week <= 8; week += 1) {
-    for (let day = 1; day <= normalized.daysPerWeek; day += 1) {
-      sessions.push(
-        buildGeneratedSession(
-          normalized,
-          profile,
-          week,
-          day,
-          idFactory,
-          generationContext,
-        ),
-      );
+    let validWeek = null;
+    for (let weekAttempt = 0; weekAttempt < 12; weekAttempt += 1) {
+      const weekContext = {
+        ...generationContext,
+        weekAttempt,
+        usedWodSignatures: new Set(generationContext.usedWodSignatures),
+      };
+      const candidate = [];
+      for (let day = 1; day <= normalized.daysPerWeek; day += 1) {
+        candidate.push(
+          buildGeneratedSession(
+            normalized,
+            profile,
+            week,
+            day,
+            idFactory,
+            weekContext,
+          ),
+        );
+      }
+      try {
+        validateGeneratedWeek(candidate, {
+          requiredTimeDomains: ["short", "medium", "long"],
+        });
+        validWeek = candidate;
+        generationContext.usedWodSignatures = weekContext.usedWodSignatures;
+        break;
+      } catch (error) {
+        if (!(error instanceof WorkoutValidationError)) throw error;
+      }
     }
+    if (!validWeek) {
+      throw new Error(`Could not create a valid generated week ${week}.`);
+    }
+    sessions.push(...validWeek);
   }
 
   return sessions;
@@ -2629,6 +2894,8 @@ function normalizeCanonicalPlan(plan, index) {
     plan.title !== title ||
     plan.kind !== kind ||
     !sameGeneratorOptions(plan.generatorOptions, generatorOptions) ||
+    (kind === "generated" &&
+      plan.generatorOptions?.athleteLevel !== generatorOptions.athleteLevel) ||
     plan.generationSeed !== generationSeed ||
     !plan.createdAt ||
     !plan.updatedAt
@@ -2658,71 +2925,61 @@ function migrateCanonicalGeneratedPlans(plans, profile) {
   const nextPlans = plans.map((plan) => {
     if (plan.kind !== "generated" || !Array.isArray(plan.sessions)) return plan;
 
-    const staleSessions = plan.sessions
-      .filter(
-        (session) =>
-          session &&
-          (session.origin === "generated" || session.generated) &&
-          !session.customized &&
-          (session.wodSchemaVersion !== WOD_SCHEMA_VERSION ||
-            !hasValidWorkoutDefinition(session.workoutDefinition)),
-      )
-      .sort(compareGeneratedSessionSlots);
-    if (!staleSessions.length) return plan;
-
     const options = normalizeGeneratorOptions(
       plan.generatorOptions || generatorOptionsFromSessions(plan.sessions),
     );
-    const generationContext = {
-      seed: normalizeGenerationSeed(plan.generationSeed),
-      variationEnabled: true,
-      usedWodSignatures: new Set(
-        plan.sessions
-          .filter(
-            (session) =>
-              session &&
-              (session.origin === "generated" || session.generated) &&
-              !session.customized &&
-              session.wodSchemaVersion === WOD_SCHEMA_VERSION &&
-              hasValidWorkoutDefinition(session.workoutDefinition),
-          )
-          .map((session) => structuralWodSignature(session)),
+    const generatedSessions = plan.sessions.filter(
+      (session) =>
+        session &&
+        (session.origin === "generated" || session.generated) &&
+        !session.customized,
+    );
+    const hasStaleSession = generatedSessions.some(
+      (session) =>
+        session.wodSchemaVersion !== WOD_SCHEMA_VERSION ||
+        !hasValidWorkoutDefinition(session.workoutDefinition),
+    );
+    const hasInvalidCompleteWeek = Array.from({ length: 8 }, (_, index) =>
+      generatedSessions.filter(
+        (session) => parsePlanWeek(session) === index + 1,
       ),
-    };
-    const replacements = new Map();
+    ).some(
+      (weekSessions) =>
+        weekSessions.length === options.daysPerWeek &&
+        generatedWeekErrors(weekSessions).length > 0,
+    );
+    if (!hasStaleSession && !hasInvalidCompleteWeek) return plan;
 
-    staleSessions.forEach((session) => {
-      const replacement = buildGeneratedSession(
-        options,
-        profile,
-        clamp(parsePlanWeek(session), 1, 8),
-        clamp(parsePlanDay(session), 1, 5),
-        () => session.id || createId(),
-        generationContext,
-      );
-      replacements.set(
+    const regenerated = buildGeneratedProgramme(
+      options,
+      profile,
+      (id) => id,
+      normalizeGenerationSeed(plan.generationSeed),
+    );
+    const replacementsBySlot = new Map(
+      regenerated.map((session) => [
+        `${parsePlanWeek(session)}:${parsePlanDay(session)}`,
         session,
-        preserveGeneratedSessionIdentity(session, replacement),
+      ]),
+    );
+    const nextSessions = plan.sessions.map((session) => {
+      if (!generatedSessions.includes(session)) return session;
+      const replacement = replacementsBySlot.get(
+        `${parsePlanWeek(session)}:${parsePlanDay(session)}`,
       );
+      return replacement
+        ? preserveGeneratedSessionIdentity(session, replacement)
+        : session;
     });
 
     migrated = true;
     return {
       ...plan,
-      sessions: plan.sessions.map(
-        (session) => replacements.get(session) || session,
-      ),
+      sessions: nextSessions,
     };
   });
 
   return { plans: migrated ? nextPlans : plans, migrated };
-}
-
-function compareGeneratedSessionSlots(left, right) {
-  return (
-    parsePlanWeek(left) - parsePlanWeek(right) ||
-    parsePlanDay(left) - parsePlanDay(right)
-  );
 }
 
 function preserveGeneratedSessionIdentity(session, replacement) {
@@ -2742,6 +2999,8 @@ function sameGeneratorOptions(left, right) {
   return (
     left.goal === right.goal &&
     left.weakness === right.weakness &&
+    (left.athleteLevel || "intermediate") ===
+      (right.athleteLevel || "intermediate") &&
     (left.barMuscleUpLevel || null) === (right.barMuscleUpLevel || null) &&
     Number(left.daysPerWeek) === Number(right.daysPerWeek) &&
     Number(left.duration) === Number(right.duration) &&
@@ -2823,6 +3082,7 @@ function legacyGeneratedPlan(sessions, index) {
     generatorOptions: normalizeGeneratorOptions({
       goal,
       weakness,
+      athleteLevel: first.sourceAthleteLevel,
       barMuscleUpLevel: first.sourceBarMuscleUpLevel,
       daysPerWeek: Math.max(...sessions.map(parsePlanDay), 3),
       duration: Number(first.duration) || 60,
@@ -2859,6 +3119,7 @@ function generatorOptionsFromSessions(sessions) {
   return {
     goal: first.sourceGoal,
     weakness: first.sourceWeakness,
+    athleteLevel: first.sourceAthleteLevel,
     barMuscleUpLevel: first.sourceBarMuscleUpLevel,
     daysPerWeek: Math.max(...sessions.map(parsePlanDay), 3),
     duration: Number(first.duration) || 60,
@@ -2870,6 +3131,7 @@ function legacyGeneratorKey(session) {
   return [
     session.sourceGoal || "balanced",
     session.sourceWeakness || "squat",
+    session.sourceAthleteLevel || "intermediate",
     session.sourceBarMuscleUpLevel || "",
     Number(session.duration) || 60,
   ].join("|");
@@ -3011,7 +3273,10 @@ function normalizeGeneratorOptions(options) {
     45,
     60,
   );
-  const normalized = { goal, weakness, daysPerWeek, duration };
+  const athleteLevel = ATHLETE_LEVELS[source.athleteLevel]
+    ? source.athleteLevel
+    : "intermediate";
+  const normalized = { goal, weakness, athleteLevel, daysPerWeek, duration };
   if (goal === "barMuscleUp") {
     normalized.barMuscleUpLevel = BAR_MUSCLE_UP_LEVELS[source.barMuscleUpLevel]
       ? source.barMuscleUpLevel
@@ -3054,9 +3319,19 @@ function buildGeneratedSession(
 
   const phase = getGeneratedWeekPhase(week, options.goal);
   const title = generatedDayTitle(options.goal, day);
-  const segmentMinutes = getGeneratedSegmentMinutes(
+  const timeDomain = generatedTimeDomain(options, day);
+  const baseVariation = generationVariation(generationContext, week, day, 0);
+  const wodDuration = selectTimeDomainDuration(
+    timeDomain,
+    options.duration,
+    week,
+    day,
+    baseVariation,
+  );
+  let segmentMinutes = getGeneratedSegmentMinutes(
     options.duration,
     options.goal,
+    wodDuration,
   );
 
   const workoutDefinition = claimUniqueGeneratedWod(
@@ -3070,8 +3345,16 @@ function buildGeneratedSession(
         phase,
         segmentMinutes.wod,
         generationVariation(generationContext, week, day, collisionSalt),
+        undefined,
+        timeDomain,
+        options.athleteLevel,
       ),
     generationContext,
+  );
+  segmentMinutes = getGeneratedSegmentMinutes(
+    options.duration,
+    options.goal,
+    workoutExpectedDurationSeconds(workoutDefinition) / 60,
   );
 
   const session = {
@@ -3097,6 +3380,7 @@ function buildGeneratedSession(
     wodSchemaVersion: WOD_SCHEMA_VERSION,
     sourceGoal: options.goal,
     sourceWeakness: options.weakness,
+    sourceAthleteLevel: options.athleteLevel,
     createdAt: new Date().toISOString(),
   };
   if (generationContext && generationContext.seed) {
@@ -3116,9 +3400,19 @@ function buildBarMuscleUpSession(
   generationContext,
 ) {
   const phase = getGeneratedWeekPhase(week, "gymnastics");
-  const segmentMinutes = getGeneratedSegmentMinutes(
+  const timeDomain = generatedTimeDomain(options, day);
+  const baseVariation = generationVariation(generationContext, week, day, 0);
+  const wodDuration = selectTimeDomainDuration(
+    timeDomain,
+    options.duration,
+    week,
+    day,
+    baseVariation,
+  );
+  let segmentMinutes = getGeneratedSegmentMinutes(
     options.duration,
     "gymnastics",
+    wodDuration,
   );
   const focused = day <= 3;
   const workoutGoal = focused
@@ -3142,11 +3436,18 @@ function buildBarMuscleUpSession(
       segmentMinutes.wod,
       generationVariation(generationContext, week, day, collisionSalt),
       focused ? options.barMuscleUpLevel : undefined,
+      timeDomain,
+      options.athleteLevel,
     );
     return options.barMuscleUpLevel === "singles"
       ? capBarMuscleUpWorkoutReps(definition, 3)
       : definition;
   }, generationContext);
+  segmentMinutes = getGeneratedSegmentMinutes(
+    options.duration,
+    "gymnastics",
+    workoutExpectedDurationSeconds(workoutDefinition) / 60,
+  );
   const titles = [
     "High pull + kip timing",
     "Turnover + straight-bar strength",
@@ -3178,6 +3479,7 @@ function buildBarMuscleUpSession(
     wodSchemaVersion: WOD_SCHEMA_VERSION,
     sourceGoal: options.goal,
     sourceWeakness: "muscleup",
+    sourceAthleteLevel: options.athleteLevel,
     sourceBarMuscleUpLevel: options.barMuscleUpLevel,
     createdAt: new Date().toISOString(),
   };
@@ -3403,8 +3705,9 @@ function generationVariation(generationContext, week, day, collisionSalt) {
     week,
     day,
     collisionSalt,
+    weekAttempt: Number(generationContext.weekAttempt) || 0,
     formatOffset: seededIndex(
-      `${seed}|format|day-${day}|collision-${collisionSalt}`,
+      `${seed}|format|day-${day}|attempt-${Number(generationContext.weekAttempt) || 0}|collision-${collisionSalt}`,
       6,
     ),
   };
@@ -3578,10 +3881,23 @@ function generatedDayTitle(goal, day) {
   return titles[goal][day - 1] || titles.balanced[day - 1];
 }
 
-function getGeneratedSegmentMinutes(duration, goal) {
+function getGeneratedSegmentMinutes(duration, goal, requestedWodMinutes) {
   const warmup = duration >= 55 ? 8 : 7;
   const mobility = duration >= 55 ? 8 : 6;
   const available = duration - warmup - mobility;
+  if (Number.isFinite(Number(requestedWodMinutes))) {
+    const wod = clamp(
+      Math.round(Number(requestedWodMinutes)),
+      6,
+      available - 8,
+    );
+    return {
+      warmup,
+      strength: available - wod,
+      wod,
+      mobility,
+    };
+  }
   const strengthRatio =
     { stronger: 0.58, endurance: 0.35, gymnastics: 0.55, balanced: 0.48 }[
       goal
@@ -3679,6 +3995,8 @@ function generatedWodItems(
   wodMinutes,
   variation,
   barMuscleUpLevel,
+  timeDomain,
+  athleteLevel = "intermediate",
 ) {
   const movement = generatedWodMovementPool(
     goal,
@@ -3690,8 +4008,42 @@ function generatedWodItems(
     variation,
     barMuscleUpLevel,
   );
-  const cap = clamp(Math.round(Number(wodMinutes) || 12), 8, 24);
-  return buildWodPattern(week, goal, day, cap, movement, variation, phase);
+  const cap = clamp(Math.round(Number(wodMinutes) || 12), 6, 45);
+  const resolvedTimeDomain =
+    TIME_DOMAINS[timeDomain] && timeDomain
+      ? timeDomain
+      : timeDomainForMinutes(cap);
+  let definition = buildWodPattern(
+    week,
+    goal,
+    day,
+    cap,
+    movement,
+    variation,
+    phase,
+  );
+  definition = applyTimeDomainDuration(definition, resolvedTimeDomain, cap);
+  const loadingIntent =
+    goal === "stronger" &&
+    athleteLevel === "rxPlus" &&
+    week >= 6 &&
+    resolvedTimeDomain === "short" &&
+    ["intervals", "repeat_sets"].includes(definition.format.type)
+      ? "heavy"
+      : "conditioning";
+  return applyContextualDumbbellLoads({
+    ...definition,
+    athleteLevel,
+    loadingIntent,
+  });
+}
+
+function timeDomainForMinutes(minutes) {
+  const value = clamp(Math.round(Number(minutes) || 12), 6, 45);
+  if (value <= TIME_DOMAINS.short.max) return "short";
+  if (value <= TIME_DOMAINS.medium.max) return "medium";
+  if (value <= TIME_DOMAINS.long.max) return "long";
+  return "extraLong";
 }
 
 function buildWodPattern(week, goal, day, cap, movement, variation, phase) {
@@ -3703,7 +4055,7 @@ function buildWodPattern(week, goal, day, cap, movement, variation, phase) {
 
   const patterns = {
     1: createWorkoutDefinition(
-      { type: "amrap", durationSeconds: Math.min(cap, 12) * 60 },
+      { type: "amrap", durationSeconds: cap * 60 },
       [movement.weight, movement.monoAmrap, movement.gym],
       {
         stimulus:
@@ -3808,10 +4160,13 @@ function buildWodPattern(week, goal, day, cap, movement, variation, phase) {
 
   const variablePatternWeeks = [1, 2, 3, 5, 6, 7];
   const variableIndex = variablePatternWeeks.indexOf(week);
-  if (variation && variableIndex >= 0) {
+  if (variableIndex >= 0) {
+    const dayOffset = Math.max(0, Number(day) - 1);
+    const variationOffsetValue = variation ? variation.formatOffset : 0;
     return patterns[
       variablePatternWeeks[
-        (variableIndex + variation.formatOffset) % variablePatternWeeks.length
+        (variableIndex + dayOffset + variationOffsetValue) %
+          variablePatternWeeks.length
       ]
     ];
   }
@@ -3892,11 +4247,20 @@ function timerConfigFromWorkoutDefinition(definition) {
     });
   }
   if (format.type === "repeat_sets") {
-    return timerConfig("rest", workout, format.sets * format.restSeconds, {
-      rounds: format.sets,
-      intervalSeconds: format.restSeconds,
-      label: `${format.sets} rest breaks of ${formatSeconds(format.restSeconds)}`,
-    });
+    const plannedSeconds =
+      format.durationSeconds || format.sets * format.restSeconds;
+    return timerConfig(
+      format.durationSeconds ? "forTime" : "rest",
+      workout,
+      plannedSeconds,
+      {
+        rounds: format.sets,
+        intervalSeconds: format.restSeconds,
+        label: format.durationSeconds
+          ? `${format.sets} sets in ${formatSecondsForLabel(format.durationSeconds)}`
+          : `${format.sets} rest breaks of ${formatSeconds(format.restSeconds)}`,
+      },
+    );
   }
   return null;
 }
@@ -4173,6 +4537,177 @@ function generatedWodMovementPool(
     chipper: generatedChipper(goal, weaknessMove, mono, gym, weight),
     benchmark: generatedBenchmark(goal, day, mono, gym, weight, weaknessMove),
   };
+}
+
+function workoutExerciseRepeatMultiplier(definition) {
+  const format = definition?.format || {};
+  if (format.type === "fixed_rounds") return Number(format.rounds) || 1;
+  if (format.type === "intervals") return Number(format.rounds) || 1;
+  if (format.type === "repeat_sets") return Number(format.sets) || 1;
+  if (format.type === "emom") return Number(format.rounds) || 1;
+  if (format.type === "benchmark" && format.rounds) {
+    return Number(format.rounds) || 1;
+  }
+  if (format.type === "amrap") {
+    const roundSeconds = Math.max(
+      60,
+      workoutMainExercises(definition).reduce(
+        (total, exercise) => total + estimateExerciseSeconds(exercise),
+        0,
+      ),
+    );
+    return clamp(
+      Math.floor(workoutExpectedDurationSeconds(definition) / roundSeconds),
+      1,
+      20,
+    );
+  }
+  return 1;
+}
+
+function estimateExerciseSeconds(exercise) {
+  const target = exercise?.target || {};
+  const value = Number(target.value) || 0;
+  if (target.type === "duration_seconds") return value;
+  if (target.type === "distance_m") return Math.max(20, value / 4);
+  if (target.type === "calories") return Math.max(20, value * 4);
+  if (target.type === "progressive_reps") return 18;
+  const weighted =
+    /(?:DB|dumbbell|barbell|clean|snatch|jerk|squat|thruster)/i.test(
+      exercise?.movement || "",
+    );
+  return Math.max(8, value * (weighted ? 3 : 2.25));
+}
+
+function estimatedExerciseRepetitions(definition, exercise) {
+  const multiplier = workoutExerciseRepeatMultiplier(definition);
+  if (exercise?.target?.type === "progressive_reps") {
+    const progression = definition.progression || {};
+    const start = Number(progression.start) || 1;
+    const increment = Number(progression.increment) || 0;
+    return (
+      multiplier * start +
+      (increment * multiplier * Math.max(0, multiplier - 1)) / 2
+    );
+  }
+  if (exercise?.target?.type !== "reps") return 0;
+  return (Number(exercise.target.value) || 0) * multiplier;
+}
+
+function workoutHasDumbbellInterference(definition, ignoredExercise) {
+  const interference =
+    /pull-ups?|chest-to-bar|toes-to-bar|muscle-ups?|row|rope|deadlift|swing|overhead|jerk|press|wall walk|handstand|thruster/i;
+  return allWorkoutExercises(definition).some(
+    (exercise) =>
+      exercise !== ignoredExercise &&
+      interference.test(exercise.movement || ""),
+  );
+}
+
+function selectDumbbellSnatchLoad(definition, exercise, options = {}) {
+  const athleteLevel = ATHLETE_LEVELS[options.athleteLevel]
+    ? options.athleteLevel
+    : ATHLETE_LEVELS[definition?.athleteLevel]
+      ? definition.athleteLevel
+      : "intermediate";
+  const baseline = {
+    accessible: 15,
+    intermediate: 20,
+    rx: 22.5,
+    rxPlus: 25,
+  }[athleteLevel];
+  const repsPerSet =
+    exercise?.target?.type === "progressive_reps"
+      ? Number(definition?.progression?.start) || 1
+      : Number(exercise?.target?.value) || 0;
+  const totalReps = estimatedExerciseRepetitions(definition, exercise);
+  const durationMinutes = workoutExpectedDurationSeconds(definition) / 60;
+  const hasInterference = workoutHasDumbbellInterference(definition, exercise);
+  const continuous =
+    ["amrap", "for_time", "chipper", "benchmark"].includes(
+      definition?.format?.type,
+    ) || /continuous|unbroken|quick transitions/i.test(definition?.stimulus);
+  const plannedRest =
+    (definition?.format?.type === "intervals" &&
+      definition.format.restRemaining) ||
+    definition?.format?.type === "repeat_sets" ||
+    options.focus === "strength";
+  const heavyEligible =
+    athleteLevel === "rxPlus" &&
+    (options.focus === "strength" || definition?.loadingIntent === "heavy") &&
+    repsPerSet <= 5 &&
+    totalReps <= 30 &&
+    durationMinutes <= 10 &&
+    plannedRest &&
+    !continuous &&
+    !hasInterference;
+  if (heavyEligible) return 35;
+
+  const heavyConditioningEligible =
+    ["rx", "rxPlus"].includes(athleteLevel) &&
+    definition?.loadingIntent === "heavy" &&
+    repsPerSet <= 6 &&
+    totalReps <= 40 &&
+    durationMinutes <= 12 &&
+    plannedRest &&
+    !continuous &&
+    !hasInterference;
+  if (heavyConditioningEligible) return athleteLevel === "rxPlus" ? 30 : 25;
+
+  let reduction = 0;
+  if (repsPerSet >= 12) reduction += 2.5;
+  if (durationMinutes >= 20) reduction += 2.5;
+  if (totalReps >= 60) reduction += 2.5;
+  if (hasInterference) reduction += 2.5;
+  if (continuous) reduction += 2.5;
+  reduction = Math.min(7.5, reduction);
+  return Math.max(12.5, baseline - reduction);
+}
+
+function allWorkoutExercises(definition) {
+  const formatExercises =
+    definition?.format?.type === "emom"
+      ? arrayOrEmpty(definition.format.stations).flatMap((station) =>
+          arrayOrEmpty(station.exercises),
+        )
+      : arrayOrEmpty(definition?.exercises);
+  return [
+    ...arrayOrEmpty(definition?.buyIn),
+    ...formatExercises,
+    ...arrayOrEmpty(definition?.afterEachRound),
+    ...arrayOrEmpty(definition?.cashOut),
+  ];
+}
+
+function mapAllWorkoutExercises(definition, mapper) {
+  const map = (items) => arrayOrEmpty(items).map(mapper);
+  return {
+    ...definition,
+    buyIn: map(definition.buyIn),
+    exercises: map(definition.exercises),
+    afterEachRound: map(definition.afterEachRound),
+    cashOut: map(definition.cashOut),
+    format:
+      definition.format?.type === "emom"
+        ? {
+            ...definition.format,
+            stations: definition.format.stations.map((station) => ({
+              ...station,
+              exercises: map(station.exercises),
+            })),
+          }
+        : definition.format,
+  };
+}
+
+function applyContextualDumbbellLoads(definition) {
+  return mapAllWorkoutExercises(definition, (exercise) => {
+    if (!/(?:DB|dumbbell) snatches?/i.test(exercise?.movement || "")) {
+      return exercise;
+    }
+    const load = selectDumbbellSnatchLoad(definition, exercise);
+    return { ...exercise, load: { display: `${trimNumber(load)} kg` } };
+  });
 }
 
 function monoAmrap(mono, goal) {
@@ -4557,9 +5092,19 @@ function buildMastersRxOpenSession(
 ) {
   const phase = getGeneratedWeekPhase(week, "mastersRxOpen");
   const title = generatedDayTitle("mastersRxOpen", day);
-  const segmentMinutes = getGeneratedSegmentMinutes(
+  const timeDomain = generatedTimeDomain(options, day);
+  const baseVariation = generationVariation(generationContext, week, day, 0);
+  const wodDuration = selectTimeDomainDuration(
+    timeDomain,
+    options.duration,
+    week,
+    day,
+    baseVariation,
+  );
+  let segmentMinutes = getGeneratedSegmentMinutes(
     options.duration,
     day === 2 ? "endurance" : day === 4 ? "gymnastics" : "balanced",
+    wodDuration,
   );
   const templates = mastersRxSessionTemplates(profile, week, phase);
   const template = templates[day] || templates[1];
@@ -4590,8 +5135,16 @@ function buildMastersRxOpenSession(
         profile,
         wallBallVolumeForWeek(week),
         generationVariation(generationContext, week, day, collisionSalt),
+        timeDomain,
+        segmentMinutes.wod,
+        options.athleteLevel,
       ),
     generationContext,
+  );
+  segmentMinutes = getGeneratedSegmentMinutes(
+    options.duration,
+    day === 2 ? "endurance" : day === 4 ? "gymnastics" : "balanced",
+    workoutExpectedDurationSeconds(workoutDefinition) / 60,
   );
 
   const session = {
@@ -4611,6 +5164,7 @@ function buildMastersRxOpenSession(
     wodSchemaVersion: WOD_SCHEMA_VERSION,
     sourceGoal: options.goal,
     sourceWeakness: options.weakness,
+    sourceAthleteLevel: options.athleteLevel,
     createdAt: new Date().toISOString(),
   };
   if (generationContext && generationContext.seed) {
@@ -4742,6 +5296,9 @@ function mastersRxWorkoutDefinition(
   profile,
   wallBallVolume,
   variation,
+  timeDomain = "medium",
+  wodMinutes = 12,
+  athleteLevel = "intermediate",
 ) {
   const variablePatternWeeks = [1, 2, 3, 5, 6, 7];
   const variableIndex = variablePatternWeeks.indexOf(week);
@@ -4771,8 +5328,15 @@ function mastersRxWorkoutDefinition(
     profile,
     wallBallVolume,
   );
-  const definition = mastersRxPattern(variedWeek, variedDay, pool);
-  return varyStructuredMastersWorkout(definition, variation);
+  const definition = varyStructuredMastersWorkout(
+    mastersRxPattern(variedWeek, variedDay, pool),
+    variation,
+  );
+  return applyContextualDumbbellLoads({
+    ...applyTimeDomainDuration(definition, timeDomain, wodMinutes),
+    athleteLevel,
+    loadingIntent: "conditioning",
+  });
 }
 
 function mastersRxMovementPool(day, week, profile, wallBallVolume) {
@@ -6028,6 +6592,7 @@ function registerServiceWorker() {
 }
 
 const FORGE_HOUR_API = {
+  ATHLETE_LEVELS,
   BAR_MUSCLE_UP_LEVELS,
   DEFAULT_PROFILE,
   DIVISION_LABELS,
@@ -6079,6 +6644,11 @@ const FORGE_HOUR_API = {
   trimNumber,
   valueFromPath,
   validateWorkoutDefinition,
+  validateGeneratedWeek,
+  generatedWeekErrors,
+  selectDumbbellSnatchLoad,
+  workoutExpectedDurationSeconds,
+  TIME_DOMAINS,
   workoutDefinitionErrors,
   workoutItemsForSession,
 };

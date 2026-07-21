@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  ATHLETE_LEVELS,
   DEFAULT_PROFILE,
   DIVISION_LABELS,
   MOVEMENT_LIBRARY,
@@ -21,6 +22,7 @@ const {
   filterMovementLibrary,
   formatPrValue,
   formatTimerResult,
+  generatedWeekErrors,
   getProgramDays,
   inferTimerFromText,
   inferWorkoutTimer,
@@ -32,6 +34,7 @@ const {
   parseTimeToSeconds,
   percent,
   roundToNearest,
+  selectDumbbellSnatchLoad,
   selectActivePlan,
   selectActiveWeekSessions,
   splitLines,
@@ -40,6 +43,8 @@ const {
   trimNumber,
   renderWorkoutDescription,
   validateWorkoutDefinition,
+  validateGeneratedWeek,
+  workoutExpectedDurationSeconds,
   workoutDefinitionErrors,
   workoutItemsForSession,
 } = require("../app.js");
@@ -259,6 +264,72 @@ test("needs-based generator creates complete eight-week programmes", () => {
   assert.match(dayOneWods.join(" "), /Benchmark/);
   assert.match(JSON.stringify(plans[0]), /Back squat/);
   assert.match(JSON.stringify(plans[0]), /pull-ups and chest-to-bar/);
+});
+
+test("generated weeks satisfy short, medium, and long time domains", () => {
+  const sessions = buildGeneratedProgramme(
+    {
+      goal: "endurance",
+      daysPerWeek: 5,
+      weakness: "rowing",
+      duration: 60,
+      athleteLevel: "intermediate",
+    },
+    cloneDefaultProfile(),
+    (id) => id,
+    "time-domain-distribution",
+  );
+
+  for (let week = 1; week <= 8; week += 1) {
+    const weekSessions = sessions.filter((session) => session.week === week);
+    const represented = new Set(
+      weekSessions.map((session) => session.workoutDefinition.timeDomain),
+    );
+
+    assert.doesNotThrow(() => validateGeneratedWeek(weekSessions));
+    assert.ok(represented.has("short"));
+    assert.ok(represented.has("medium"));
+    assert.ok(represented.has("long"));
+    assert.ok(represented.has("extraLong"));
+    weekSessions
+      .filter((session) =>
+        ["long", "extraLong"].includes(session.workoutDefinition.timeDomain),
+      )
+      .forEach((session) => {
+        assert.ok(
+          workoutExpectedDurationSeconds(session.workoutDefinition) >= 20 * 60,
+        );
+      });
+
+    const amrapDurations = weekSessions
+      .filter((session) => session.workoutDefinition.format.type === "amrap")
+      .map((session) => session.workoutDefinition.format.durationSeconds);
+    assert.equal(new Set(amrapDurations).size, amrapDurations.length);
+  }
+});
+
+test("a generated long AMRAP can never fall back to 12 minutes", () => {
+  const sessions = buildGeneratedProgramme(
+    {
+      goal: "balanced",
+      daysPerWeek: 4,
+      weakness: "pulling",
+      duration: 60,
+    },
+    cloneDefaultProfile(),
+    (id) => id,
+  );
+  const longAmraps = sessions.filter(
+    (session) =>
+      session.workoutDefinition.timeDomain === "long" &&
+      session.workoutDefinition.format.type === "amrap",
+  );
+
+  assert.ok(longAmraps.length > 0);
+  longAmraps.forEach((session) => {
+    assert.notEqual(session.workoutDefinition.format.durationSeconds, 12 * 60);
+    assert.ok(session.workoutDefinition.format.durationSeconds >= 20 * 60);
+  });
 });
 
 test("needs-based generator changes bias by goal and clamps options", () => {
@@ -1046,6 +1117,114 @@ function semanticWorkout(overrides = {}) {
     ...overrides,
   };
 }
+
+function dumbbellSnatchWorkout({
+  athleteLevel = "rxPlus",
+  reps = 5,
+  loadingIntent = "heavy",
+  format = {
+    type: "intervals",
+    intervalSeconds: 180,
+    rounds: 3,
+    restRemaining: true,
+  },
+  timeDomain = "short",
+  stimulus = "heavy repeat efforts with planned rest",
+  extraExercises = [],
+} = {}) {
+  const snatches = {
+    id: "dumbbell-snatches",
+    movement: "single-arm dumbbell snatches",
+    target: { type: "reps", value: reps },
+  };
+  const definition = semanticWorkout({
+    format,
+    exercises: [snatches, ...extraExercises],
+    athleteLevel,
+    loadingIntent,
+    timeDomain,
+    expectedDurationSeconds:
+      format.type === "intervals"
+        ? format.intervalSeconds * format.rounds
+        : format.durationSeconds,
+    stimulus,
+  });
+  return { definition, snatches };
+}
+
+test("high-repetition conditioning lowers dumbbell snatches below 35 kg", () => {
+  const { definition, snatches } = dumbbellSnatchWorkout({
+    reps: 15,
+    format: { type: "amrap", durationSeconds: 24 * 60 },
+    timeDomain: "long",
+    loadingIntent: "conditioning",
+    stimulus: "continuous movement with quick transitions",
+    extraExercises: [
+      {
+        id: "pull-ups",
+        movement: "pull-ups",
+        target: { type: "reps", value: 12 },
+      },
+    ],
+  });
+
+  const load = selectDumbbellSnatchLoad(definition, snatches);
+  assert.ok(load >= 12.5 && load <= 22.5);
+  assert.notEqual(load, 35);
+});
+
+test("35 kg dumbbell snatches require explicit heavy low-volume RX+ work", () => {
+  assert.equal(ATHLETE_LEVELS.rxPlus, "RX+");
+  const heavy = dumbbellSnatchWorkout();
+  assert.equal(selectDumbbellSnatchLoad(heavy.definition, heavy.snatches), 35);
+
+  const notAdvanced = dumbbellSnatchWorkout({ athleteLevel: "intermediate" });
+  assert.notEqual(
+    selectDumbbellSnatchLoad(notAdvanced.definition, notAdvanced.snatches),
+    35,
+  );
+  const notHeavy = dumbbellSnatchWorkout({ loadingIntent: "conditioning" });
+  assert.notEqual(
+    selectDumbbellSnatchLoad(notHeavy.definition, notHeavy.snatches),
+    35,
+  );
+  const tooMuchVolume = dumbbellSnatchWorkout({ reps: 12 });
+  assert.notEqual(
+    selectDumbbellSnatchLoad(tooMuchVolume.definition, tooMuchVolume.snatches),
+    35,
+  );
+});
+
+test("weekly validation rejects repeated AMRAP durations", () => {
+  const sessions = buildGeneratedProgramme(
+    { goal: "balanced", daysPerWeek: 4, duration: 60 },
+    cloneDefaultProfile(),
+    (id) => id,
+  ).filter((session) => session.week === 1);
+  const amraps = sessions.filter(
+    (session) => session.workoutDefinition.format.type === "amrap",
+  );
+  assert.ok(amraps.length >= 2);
+
+  const invalid = structuredClone(sessions);
+  const invalidAmraps = invalid.filter(
+    (session) => session.workoutDefinition.format.type === "amrap",
+  );
+  invalidAmraps[1].workoutDefinition.format.durationSeconds =
+    invalidAmraps[0].workoutDefinition.format.durationSeconds;
+  invalidAmraps[1].workoutDefinition.expectedDurationSeconds =
+    invalidAmraps[0].workoutDefinition.format.durationSeconds;
+  invalidAmraps[1].workoutDefinition.timeDomain =
+    invalidAmraps[0].workoutDefinition.timeDomain;
+  invalidAmraps[1].segmentMinutes.wod =
+    invalidAmraps[0].workoutDefinition.format.durationSeconds / 60;
+
+  assert.ok(
+    generatedWeekErrors(invalid).some((error) =>
+      /repeats a .*minute AMRAP/.test(error),
+    ),
+  );
+});
 
 function progressiveCouplet(progression) {
   return semanticWorkout({

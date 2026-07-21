@@ -16,6 +16,7 @@
   }
 
   const {
+    ATHLETE_LEVELS,
     BAR_MUSCLE_UP_LEVELS,
     DIVISION_LABELS,
     GOAL_LABELS,
@@ -4587,6 +4588,7 @@
       daysPerWeek: Number(initialOptions?.daysPerWeek) || 4,
       weakness: initialOptions?.weakness || "squat",
       barMuscleUpLevel: initialOptions?.barMuscleUpLevel || "highPull",
+      athleteLevel: initialOptions?.athleteLevel || "intermediate",
       duration: positiveNumber(initialOptions?.duration, 60),
     };
     const [selectedGoal, setSelectedGoal] = ReactRuntime.useState(
@@ -4610,6 +4612,9 @@
                 ? "muscleup"
                 : String(data.get("generatorWeakness") || "squat"),
             duration: positiveNumber(data.get("generatorDuration"), 60),
+            athleteLevel: String(
+              data.get("generatorAthleteLevel") || "intermediate",
+            ),
           };
           if (selectedGoal === "barMuscleUp") {
             options.barMuscleUpLevel = String(
@@ -4749,6 +4754,23 @@
             inputMode: "numeric",
             defaultValue: String(defaults.duration),
           }),
+        ),
+      ),
+      h(
+        "label",
+        null,
+        "Athlete programming level",
+        h(
+          "select",
+          {
+            id: "generatorAthleteLevel",
+            name: "generatorAthleteLevel",
+            required: true,
+            defaultValue: defaults.athleteLevel,
+          },
+          Object.entries(ATHLETE_LEVELS).map(([value, label]) =>
+            h("option", { key: value, value }, label),
+          ),
         ),
       ),
       h(
