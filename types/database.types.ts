@@ -9,6 +9,27 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      athlete_states: {
+        Row: {
+          schema_version: number
+          state: Json
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          schema_version?: number
+          state: Json
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          schema_version?: number
+          state?: Json
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       personal_records: {
         Row: {
           date: string
@@ -277,4 +298,3 @@ export const Constants = {
     Enums: {},
   },
 } as const
-

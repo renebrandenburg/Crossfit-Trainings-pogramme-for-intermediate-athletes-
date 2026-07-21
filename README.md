@@ -18,7 +18,7 @@ A phone-first CrossFit training programme and PR tracker for intermediate athlet
 - RX readiness dashboard for strength, Olympic lifting, engine, gymnastics, Open skills, and recovery focus areas.
 - React-powered phone-first UI mounted into a static app shell.
 - Light, dark, and system theme setting saved locally.
-- Optional Supabase Postgres sync for workout logs and PR records.
+- Optional private Supabase account sync for profiles, programmes, workout logs, and PR records.
 - Local-first storage in the browser with a simple PWA manifest and offline cache.
 
 ## Competition Proof recording
@@ -65,11 +65,17 @@ npm test
 
 ## Supabase database sync
 
-Workout logs, PR attempts, and current PRs can sync to Supabase Postgres after
-sign-in. Profile settings, the canonical saved-plan catalog, active plan,
-selected week, and theme remain local to the browser in
-`forge-hour-state-v1`. Plan, Build, Proof, and Log resolve workouts from that
-same active-plan record; Supabase never receives programme definitions.
+Profiles, the canonical saved-programme catalog, the active plan, selected
+week, workout logs, PR attempts, and current PRs sync privately to Supabase
+Postgres after email-link sign-in. Plan, Build, Proof, and Log continue to
+resolve workouts from the same active-plan record. Theme preferences and
+Competition Proof videos stay on the device and are never uploaded.
+
+Each signed-in athlete has one owner-scoped `athlete_states` document. The
+server document wins when an account is loaded on a device, and profile or
+programme changes autosave after hydration. Concurrent edits use whole-account
+last-successful-server-save wins semantics; the app does not attempt a
+field-by-field or per-programme merge.
 
 Generated sessions persist a validated structured workout definition. Workout
 descriptions, timers, progression sequences, buy-ins, cash-outs, and
@@ -78,11 +84,13 @@ as a second prose copy. Existing manual and customized text workouts remain
 loadable as legacy free-form sessions; uncustomized generated sessions migrate
 to the structured format on load.
 
-Score data in that key is partitioned by authenticated user ID. Legacy scores
-are migrated into a separate `guest` bucket and are never shown in a signed-in
-account unless the athlete explicitly chooses **Import guest scores**. A remote
-failure does not discard a completed workout or PR attempt: it remains saved in
-the account's local bucket and can be retried from the Account panel.
+Local account data in `forge-hour-state-v1` is partitioned by authenticated user
+ID. Legacy profile, programme, and score data is migrated into a separate
+`guest` bucket and is never shown in a signed-in account unless the athlete
+explicitly confirms **Import guest data**. Import replaces the account profile
+and programmes, merges guest scores, and keeps the guest copy available. A
+remote failure does not discard a local change; it remains in the account's
+device bucket and can be retried from the Account panel.
 
 1. Create a Supabase project.
 2. Apply the files in `supabase/migrations` with the Supabase CLI. For a fresh
@@ -94,19 +102,21 @@ the account's local bucket and can be retried from the Account panel.
 4. In Supabase Auth settings, allow both `http://localhost:4173` and your
    deployed GitHub Pages URL as redirect URLs.
 5. Keep Row Level Security enabled on the Supabase tables. The migration defines
-   separate SELECT, INSERT, UPDATE, and DELETE policies, removes anonymous table
-   grants, and restricts every operation to rows where `auth.uid()` matches
-   `user_id`. PR attempts and current records are saved together by the
-   ownership-safe `save_pr_attempt` database function.
+   operation-specific policies, removes anonymous table grants, and restricts
+   every operation to rows where `auth.uid()` matches `user_id`. Athlete state
+   permits only SELECT, INSERT, and UPDATE; PR attempts and current records are
+   saved together by the ownership-safe `save_pr_attempt` database function.
 6. Review Supabase Auth rate limits and CAPTCHA settings before making a public
    deployment.
 7. Serve or deploy the app, then use the Database sync panel to email a sign-in
-   link and upload existing local scores.
+   link. Confirm **Import guest data** only when that device's guest profile,
+   programmes, and scores should become the account state.
 
-The migrations add nullable `timer_result` and `competition_proof` JSON metadata
-without creating video storage. They also add non-empty and finite-value data
-constraints plus owner/recency indexes. Generated public-schema types are committed at
-`types/database.types.ts`.
+The migrations add the private `athlete_states` document plus nullable
+`timer_result` and `competition_proof` JSON metadata without creating video
+storage. They also add document-shape, size, non-empty, and finite-value data
+constraints plus owner/recency indexes. Generated public-schema types are
+committed at `types/database.types.ts`.
 
 Run the local database authorization and constraint suites with:
 
@@ -128,7 +138,8 @@ After the repository is pushed to GitHub, enable Pages with **GitHub Actions** a
 the source in the repository settings. Every push to `master` or `main` will run
 the test suite and deploy the static app.
 
-The deployed app keeps local-first behavior for generated and manually edited
-programmes, training maxes, and theme settings. Existing flat custom-session
-data is migrated into the canonical plan catalog on load. Signed-in users can
-persist workout logs and PR data in Supabase across devices and deployments.
+The deployed app keeps a local cache for guest and signed-in owners. Existing
+flat custom-session data is migrated into the canonical plan catalog on load.
+Signed-in users can persist profiles, programmes, workout logs, and PR data in
+Supabase across devices and deployments; theme settings and proof videos remain
+device-local.

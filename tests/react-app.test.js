@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { JSDOM } = require("jsdom");
-const { workoutItemsForSession } = require("../app.js");
+const { cloneDefaultProfile, workoutItemsForSession } = require("../app.js");
 
 function freshRequire(file) {
   const modulePath = require.resolve(file);
@@ -57,6 +57,7 @@ function createMockSupabase({
   let currentSession = session;
   const authListeners = new Set();
   const data = {
+    athlete_states: remote.athlete_states || [],
     workout_logs: remote.workout_logs || [],
     pr_attempts: remote.pr_attempts || [],
     personal_records: (remote.personal_records || []).map((record) => ({
@@ -107,6 +108,26 @@ function createMockSupabase({
           return ok(data[table]);
         };
         if (table === "personal_records") return selected();
+        if (table === "athlete_states") {
+          let ownerId = null;
+          const athleteBuilder = {
+            eq: (_column, value) => {
+              ownerId = String(value);
+              return athleteBuilder;
+            },
+            maybeSingle: async () => {
+              const result = await selected();
+              if (result.error) return result;
+              return {
+                ...result,
+                data:
+                  result.data.find((row) => String(row.user_id) === ownerId) ||
+                  null,
+              };
+            },
+          };
+          return athleteBuilder;
+        }
         const builder = {
           order: () => builder,
           range: async (from, to) => {
@@ -120,6 +141,24 @@ function createMockSupabase({
       },
       upsert: (payload) => {
         calls.push({ type: "upsert", table, payload });
+        if (table === "athlete_states") {
+          return {
+            select: () => ({
+              single: async () => {
+                const row = {
+                  ...payload,
+                  updated_at: new Date().toISOString(),
+                };
+                const index = data.athlete_states.findIndex(
+                  (item) => item.user_id === row.user_id,
+                );
+                if (index >= 0) data.athlete_states[index] = row;
+                else data.athlete_states.push(row);
+                return ok(row);
+              },
+            }),
+          };
+        }
         const rows = Array.isArray(payload) ? payload : [payload];
         const missingColumn = missingUpsertColumns.find((column) =>
           rows.some((row) => Object.hasOwn(row, column)),
@@ -435,6 +474,16 @@ function canonicalPlanState({
     activePlanId: "saved-plan-1",
     selectedWeek: 1,
     logs,
+  };
+}
+
+function privateAthleteState(name, planState = canonicalPlanState()) {
+  return {
+    profile: { ...cloneDefaultProfile(), athleteName: name },
+    plans: planState.plans,
+    activePlanId: planState.activePlanId,
+    selectedWeek: planState.selectedWeek,
+    planSchemaVersion: 3,
   };
 }
 
@@ -1706,10 +1755,210 @@ test("React Testing Library uses bundled Supabase config if the config file is c
 
   try {
     assert.ok(await ui.findByRole("heading", { name: "Database sync" }));
-    assert.ok(ui.getByText("Sign in to sync logs and PRs."));
+    assert.ok(ui.getByText("Sign in to sync your private athlete account."));
     assert.ok(ui.getByRole("button", { name: "Email sign-in link" }));
   } finally {
     cleanup();
+  }
+});
+
+test("React Testing Library migrates legacy profile and programmes into the guest account", async () => {
+  const storedState = {
+    ...canonicalPlanState(),
+    schemaVersion: 3,
+    profile: {
+      ...cloneDefaultProfile(),
+      athleteName: "Legacy Guest",
+    },
+  };
+  const mounted = mountApp({ storedState });
+
+  try {
+    await mounted.waitFor(() => {
+      assert.equal(mounted.readState().schemaVersion, 4);
+    });
+    const saved = mounted.readState();
+    assert.equal(saved.schemaVersion, 4);
+    assert.equal(saved.activeScoreOwner, "guest");
+    assert.equal(
+      saved.athleteStateByOwner.guest.profile.athleteName,
+      "Legacy Guest",
+    );
+    assert.equal(saved.athleteStateByOwner.guest.plans[0].id, "saved-plan-1");
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React Testing Library lets remote account data win and restores guest data on sign-out", async () => {
+  const guest = privateAthleteState("Guest Athlete");
+  const account = privateAthleteState("Remote Athlete");
+  const storedState = {
+    ...canonicalPlanState(),
+    schemaVersion: 3,
+    profile: guest.profile,
+  };
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    remote: {
+      athlete_states: [
+        {
+          user_id: "user-1",
+          schema_version: 1,
+          state: account,
+          updated_at: "2026-07-21T08:00:00.000Z",
+        },
+      ],
+    },
+  });
+  const mounted = mountApp({ storedState, supabaseMock });
+
+  try {
+    assert.ok(
+      await mounted.ui.findByText(
+        "Profile, programmes, logs, and PRs are syncing.",
+      ),
+    );
+    assert.equal(mounted.ui.getByLabelText("Athlete").value, "Remote Athlete");
+    let saved = mounted.readState();
+    assert.equal(saved.activeScoreOwner, "user-1");
+    assert.equal(
+      saved.athleteStateByOwner.guest.profile.athleteName,
+      "Guest Athlete",
+    );
+    assert.equal(
+      saved.athleteStateByOwner["user-1"].profile.athleteName,
+      "Remote Athlete",
+    );
+
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Sign out" }),
+    );
+    await mounted.waitFor(() => {
+      assert.equal(mounted.ui.getByLabelText("Athlete").value, "Guest Athlete");
+    });
+    await mounted.waitFor(() => {
+      assert.equal(mounted.readState().activeScoreOwner, "guest");
+    });
+    saved = mounted.readState();
+    assert.equal(saved.activeScoreOwner, "guest");
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React Testing Library imports guest profile and programmes only after confirmation", async () => {
+  const calls = [];
+  const guest = privateAthleteState("Guest Athlete");
+  const account = privateAthleteState("Account Athlete", {
+    ...canonicalPlanState(),
+    plans: [],
+    activePlanId: null,
+  });
+  const storedState = {
+    ...canonicalPlanState(),
+    schemaVersion: 3,
+    profile: guest.profile,
+  };
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    calls,
+    remote: {
+      athlete_states: [
+        {
+          user_id: "user-1",
+          schema_version: 1,
+          state: account,
+          updated_at: "2026-07-21T08:00:00.000Z",
+        },
+      ],
+    },
+  });
+  const mounted = mountApp({ storedState, supabaseMock });
+
+  try {
+    assert.ok(
+      await mounted.ui.findByText(
+        "Profile, programmes, logs, and PRs are syncing.",
+      ),
+    );
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: /Import guest data \(/ }),
+    );
+    await mounted.waitFor(() => {
+      const imported = calls.find(
+        (call) =>
+          call.type === "upsert" &&
+          call.table === "athlete_states" &&
+          call.payload.state.profile.athleteName === "Guest Athlete",
+      );
+      assert.ok(imported);
+    });
+    assert.match(
+      mounted.confirmCalls[0],
+      /replace this account's profile and programmes/i,
+    );
+    assert.equal(mounted.ui.getByLabelText("Athlete").value, "Guest Athlete");
+    const saved = mounted.readState();
+    assert.equal(
+      saved.athleteStateByOwner.guest.profile.athleteName,
+      "Guest Athlete",
+    );
+    assert.equal(
+      saved.athleteStateByOwner["user-1"].profile.athleteName,
+      "Guest Athlete",
+    );
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React Testing Library autosaves signed-in profile changes", async () => {
+  const calls = [];
+  const account = privateAthleteState("Before Save");
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    calls,
+    remote: {
+      athlete_states: [
+        {
+          user_id: "user-1",
+          schema_version: 1,
+          state: account,
+          updated_at: "2026-07-21T08:00:00.000Z",
+        },
+      ],
+    },
+  });
+  const mounted = mountApp({ supabaseMock });
+
+  try {
+    assert.ok(
+      await mounted.ui.findByText(
+        "Profile, programmes, logs, and PRs are syncing.",
+      ),
+    );
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Athlete"), {
+      target: { value: "After Save" },
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Save assessment" }),
+    );
+    await mounted.waitFor(
+      () => {
+        assert.ok(
+          calls.find(
+            (call) =>
+              call.type === "upsert" &&
+              call.table === "athlete_states" &&
+              call.payload.state.profile.athleteName === "After Save",
+          ),
+        );
+      },
+      { timeout: 2000 },
+    );
+  } finally {
+    mounted.cleanup();
   }
 });
 
@@ -1748,7 +1997,9 @@ test("React Testing Library loads remote Supabase scores for a signed-in user", 
   const { cleanup, fireEvent, ui } = mountApp({ supabaseMock });
 
   try {
-    assert.ok(await ui.findByText("Scores are syncing with Supabase."));
+    assert.ok(
+      await ui.findByText("Profile, programmes, logs, and PRs are syncing."),
+    );
     fireEvent.click(ui.getByRole("button", { name: "Log" }));
     assert.ok(await ui.findByText(/Remote squat/));
     fireEvent.click(ui.getByRole("button", { name: "PRs" }));
@@ -1767,7 +2018,9 @@ test("React Testing Library saves workout logs through Supabase when signed in",
   const { cleanup, fireEvent, ui, waitFor } = mountApp({ supabaseMock });
 
   try {
-    assert.ok(await ui.findByText("Scores are syncing with Supabase."));
+    assert.ok(
+      await ui.findByText("Profile, programmes, logs, and PRs are syncing."),
+    );
     fireEvent.click(ui.getByRole("button", { name: "Log" }));
     fireEvent.change(ui.getByLabelText("WOD score"), {
       target: { value: "4 rounds + 8 reps" },
@@ -1835,11 +2088,19 @@ test("React Testing Library does not re-upload a timer already present remotely"
   const mounted = mountApp({ storedState, supabaseMock });
 
   try {
-    assert.ok(await mounted.ui.findByText("Scores are syncing with Supabase."));
+    assert.ok(
+      await mounted.ui.findByText(
+        "Profile, programmes, logs, and PRs are syncing.",
+      ),
+    );
     mounted.fireEvent.click(
       mounted.ui.getByRole("button", { name: "Retry account sync" }),
     );
-    assert.ok(await mounted.ui.findByText("Local scores synced to Supabase."));
+    assert.ok(
+      await mounted.ui.findByText(
+        "Private athlete account synced to Supabase.",
+      ),
+    );
     assert.equal(
       calls.filter(
         (call) => call.type === "upsert" && call.table === "workout_logs",
@@ -1899,13 +2160,17 @@ test("React Testing Library reports timer metadata pending on a legacy schema", 
   const mounted = mountApp({ storedState, supabaseMock });
 
   try {
-    assert.ok(await mounted.ui.findByText("Scores are syncing with Supabase."));
+    assert.ok(
+      await mounted.ui.findByText(
+        "Profile, programmes, logs, and PRs are syncing.",
+      ),
+    );
     mounted.fireEvent.click(
       mounted.ui.getByRole("button", { name: "Retry account sync" }),
     );
     assert.ok(
       await mounted.ui.findByText(
-        "Scores synced. Timer or competition-proof metadata stays local until the Supabase schema is updated.",
+        "Account synced. Timer or competition-proof metadata stays local until the Supabase schema is updated.",
       ),
     );
     const workoutWrites = calls.filter(
@@ -1963,14 +2228,16 @@ test("React Testing Library isolates signed-in scores from legacy guest scores",
   const { cleanup, fireEvent, readState, ui, waitFor } = mounted;
 
   try {
-    assert.ok(await ui.findByText("Scores are syncing with Supabase."));
-    assert.equal(calls.filter((call) => call.type === "select").length, 3);
+    assert.ok(
+      await ui.findByText("Profile, programmes, logs, and PRs are syncing."),
+    );
+    assert.equal(calls.filter((call) => call.type === "select").length, 4);
     fireEvent.click(ui.getByRole("button", { name: "Log" }));
     assert.ok(await ui.findByText(/Account-only squat/));
     assert.equal(ui.queryByText(/Guest-only squat/), null);
 
     fireEvent.click(ui.getByRole("button", { name: "Home" }));
-    assert.ok(ui.getByRole("button", { name: /Import guest scores \(/ }));
+    assert.ok(ui.getByRole("button", { name: /Import guest data \(/ }));
     fireEvent.click(ui.getByRole("button", { name: "Sign out" }));
     await waitFor(() => {
       assert.ok(ui.getByText(/Signed out\. Local cache remains/));
@@ -1980,7 +2247,7 @@ test("React Testing Library isolates signed-in scores from legacy guest scores",
     assert.equal(ui.queryByText(/Account-only squat/), null);
 
     const saved = readState();
-    assert.equal(saved.schemaVersion, 3);
+    assert.equal(saved.schemaVersion, 4);
     assert.equal(saved.planSchemaVersion, 3);
     assert.equal(Object.hasOwn(saved, "logs"), false);
     assert.equal(saved.scoreDataByOwner.guest.logs[0].id, "guest-log");
@@ -2029,7 +2296,9 @@ test("React Testing Library reloads only the authenticated owner's score bucket"
   });
 
   try {
-    assert.ok(await ui.findByText("Scores are syncing with Supabase."));
+    assert.ok(
+      await ui.findByText("Profile, programmes, logs, and PRs are syncing."),
+    );
     fireEvent.click(ui.getByRole("button", { name: "Log" }));
     assert.ok(await ui.findByText(/User two private score/));
     assert.equal(ui.queryByText(/User one private score/), null);
@@ -2093,7 +2362,9 @@ test("React Testing Library does not overwrite an offline PR with stale remote d
   });
 
   try {
-    assert.ok(await ui.findByText("Scores are syncing with Supabase."));
+    assert.ok(
+      await ui.findByText("Profile, programmes, logs, and PRs are syncing."),
+    );
     fireEvent.click(ui.getByRole("button", { name: "PRs" }));
     assert.ok(await ui.findByText("160 kg"));
     assert.equal(ui.queryByText("150 kg"), null);
@@ -2156,7 +2427,11 @@ test("React Testing Library keeps a better remote PR over a stale offline PR", a
   const mounted = mountApp({ storedState, supabaseMock });
 
   try {
-    assert.ok(await mounted.ui.findByText("Scores are syncing with Supabase."));
+    assert.ok(
+      await mounted.ui.findByText(
+        "Profile, programmes, logs, and PRs are syncing.",
+      ),
+    );
     mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "PRs" }));
     assert.ok(await mounted.ui.findByText("160 kg"));
     const saved = mounted.readState().scoreDataByOwner["user-1"];
@@ -2198,7 +2473,11 @@ test("React Testing Library reconciles an immediate PR save with the canonical r
   const mounted = mountApp({ supabaseMock });
 
   try {
-    assert.ok(await mounted.ui.findByText("Scores are syncing with Supabase."));
+    assert.ok(
+      await mounted.ui.findByText(
+        "Profile, programmes, logs, and PRs are syncing.",
+      ),
+    );
     mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "PRs" }));
     assert.ok(await mounted.ui.findByText("150 kg"));
 
@@ -2268,7 +2547,11 @@ test("React Testing Library preserves a better standalone local PR during hydrat
   const mounted = mountApp({ storedState, supabaseMock });
 
   try {
-    assert.ok(await mounted.ui.findByText("Scores are syncing with Supabase."));
+    assert.ok(
+      await mounted.ui.findByText(
+        "Profile, programmes, logs, and PRs are syncing.",
+      ),
+    );
     mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "PRs" }));
     assert.ok(await mounted.ui.findByText("170 kg"));
     assert.equal(
@@ -2339,7 +2622,11 @@ test("React Testing Library preserves newer local PR metadata when the value tie
   const mounted = mountApp({ storedState, supabaseMock });
 
   try {
-    assert.ok(await mounted.ui.findByText("Scores are syncing with Supabase."));
+    assert.ok(
+      await mounted.ui.findByText(
+        "Profile, programmes, logs, and PRs are syncing.",
+      ),
+    );
     const record = mounted.readState().scoreDataByOwner["user-1"].prs.backSquat;
     assert.equal(record.value, 160);
     assert.equal(record.notes, "Newer local technique note");
@@ -2353,7 +2640,7 @@ test("React Testing Library preserves newer local PR metadata when the value tie
   }
 });
 
-test("React Testing Library never uploads before a failed account hydration succeeds", async () => {
+test("React Testing Library never uploads local scores before failed hydration succeeds", async () => {
   const originalWarn = console.warn;
   console.warn = () => undefined;
   const calls = [];
@@ -2365,19 +2652,32 @@ test("React Testing Library never uploads before a failed account hydration succ
   const mounted = mountApp({ supabaseMock });
 
   try {
-    assert.ok(await mounted.ui.findByText("Could not load Supabase scores."));
+    assert.ok(
+      await mounted.ui.findByText(
+        "Could not load your private athlete account.",
+      ),
+    );
     assert.equal(
-      calls.some((call) => call.type === "upsert" || call.type === "rpc"),
+      calls.some(
+        (call) =>
+          call.type === "rpc" ||
+          (call.type === "upsert" && call.table !== "athlete_states"),
+      ),
       false,
     );
 
     mounted.fireEvent.click(
       mounted.ui.getByRole("button", { name: "Retry account sync" }),
     );
-    assert.ok(await mounted.ui.findByText("Local scores synced to Supabase."));
-    assert.equal(
-      calls.some((call) => call.type === "upsert" || call.type === "rpc"),
-      true,
+    assert.ok(
+      await mounted.ui.findByText(
+        "Private athlete account synced to Supabase.",
+      ),
+    );
+    assert.ok(
+      calls.some(
+        (call) => call.type === "upsert" && call.table === "athlete_states",
+      ),
     );
   } finally {
     console.warn = originalWarn;
@@ -2399,7 +2699,11 @@ test("React Testing Library ignores a stale initial session after an auth event"
     supabaseMock.emitAuth("SIGNED_IN", {
       user: { id: "user-2", email: "two@example.com" },
     });
-    assert.ok(await mounted.ui.findByText("Scores are syncing with Supabase."));
+    assert.ok(
+      await mounted.ui.findByText(
+        "Profile, programmes, logs, and PRs are syncing.",
+      ),
+    );
 
     initialSession.resolve({
       data: {
@@ -2431,7 +2735,9 @@ test("React Testing Library keeps failed remote workout saves locally for retry"
   });
 
   try {
-    assert.ok(await ui.findByText("Scores are syncing with Supabase."));
+    assert.ok(
+      await ui.findByText("Profile, programmes, logs, and PRs are syncing."),
+    );
     fireEvent.click(ui.getByRole("button", { name: "Log" }));
     fireEvent.change(ui.getByLabelText("Strength or skill result"), {
       target: { value: "Offline squat survives" },
@@ -2457,7 +2763,9 @@ test("React Testing Library keeps failed remote workout saves locally for retry"
 
     fireEvent.click(ui.getByRole("button", { name: "Home" }));
     fireEvent.click(ui.getByRole("button", { name: "Retry account sync" }));
-    assert.ok(await ui.findByText("Local scores synced to Supabase."));
+    assert.ok(
+      await ui.findByText("Private athlete account synced to Supabase."),
+    );
     assert.equal(
       calls.filter(
         (call) => call.type === "upsert" && call.table === "workout_logs",

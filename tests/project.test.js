@@ -350,14 +350,14 @@ test("Supabase schema scopes policies to authenticated owners", () => {
   const schema = read("supabase-schema.sql");
   const policies = schema.match(/create policy[\s\S]*?;/g) || [];
 
-  assert.equal(policies.length, 12);
+  assert.equal(policies.length, 15);
   for (const policy of policies) {
     assert.match(policy, /to authenticated/);
     assert.match(policy, /\(select auth\.uid\(\)\) = user_id/);
   }
   assert.equal(
     (schema.match(/\(select auth\.uid\(\)\) = user_id/g) || []).length,
-    15,
+    19,
   );
   assert.match(
     schema,
@@ -373,9 +373,17 @@ test("Supabase schema scopes policies to authenticated owners", () => {
     schema,
     /alter table public\.personal_records enable row level security/,
   );
+  assert.match(
+    schema,
+    /alter table public\.athlete_states enable row level security/,
+  );
+  assert.match(
+    schema,
+    /grant select, insert, update on table public\.athlete_states[\s\S]*?to authenticated/,
+  );
 });
 
-test("generated Supabase types include the deployed score schema and RPC", () => {
+test("generated Supabase types include the deployed account schema and RPC", () => {
   const databaseTypes = read("types/database.types.ts");
 
   assert.match(databaseTypes, /competition_proof: Json \| null/);
@@ -385,6 +393,9 @@ test("generated Supabase types include the deployed score schema and RPC", () =>
   assert.match(databaseTypes, /p_personal_record\?: Json/);
   assert.match(databaseTypes, /save_pr_attempt:[\s\S]*?Returns: Json\b/);
   assert.match(databaseTypes, /save_personal_record:/);
+  assert.match(databaseTypes, /athlete_states:/);
+  assert.match(databaseTypes, /state: Json/);
+  assert.match(databaseTypes, /schema_version: number/);
 });
 
 test("local Supabase Auth redirects match the documented development server", () => {

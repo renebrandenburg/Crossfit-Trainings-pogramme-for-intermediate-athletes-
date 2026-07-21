@@ -42,6 +42,9 @@
     { column: "timer_result", property: "timerResult" },
   ];
   const SELECT_PAGE_SIZE = 1000;
+  const ATHLETE_STATE_SCHEMA_VERSION = 1;
+  const ATHLETE_STATE_MAX_BYTES = 5 * 1024 * 1024;
+  const ATHLETE_STATE_COLUMNS = "user_id,schema_version,state,updated_at";
   const LOWER_IS_BETTER_PR_IDS = new Set(["row1k", "row2k", "run5k", "murph"]);
   const LEGACY_RECORD_UPDATED_AT = "1970-01-01T00:00:00.000Z";
 
@@ -131,6 +134,82 @@
       throw syncError(operation, new Error(`${label} is invalid`));
     }
     return value;
+  }
+
+  function validateAthleteState(
+    value,
+    operation = "validate_remote_athlete_state",
+  ) {
+    const state = assertObject(value, "Athlete state", operation);
+    assertObject(state.profile, "Athlete profile", operation);
+    if (!Array.isArray(state.plans)) {
+      throw syncError(operation, new Error("Athlete plans are invalid"));
+    }
+    if (state.activePlanId !== null && typeof state.activePlanId !== "string") {
+      throw syncError(operation, new Error("Active plan ID is invalid"));
+    }
+    const selectedWeek = Number(state.selectedWeek);
+    const planSchemaVersion = Number(state.planSchemaVersion);
+    if (
+      !Number.isInteger(selectedWeek) ||
+      selectedWeek < 1 ||
+      selectedWeek > 8 ||
+      !Number.isInteger(planSchemaVersion) ||
+      planSchemaVersion < 1
+    ) {
+      throw syncError(
+        operation,
+        new Error("Athlete state versions or selected week are invalid"),
+      );
+    }
+    const canonical = {
+      profile: state.profile,
+      plans: state.plans,
+      activePlanId: state.activePlanId,
+      selectedWeek,
+      planSchemaVersion,
+    };
+    const serialized = JSON.stringify(canonical);
+    if (new TextEncoder().encode(serialized).length > ATHLETE_STATE_MAX_BYTES) {
+      throw syncError(
+        operation,
+        new Error("Athlete state exceeds the 5 MB sync limit"),
+      );
+    }
+    return canonical;
+  }
+
+  function athleteStateToRow(state, userId) {
+    return {
+      user_id: requiredString(userId, "User ID", "validate_local_data"),
+      schema_version: ATHLETE_STATE_SCHEMA_VERSION,
+      state: validateAthleteState(state, "validate_local_data"),
+    };
+  }
+
+  function rowToAthleteState(row, expectedUserId) {
+    assertObject(row, "Athlete-state row");
+    const userId = requiredString(row.user_id, "Athlete-state user ID");
+    if (expectedUserId && userId !== String(expectedUserId)) {
+      throw syncError(
+        "validate_remote_athlete_state",
+        new Error("Athlete-state owner does not match the active account"),
+      );
+    }
+    const schemaVersion = requiredFiniteNumber(
+      row.schema_version,
+      "Athlete-state schema version",
+    );
+    if (schemaVersion !== ATHLETE_STATE_SCHEMA_VERSION) {
+      throw syncError(
+        "validate_remote_athlete_state",
+        new Error("Athlete-state schema version is unsupported"),
+      );
+    }
+    return {
+      ...validateAthleteState(row.state),
+      updatedAt: requiredString(row.updated_at, "Athlete-state update time"),
+    };
   }
 
   function byNewestCreatedAt(a, b) {
@@ -625,6 +704,30 @@
           prs: rowsToPrs(assertNoError(prsResult, "load_personal_records")),
         };
       },
+      async loadAthleteState(userId) {
+        const result = await client
+          .from("athlete_states")
+          .select(ATHLETE_STATE_COLUMNS)
+          .eq(
+            "user_id",
+            requiredString(userId, "User ID", "load_athlete_state"),
+          )
+          .maybeSingle();
+        const row = assertNoError(result, "load_athlete_state");
+        return row ? rowToAthleteState(row, userId) : null;
+      },
+      async saveAthleteState(state, userId) {
+        const row = athleteStateToRow(state, userId);
+        const result = await client
+          .from("athlete_states")
+          .upsert(row, { onConflict: "user_id" })
+          .select(ATHLETE_STATE_COLUMNS)
+          .single();
+        return rowToAthleteState(
+          assertNoError(result, "save_athlete_state"),
+          userId,
+        );
+      },
       async saveLog(log, userId) {
         const row = logToRow(log, userId);
         const { result, omittedColumns } = await upsertCompatibleLogs(
@@ -707,6 +810,8 @@
   }
 
   const api = {
+    ATHLETE_STATE_SCHEMA_VERSION,
+    athleteStateToRow,
     createSupabaseStore,
     isBetterPersonalRecord,
     logToRow,
@@ -715,10 +820,12 @@
     personalRecordToRow,
     prAttemptToRow,
     rowToLog,
+    rowToAthleteState,
     rowToPersonalRecord,
     rowToPrAttempt,
     rowsToPrs,
     unsyncedById,
+    validateAthleteState,
   };
 
   global.ForgeHourSync = api;

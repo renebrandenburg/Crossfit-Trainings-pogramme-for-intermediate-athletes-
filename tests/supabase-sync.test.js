@@ -4,6 +4,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  ATHLETE_STATE_SCHEMA_VERSION,
+  athleteStateToRow,
   createSupabaseStore,
   isBetterPersonalRecord,
   logToRow,
@@ -11,10 +13,125 @@ const {
   mergePrs,
   prAttemptToRow,
   rowToLog,
+  rowToAthleteState,
   rowToPrAttempt,
   rowsToPrs,
   unsyncedById,
+  validateAthleteState,
 } = require("../supabase-sync.js");
+
+function athleteState(overrides = {}) {
+  return {
+    profile: {
+      athleteName: "Remote Athlete",
+      assessment: { backSquat: "150" },
+    },
+    plans: [{ id: "remote-plan", name: "Remote programme", weeks: [] }],
+    activePlanId: "remote-plan",
+    selectedWeek: 2,
+    planSchemaVersion: 3,
+    ...overrides,
+  };
+}
+
+test("athlete-state helpers map one canonical private document", () => {
+  const state = athleteState();
+  const row = athleteStateToRow(state, "user-1");
+
+  assert.deepEqual(row, {
+    user_id: "user-1",
+    schema_version: ATHLETE_STATE_SCHEMA_VERSION,
+    state,
+  });
+  assert.deepEqual(
+    rowToAthleteState(
+      { ...row, updated_at: "2026-07-21T08:00:00.000Z" },
+      "user-1",
+    ),
+    { ...state, updatedAt: "2026-07-21T08:00:00.000Z" },
+  );
+});
+
+test("athlete-state validation rejects malformed and cross-account data", () => {
+  assert.throws(
+    () => validateAthleteState(athleteState({ selectedWeek: 9 })),
+    (error) =>
+      error.name === "ForgeHourSyncError" &&
+      error.operation === "validate_remote_athlete_state",
+  );
+  assert.throws(
+    () => validateAthleteState(athleteState({ plans: {} })),
+    /Athlete plans are invalid/,
+  );
+  assert.throws(
+    () =>
+      rowToAthleteState(
+        {
+          user_id: "user-2",
+          schema_version: ATHLETE_STATE_SCHEMA_VERSION,
+          state: athleteState(),
+          updated_at: "2026-07-21T08:00:00.000Z",
+        },
+        "user-1",
+      ),
+    /owner does not match/,
+  );
+});
+
+test("Supabase store loads and saves athlete state for the requested owner", async () => {
+  const calls = [];
+  const state = athleteState();
+  const row = {
+    user_id: "user-1",
+    schema_version: ATHLETE_STATE_SCHEMA_VERSION,
+    state,
+    updated_at: "2026-07-21T08:00:00.000Z",
+  };
+  const client = {
+    from(table) {
+      assert.equal(table, "athlete_states");
+      return {
+        select(columns) {
+          calls.push({ type: "select", columns });
+          return {
+            eq(column, value) {
+              calls.push({ type: "eq", column, value });
+              return {
+                maybeSingle: async () => ({ data: row, error: null }),
+              };
+            },
+          };
+        },
+        upsert(payload, options) {
+          calls.push({ type: "upsert", payload, options });
+          return {
+            select(columns) {
+              calls.push({ type: "returning", columns });
+              return { single: async () => ({ data: row, error: null }) };
+            },
+          };
+        },
+      };
+    },
+  };
+  const store = createSupabaseStore(client);
+
+  assert.deepEqual(await store.loadAthleteState("user-1"), {
+    ...state,
+    updatedAt: row.updated_at,
+  });
+  assert.deepEqual(await store.saveAthleteState(state, "user-1"), {
+    ...state,
+    updatedAt: row.updated_at,
+  });
+  assert.deepEqual(
+    calls.find((call) => call.type === "eq"),
+    { type: "eq", column: "user_id", value: "user-1" },
+  );
+  assert.deepEqual(calls.find((call) => call.type === "upsert").options, {
+    onConflict: "user_id",
+  });
+});
 
 test("Supabase sync helpers merge remote records without duplicates", () => {
   const local = [

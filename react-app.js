@@ -113,6 +113,7 @@
    * @property {any} profile
    * @property {TrainingPlan[]} plans
    * @property {string|null} activePlanId
+   * @property {Object<string, any>} athleteStateByOwner
    * @property {Object<string, ScoreData>} scoreDataByOwner
    * @property {string} activeScoreOwner
    * @property {number} selectedWeek
@@ -121,12 +122,14 @@
 
   /** @returns {AppState} */
   function fallbackState() {
+    const guestAthleteState = defaultAthleteState();
     return {
-      schemaVersion: 3,
+      schemaVersion: 4,
       planSchemaVersion: PLAN_SCHEMA_VERSION,
-      profile: cloneDefaultProfile(),
-      plans: [],
-      activePlanId: null,
+      ...guestAthleteState,
+      athleteStateByOwner: {
+        [GUEST_SCORE_OWNER]: guestAthleteState,
+      },
       scoreDataByOwner: {
         [GUEST_SCORE_OWNER]: emptyScoreData(),
       },
@@ -145,31 +148,15 @@
       if (!raw) return seedState(fallback);
 
       const parsed = JSON.parse(raw);
-      const merged = {
+      return seedState({
         ...fallback,
         ...parsed,
-        activeScoreOwner: GUEST_SCORE_OWNER,
-        selectedWeek: clamp(
-          Number(parsed.selectedWeek) || fallback.selectedWeek,
-          1,
-          8,
-        ),
-        themePreference: normalizeThemePreference(parsed.themePreference),
-        profile: {
-          ...fallback.profile,
-          ...(parsed.profile || {}),
-          maxes: {
-            ...fallback.profile.maxes,
-            ...((parsed.profile && parsed.profile.maxes) || {}),
-          },
-          benchmarks: {
-            ...fallback.profile.benchmarks,
-            ...((parsed.profile && parsed.profile.benchmarks) || {}),
-          },
+        athleteStateByOwner: parsed.athleteStateByOwner || {
+          [GUEST_SCORE_OWNER]: parsed,
         },
-      };
-
-      return seedState(merged);
+        activeScoreOwner: GUEST_SCORE_OWNER,
+        themePreference: normalizeThemePreference(parsed.themePreference),
+      });
     } catch (error) {
       console.warn("Could not read saved state.", error);
       return seedState(fallback);
@@ -179,14 +166,11 @@
   /** @param {AppState} state @returns {AppState} */
   function seedState(state) {
     let next = migrateScoreState(state);
-    const migration = migratePlanState(next);
-    next = migration.state;
-    const activePlan = selectActivePlan(next);
-    if (activePlan) {
-      const selection = resolvePlanTransition(activePlan, next.selectedWeek);
-      next = { ...next, selectedWeek: selection.selectedWeek };
-    }
+    next = migratePlanState(next).state;
+    next = migrateAthleteStateBuckets(next);
+    next = activateAthleteOwner(next, GUEST_SCORE_OWNER);
     next = seedPrs(next);
+    next = withActiveAthleteState(next);
 
     saveState(next);
     return next;
@@ -206,6 +190,137 @@
   /** @returns {ScoreData} */
   function emptyScoreData() {
     return { logs: [], prs: {}, prAttempts: [] };
+  }
+
+  function defaultAthleteState() {
+    return {
+      profile: cloneDefaultProfile(),
+      plans: [],
+      activePlanId: null,
+      selectedWeek: 1,
+      planSchemaVersion: PLAN_SCHEMA_VERSION,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  function normalizeAthleteState(value) {
+    const fallback = defaultAthleteState();
+    const source =
+      value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const profile = {
+      ...fallback.profile,
+      ...(source.profile || {}),
+      maxes: {
+        ...fallback.profile.maxes,
+        ...((source.profile && source.profile.maxes) || {}),
+      },
+      benchmarks: {
+        ...fallback.profile.benchmarks,
+        ...((source.profile && source.profile.benchmarks) || {}),
+      },
+    };
+    const migration = migratePlanState({
+      ...source,
+      profile,
+      plans: Array.isArray(source.plans) ? source.plans : [],
+      activePlanId:
+        typeof source.activePlanId === "string" ? source.activePlanId : null,
+      selectedWeek: clamp(Number(source.selectedWeek) || 1, 1, 8),
+      planSchemaVersion:
+        Number(source.planSchemaVersion) || PLAN_SCHEMA_VERSION,
+    });
+    const normalized = migration.state;
+    const activePlan = selectActivePlan(normalized);
+    const selection = activePlan
+      ? resolvePlanTransition(activePlan, normalized.selectedWeek)
+      : { selectedWeek: normalized.selectedWeek };
+    return {
+      profile: normalized.profile,
+      plans: normalized.plans,
+      activePlanId: normalized.activePlanId,
+      selectedWeek: selection.selectedWeek,
+      planSchemaVersion: PLAN_SCHEMA_VERSION,
+      updatedAt:
+        typeof source.updatedAt === "string"
+          ? source.updatedAt
+          : fallback.updatedAt,
+    };
+  }
+
+  function athleteStateFromAppState(
+    state,
+    updatedAt = new Date().toISOString(),
+  ) {
+    return normalizeAthleteState({
+      profile: state.profile,
+      plans: state.plans,
+      activePlanId: state.activePlanId,
+      selectedWeek: state.selectedWeek,
+      planSchemaVersion: state.planSchemaVersion,
+      updatedAt,
+    });
+  }
+
+  function withActiveAthleteState(state, updatedAt) {
+    const ownerId = state.activeScoreOwner || GUEST_SCORE_OWNER;
+    const athleteState = athleteStateFromAppState(
+      state,
+      updatedAt || state.updatedAt || new Date().toISOString(),
+    );
+    return {
+      ...state,
+      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 4),
+      athleteStateByOwner: {
+        ...(state.athleteStateByOwner || {}),
+        [ownerId]: athleteState,
+      },
+    };
+  }
+
+  function activateAthleteOwner(state, ownerId, providedState = null) {
+    const resolvedOwner = ownerId || GUEST_SCORE_OWNER;
+    const stashed = withActiveAthleteState(state);
+    const athleteState = normalizeAthleteState(
+      providedState ||
+        stashed.athleteStateByOwner?.[resolvedOwner] ||
+        defaultAthleteState(),
+    );
+    return {
+      ...stashed,
+      ...athleteState,
+      activeScoreOwner: resolvedOwner,
+      athleteStateByOwner: {
+        ...stashed.athleteStateByOwner,
+        [resolvedOwner]: athleteState,
+      },
+      scoreDataByOwner: {
+        ...stashed.scoreDataByOwner,
+        [resolvedOwner]: selectScoreData(stashed, resolvedOwner),
+      },
+    };
+  }
+
+  function migrateAthleteStateBuckets(state) {
+    const sourceBuckets =
+      state.athleteStateByOwner &&
+      typeof state.athleteStateByOwner === "object" &&
+      !Array.isArray(state.athleteStateByOwner)
+        ? state.athleteStateByOwner
+        : {};
+    const athleteStateByOwner = Object.fromEntries(
+      Object.entries(sourceBuckets).map(([ownerId, athleteState]) => [
+        ownerId,
+        normalizeAthleteState(athleteState),
+      ]),
+    );
+    if (!athleteStateByOwner[GUEST_SCORE_OWNER]) {
+      athleteStateByOwner[GUEST_SCORE_OWNER] = normalizeAthleteState(state);
+    }
+    return {
+      ...state,
+      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 4),
+      athleteStateByOwner,
+    };
   }
 
   /** @param {unknown} value @returns {ScoreData} */
@@ -569,7 +684,7 @@
     const [syncStatus, setSyncStatus] = ReactRuntime.useState(() => ({
       state: remoteStore ? "signed-out" : "not-configured",
       message: remoteStore
-        ? "Sign in to sync logs and PRs."
+        ? "Sign in to sync your private athlete account."
         : remoteSetupMessage(),
     }));
     const [pendingTimerResult, setPendingTimerResult] =
@@ -581,6 +696,8 @@
     const authenticatedOwnerRef = ReactRuntime.useRef(null);
     const loadingOwnerRef = ReactRuntime.useRef(null);
     const loadedOwnerRef = ReactRuntime.useRef(null);
+    const hydratedAthleteOwnerRef = ReactRuntime.useRef(null);
+    const athleteSaveTimerRef = ReactRuntime.useRef(null);
     const authEpochRef = ReactRuntime.useRef(0);
     const themePreference = normalizeThemePreference(appState.themePreference);
     const activeTheme = resolveTheme(themePreference, systemTheme);
@@ -589,7 +706,9 @@
 
     const updateAppState = ReactRuntime.useCallback((updater) => {
       const current = appStateRef.current;
-      const next = typeof updater === "function" ? updater(current) : updater;
+      const candidate =
+        typeof updater === "function" ? updater(current) : updater;
+      const next = withActiveAthleteState(candidate);
       appStateRef.current = next;
       const saved = saveState(next);
       setAppState(next);
@@ -672,38 +791,43 @@
           return;
         }
         loadingOwnerRef.current = authToken;
+        hydratedAthleteOwnerRef.current = null;
         setRemoteUser(session.user);
-        updateAppState((current) =>
-          seedPrs(
-            {
-              ...current,
-              activeScoreOwner: ownerId,
-              scoreDataByOwner: {
-                ...current.scoreDataByOwner,
-                [ownerId]: selectScoreData(current, ownerId),
-              },
-            },
-            ownerId,
-          ),
-        );
+        updateAppState((current) => activateAthleteOwner(current, ownerId));
         setSyncStatus({
           state: "loading",
-          message: "Loading scores from Supabase...",
+          message: "Loading your private athlete account...",
         });
         try {
+          let athleteState = await remoteStore.loadAthleteState(ownerId);
+          if (!isCurrentAuth(ownerId, authEpoch)) return;
+          if (!athleteState) {
+            athleteState = await remoteStore.saveAthleteState(
+              defaultAthleteState(),
+              ownerId,
+            );
+          }
+          if (!isCurrentAuth(ownerId, authEpoch)) return;
+          updateAppState((current) =>
+            seedPrs(
+              activateAthleteOwner(current, ownerId, athleteState),
+              ownerId,
+            ),
+          );
+          hydratedAthleteOwnerRef.current = ownerId;
           const hydrated = await hydrateRemoteScores(ownerId, authEpoch);
           if (!hydrated || !isCurrentAuth(ownerId, authEpoch)) return;
           loadedOwnerRef.current = authToken;
           setSyncStatus({
             state: "signed-in",
-            message: "Scores are syncing with Supabase.",
+            message: "Profile, programmes, logs, and PRs are syncing.",
           });
         } catch (error) {
-          console.warn("Could not load Supabase scores.", error);
+          console.warn("Could not load Supabase account.", error);
           if (!isCurrentAuth(ownerId, authEpoch)) return;
           setSyncStatus({
             state: "error",
-            message: "Could not load Supabase scores.",
+            message: "Could not load your private athlete account.",
           });
         } finally {
           if (
@@ -718,16 +842,17 @@
     );
 
     const transitionToSignedOut = ReactRuntime.useCallback(
-      (message = "Sign in to sync logs and PRs.") => {
+      (message = "Sign in to sync your private athlete account.") => {
         authEpochRef.current += 1;
         authenticatedOwnerRef.current = null;
         loadingOwnerRef.current = null;
         loadedOwnerRef.current = null;
+        hydratedAthleteOwnerRef.current = null;
+        window.clearTimeout(athleteSaveTimerRef.current);
         setRemoteUser(null);
-        updateAppState((current) => ({
-          ...current,
-          activeScoreOwner: GUEST_SCORE_OWNER,
-        }));
+        updateAppState((current) =>
+          activateAthleteOwner(current, GUEST_SCORE_OWNER),
+        );
         setSyncStatus({ state: "signed-out", message });
       },
       [updateAppState],
@@ -860,6 +985,63 @@
         unsubscribe();
       };
     }, [loadRemoteScores, remoteStore, transitionToSignedOut]);
+
+    ReactRuntime.useEffect(() => {
+      window.clearTimeout(athleteSaveTimerRef.current);
+      const ownerId = authenticatedOwnerRef.current;
+      const authEpoch = authEpochRef.current;
+      if (
+        !remoteStore ||
+        !ownerId ||
+        hydratedAthleteOwnerRef.current !== ownerId ||
+        appState.activeScoreOwner !== ownerId ||
+        !isCurrentAuth(ownerId, authEpoch)
+      ) {
+        return undefined;
+      }
+
+      const athleteState = athleteStateFromAppState(appState);
+      athleteSaveTimerRef.current = window.setTimeout(async () => {
+        try {
+          const saved = await remoteStore.saveAthleteState(
+            athleteState,
+            ownerId,
+          );
+          if (!isCurrentAuth(ownerId, authEpoch)) return;
+          updateAppState((current) => ({
+            ...current,
+            updatedAt: saved.updatedAt,
+          }));
+          setSyncStatus((current) =>
+            current.state === "error"
+              ? {
+                  state: "signed-in",
+                  message: "Private athlete account synced.",
+                }
+              : current,
+          );
+        } catch (error) {
+          console.warn("Could not save athlete state.", error);
+          if (!isCurrentAuth(ownerId, authEpoch)) return;
+          setSyncStatus({
+            state: "error",
+            message:
+              "Profile or programme changes are saved locally and need a sync retry.",
+          });
+        }
+      }, 750);
+
+      return () => window.clearTimeout(athleteSaveTimerRef.current);
+    }, [
+      appState.activePlanId,
+      appState.activeScoreOwner,
+      appState.plans,
+      appState.profile,
+      appState.selectedWeek,
+      isCurrentAuth,
+      remoteStore,
+      updateAppState,
+    ]);
 
     ReactRuntime.useEffect(() => {
       if (typeof window.matchMedia !== "function") return undefined;
@@ -1211,8 +1393,9 @@
               let next = loadState();
               const ownerId = String(remoteUser?.id || "");
               if (ownerId) {
-                next = seedPrs({ ...next, activeScoreOwner: ownerId }, ownerId);
+                next = seedPrs(activateAthleteOwner(next, ownerId), ownerId);
                 loadedOwnerRef.current = null;
+                hydratedAthleteOwnerRef.current = null;
               }
               updateAppState(next);
               setLogSelection(defaultSessionSelection(next));
@@ -1289,9 +1472,18 @@
                 if (!ownerId || !isCurrentAuth(ownerId, authEpoch)) return;
                 setSyncStatus({
                   state: "loading",
-                  message: "Refreshing account scores before sync...",
+                  message: "Refreshing and saving your private account...",
                 });
                 try {
+                  const savedAthleteState = await remoteStore.saveAthleteState(
+                    athleteStateFromAppState(appStateRef.current),
+                    ownerId,
+                  );
+                  if (!isCurrentAuth(ownerId, authEpoch)) return;
+                  updateAppState((current) => ({
+                    ...current,
+                    updatedAt: savedAthleteState.updatedAt,
+                  }));
                   const hydrated = await hydrateRemoteScores(
                     ownerId,
                     authEpoch,
@@ -1314,8 +1506,8 @@
                   setSyncStatus({
                     state: "signed-in",
                     message: optionalMetadataPending
-                      ? "Scores synced. Timer or competition-proof metadata stays local until the Supabase schema is updated."
-                      : "Local scores synced to Supabase.",
+                      ? "Account synced. Timer or competition-proof metadata stays local until the Supabase schema is updated."
+                      : "Private athlete account synced to Supabase.",
                   });
                   notify(
                     optionalMetadataPending
@@ -1323,13 +1515,13 @@
                       : `Synced ${uploaded.logs + uploaded.prAttempts + uploaded.prs} local records.`,
                   );
                 } catch (error) {
-                  console.warn("Could not sync local scores.", error);
+                  console.warn("Could not sync local account.", error);
                   if (!isCurrentAuth(ownerId, authEpoch)) return;
                   setSyncStatus({
                     state: "error",
-                    message: "Could not sync local scores.",
+                    message: "Could not sync the private athlete account.",
                   });
-                  notify("Could not sync local scores.");
+                  notify("Could not sync the private athlete account.");
                 }
               },
               onImportGuest: async () => {
@@ -1337,9 +1529,16 @@
                 const ownerId = String(remoteUser.id || "");
                 const authEpoch = authEpochRef.current;
                 if (!ownerId || !isCurrentAuth(ownerId, authEpoch)) return;
+                if (
+                  !window.confirm(
+                    "Replace this account's profile and programmes with the guest data on this device? Guest scores will be merged and the guest copy will remain available.",
+                  )
+                ) {
+                  return;
+                }
                 setSyncStatus({
                   state: "loading",
-                  message: "Refreshing account scores before import...",
+                  message: "Importing guest profile, programmes, and scores...",
                 });
                 try {
                   const hydrated = await hydrateRemoteScores(
@@ -1367,6 +1566,21 @@
                     hydrated.remoteIndex,
                   );
                   if (!isCurrentAuth(ownerId, authEpoch)) return;
+                  const current = appStateRef.current;
+                  const guestAthleteState = normalizeAthleteState(
+                    current.athleteStateByOwner?.[GUEST_SCORE_OWNER],
+                  );
+                  const savedAthleteState = await remoteStore.saveAthleteState(
+                    guestAthleteState,
+                    ownerId,
+                  );
+                  if (!isCurrentAuth(ownerId, authEpoch)) return;
+                  updateAppState((latest) =>
+                    seedPrs(
+                      activateAthleteOwner(latest, ownerId, savedAthleteState),
+                      ownerId,
+                    ),
+                  );
                   const refreshed = await hydrateRemoteScores(
                     ownerId,
                     authEpoch,
@@ -1378,22 +1592,22 @@
                   setSyncStatus({
                     state: "signed-in",
                     message: optionalMetadataPending
-                      ? "Guest scores imported. Timer or competition-proof metadata stays local until the Supabase schema is updated."
-                      : "Guest scores imported and synced.",
+                      ? "Guest data imported. Timer or competition-proof metadata stays local until the Supabase schema is updated."
+                      : "Guest profile, programmes, and scores imported.",
                   });
                   notify(
                     optionalMetadataPending
-                      ? `Imported guest scores; ${optionalMetadataPending} optional metadata item${optionalMetadataPending === 1 ? "" : "s"} still need the Supabase schema update.`
-                      : `Imported ${uploaded.logs + uploaded.prAttempts + uploaded.prs} guest records.`,
+                      ? `Imported guest data; ${optionalMetadataPending} optional metadata item${optionalMetadataPending === 1 ? "" : "s"} still need the Supabase schema update.`
+                      : `Imported guest profile, programmes, and ${uploaded.logs + uploaded.prAttempts + uploaded.prs} score records.`,
                   );
                 } catch (error) {
-                  console.warn("Could not import guest scores.", error);
+                  console.warn("Could not import guest data.", error);
                   if (!isCurrentAuth(ownerId, authEpoch)) return;
                   setSyncStatus({
                     state: "error",
-                    message: "Could not safely import guest scores.",
+                    message: "Could not safely import all guest data.",
                   });
-                  notify("Guest scores were not imported. Retry when online.");
+                  notify("Guest data import is incomplete. Retry when online.");
                 }
               },
             }),
@@ -1681,10 +1895,6 @@
     onImportGuest,
   }) {
     const [email, setEmail] = ReactRuntime.useState("");
-    const localRecordCount =
-      appState.logs.length +
-      appState.prAttempts.length +
-      Object.keys(appState.prs || {}).length;
     const guestScores = normalizeScoreData(
       appState.scoreDataByOwner?.[GUEST_SCORE_OWNER],
     );
@@ -1692,6 +1902,16 @@
       guestScores.logs.length +
       guestScores.prAttempts.length +
       Object.keys(guestScores.prs).length;
+    const guestAthleteState = normalizeAthleteState(
+      appState.athleteStateByOwner?.[GUEST_SCORE_OWNER],
+    );
+    const guestProfileChanged =
+      JSON.stringify(guestAthleteState.profile) !==
+      JSON.stringify(cloneDefaultProfile());
+    const guestDataCount =
+      guestRecordCount +
+      guestAthleteState.plans.length +
+      (guestProfileChanged ? 1 : 0);
 
     return h(
       "section",
@@ -1768,12 +1988,11 @@
                   className: "primary-button",
                   type: "button",
                   onClick: onSyncLocal,
-                  disabled:
-                    syncStatus.state === "loading" || localRecordCount === 0,
+                  disabled: syncStatus.state === "loading",
                 },
                 "Retry account sync",
               ),
-              guestRecordCount
+              guestDataCount
                 ? h(
                     "button",
                     {
@@ -1782,7 +2001,7 @@
                       onClick: onImportGuest,
                       disabled: syncStatus.state === "loading",
                     },
-                    `Import guest scores (${guestRecordCount})`,
+                    `Import guest data (${guestDataCount})`,
                   )
                 : null,
               h(
