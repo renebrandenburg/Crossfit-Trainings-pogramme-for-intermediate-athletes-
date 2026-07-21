@@ -337,7 +337,7 @@ test("GitHub Pages workflow checks and publishes the static app", () => {
   );
   assert.match(
     workflow,
-    /diff -u types\/database\.types\.ts \/tmp\/database\.types\.ts/,
+    /diff -u -B types\/database\.types\.ts \/tmp\/database\.types\.ts/,
   );
   assert.match(workflow, /deploy:[\s\S]*needs: \[checks, database\]/);
   assert.match(
