@@ -1,0 +1,125 @@
+"use strict";
+
+const { test, expect } = require("../fixtures/playwright");
+const { readActivePlan, workoutExercises } = require("../helpers/state");
+const { AppShell } = require("../pages/app-shell");
+const { PlanBuilderPage } = require("../pages/plan-builder-page");
+
+async function generateForLevel(page, athleteLevel) {
+  const app = new AppShell(page);
+  const builder = new PlanBuilderPage(page);
+  await app.open();
+  await builder.open();
+  await builder.generate({
+    goal: "balanced",
+    days: "4",
+    weakness: "running",
+    athleteLevel,
+    duration: "60",
+  });
+  return readActivePlan(page);
+}
+
+test("@critical generated weeks respect short, medium, long, and session duration rules", async ({
+  page,
+}) => {
+  const plan = await generateForLevel(page, "intermediate");
+
+  for (let week = 1; week <= 8; week += 1) {
+    const sessions = plan.sessions.filter((session) => session.week === week);
+    const domains = new Set(
+      sessions.map((session) => session.workoutDefinition.timeDomain),
+    );
+    expect(domains.has("short")).toBe(true);
+    expect(domains.has("medium")).toBe(true);
+    expect(domains.has("long") || domains.has("extraLong")).toBe(true);
+  }
+
+  const durations = await page.evaluate(
+    (sessions) =>
+      sessions.map((session) => ({
+        expected: window.ForgeHour.workoutExpectedDurationSeconds(
+          session.workoutDefinition,
+        ),
+        displayedMinutes: session.segmentMinutes.wod,
+        timeDomain: session.workoutDefinition.timeDomain,
+        sessionMinutes: session.duration,
+      })),
+    plan.sessions,
+  );
+  for (const duration of durations) {
+    expect(duration.expected).toBe(duration.displayedMinutes * 60);
+    expect(duration.sessionMinutes).toBeLessThanOrEqual(60);
+    if (["long", "extraLong"].includes(duration.timeDomain)) {
+      expect(duration.expected).toBeGreaterThanOrEqual(20 * 60);
+      expect(duration.expected).not.toBe(12 * 60);
+    }
+  }
+});
+
+for (const [athleteLevel, maximum] of [
+  ["accessible", 15],
+  ["intermediate", 20],
+  ["rx", 22.5],
+]) {
+  test(`@critical ${athleteLevel} dumbbell snatches stay at or below ${maximum} kg`, async ({
+    page,
+  }) => {
+    const plan = await generateForLevel(page, athleteLevel);
+    const dumbbellSnatches = plan.sessions.flatMap((session) =>
+      workoutExercises(session.workoutDefinition).filter((exercise) =>
+        /(?:DB|dumbbell) snatches?/i.test(exercise.movement),
+      ),
+    );
+
+    expect(dumbbellSnatches.length).toBeGreaterThan(0);
+    for (const exercise of dumbbellSnatches) {
+      expect(exercise.load.display).toMatch(/^\d+(?:\.\d+)? kg$/);
+      expect(Number.parseFloat(exercise.load.display)).toBeLessThanOrEqual(
+        Number(maximum),
+      );
+      expect(Number.parseFloat(exercise.load.display)).not.toBe(35);
+    }
+  });
+}
+
+test("@critical every generated workout is structurally valid and ladders are explicit", async ({
+  page,
+}) => {
+  const plan = await generateForLevel(page, "intermediate");
+  const validation = await page.evaluate((sessions) => {
+    return sessions.map((session) => ({
+      id: session.id,
+      errors: window.ForgeHour.workoutDefinitionErrors(
+        session.workoutDefinition,
+      ),
+      rendered: window.ForgeHour.renderWorkoutDescription(
+        session.workoutDefinition,
+      ),
+    }));
+  }, plan.sessions);
+
+  expect(validation.every((result) => result.errors.length === 0)).toBe(true);
+  const ladders = plan.sessions.filter(
+    (session) => session.workoutDefinition.progression.type !== "none",
+  );
+  expect(ladders.length).toBeGreaterThan(0);
+  for (const session of ladders) {
+    const definition = session.workoutDefinition;
+    expect(definition.progression.appliesTo.length).toBeGreaterThan(0);
+    const mainIds = workoutExercises({
+      ...definition,
+      buyIn: [],
+      afterEachRound: [],
+      cashOut: [],
+    }).map((exercise) => exercise.id);
+    expect(
+      definition.progression.appliesTo.every((id) => mainIds.includes(id)),
+    ).toBe(true);
+    expect(
+      definition.afterEachRound.every(
+        (exercise) => !definition.progression.appliesTo.includes(exercise.id),
+      ),
+    ).toBe(true);
+  }
+});
