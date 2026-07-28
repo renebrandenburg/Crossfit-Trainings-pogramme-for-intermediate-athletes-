@@ -387,6 +387,23 @@ const MASTERS_RX_TARGETS = {
   },
 };
 
+const RX_CATEGORY_WEIGHTS = {
+  strength: 20,
+  olympic: 15,
+  engine: 15,
+  gymnastics: 20,
+  openSkills: 10,
+  consistency: 10,
+  recovery: 10,
+};
+
+const RX_LEVEL_BANDS = [
+  { id: "building", label: "Building", min: 1, max: 49 },
+  { id: "developing", label: "Developing", min: 50, max: 69 },
+  { id: "rxReady", label: "RX-ready", min: 70, max: 84 },
+  { id: "qfReady", label: "QF-ready", min: 85, max: 100 },
+];
+
 const WEAKNESS_LABELS = {
   squat: "Squat strength",
   olympic: "Olympic lifting",
@@ -5895,15 +5912,26 @@ function buildRxReadiness(profile, logs = []) {
       ? tested.reduce((sum, item) => sum + item.score, 0) / tested.length
       : 0;
     const coverage = items.length ? tested.length / items.length : 1;
+    const coverageMultiplier = tested.length ? 0.5 + coverage * 0.5 : 0;
     const score = tested.length
-      ? clamp(Math.round(averageScore * (0.85 + coverage * 0.15)), 0, 100)
+      ? clamp(Math.round(averageScore * coverageMultiplier), 0, 100)
       : 0;
+    const limitingItem = weakestReadinessItem(items);
     return {
       id: group.id,
       label: group.label,
       score,
+      weight: RX_CATEGORY_WEIGHTS[group.id],
       missing: items.length - tested.length,
+      tested: tested.length,
+      total: items.length,
+      coverage,
+      coverageMultiplier,
       summary: readinessCategorySummary(items),
+      explanation: tested.length
+        ? `Average of ${tested.length} completed tests, adjusted to ${Math.round(coverageMultiplier * 100)}% for test coverage.`
+        : "No completed tests yet, so this category starts at 0.",
+      limitingItem,
       items,
     };
   });
@@ -5925,60 +5953,101 @@ function buildRxReadiness(profile, logs = []) {
   );
   const consistencyScore = consistencyReadinessScore(logs);
   const recoveryScore = recoveryReadinessScore(profile, logs);
+  const openContributors = ["olympic", "engine", "gymnastics"].map((id) => {
+    const category = categories.find((item) => item.id === id);
+    return { id, label: category.label, score: category.score };
+  });
   const fullCategories = [
     ...categories,
     {
       id: "openSkills",
       label: "Open skills",
       score: openSkillsScore,
+      weight: RX_CATEGORY_WEIGHTS.openSkills,
       missing: 0,
-      summary: "Blends Olympic lifting, engine, and gymnastics.",
+      tested: null,
+      total: null,
+      coverage: null,
+      summary: "Blends Olympic lifting, engine, and gymnastics scores.",
+      explanation:
+        "Average of the coverage-adjusted Olympic lifting, engine, and gymnastics category scores.",
+      contributors: openContributors,
       items: [],
     },
     {
       id: "consistency",
       label: "Consistency",
       score: consistencyScore,
+      weight: RX_CATEGORY_WEIGHTS.consistency,
       missing: 0,
+      tested: null,
+      total: null,
+      coverage: null,
       summary: consistencyReadinessSummary(logs),
+      explanation:
+        "Recent sessions logged in the last 28 days, with 12 sessions scoring 100.",
       items: [],
     },
     {
       id: "recovery",
       label: "Recovery",
       score: recoveryScore,
+      weight: RX_CATEGORY_WEIGHTS.recovery,
       missing: 0,
+      tested: null,
+      total: null,
+      coverage: null,
       summary: recoveryReadinessSummary(profile, logs),
+      explanation:
+        "Age baseline adjusted by recent readiness, average RPE, and mobility completion.",
       items: [],
     },
   ];
   const rxLevel = clamp(
     Math.round(
-      fullCategories.reduce((sum, category) => sum + category.score, 0) /
-        fullCategories.length,
+      fullCategories.reduce(
+        (sum, category) => sum + category.score * category.weight,
+        0,
+      ) / 100,
     ),
-    0,
+    1,
     100,
   );
-  const actionableWeakest = [...fullCategories]
-    .filter((category) => category.id !== "recovery")
-    .sort((a, b) => a.score - b.score);
-  const weakest = actionableWeakest.slice(0, 2);
-  const recovery = fullCategories.find(
-    (category) => category.id === "recovery",
-  );
-  if (recovery && weakest.length && recovery.score <= weakest[0].score - 10) {
-    weakest.splice(1, 1, recovery);
-  }
+  const band = rxLevelBand(rxLevel);
+  const weakest = [...fullCategories]
+    .sort((left, right) => left.score - right.score)
+    .slice(0, 2)
+    .map((category) => ({
+      ...category,
+      guidance: readinessCategoryGuidance(category),
+    }));
+  const prioritizedMissingTests = [...missingTests].sort((left, right) => {
+    const leftScore = categoryScore(categories, left.categoryId);
+    const rightScore = categoryScore(categories, right.categoryId);
+    return leftScore - rightScore;
+  });
 
   return {
     division: DIVISION_LABELS[profile.division] || DIVISION_LABELS.men35to39,
     rxLevel,
+    band,
+    scoreExplanation:
+      "Weighted from category scores. Readiness bands are training guidance, not competition qualification.",
     categories: fullCategories,
     missingTests,
+    prioritizedMissingTests,
     weakest,
-    recommendation: readinessRecommendation(weakest, missingTests),
+    recommendation: readinessRecommendation(weakest, prioritizedMissingTests),
   };
+}
+
+function rxLevelBand(score) {
+  const normalized = clamp(Math.round(Number(score) || 1), 1, 100);
+  return (
+    RX_LEVEL_BANDS.find(
+      (band) => normalized >= band.min && normalized <= band.max,
+    ) || RX_LEVEL_BANDS[0]
+  );
 }
 
 function readinessItem(id, target, profile) {
@@ -6030,6 +6099,12 @@ function readinessCategorySummary(items) {
     return `${missing[0].label} test needed.`;
   }
   return "";
+}
+
+function weakestReadinessItem(items) {
+  return [...items]
+    .filter((item) => item.status !== "missing")
+    .sort((left, right) => left.score - right.score)[0];
 }
 
 function categoryScore(categories, id) {
@@ -6134,7 +6209,27 @@ function readinessRecommendation(weakest, missingTests = []) {
         .map((item) => item.label.toLowerCase())
         .join(" and ")} next.`
     : "";
-  return `Prioritize ${focus} in the next generated cycle.${testing}`;
+  return `Prioritize ${focus} in the next training cycle.${testing}`;
+}
+
+function readinessCategoryGuidance(category) {
+  const limiting = category.limitingItem;
+  const metric = limiting
+    ? `${limiting.label} is ${limiting.display} against the ${limiting.targetDisplay} target.`
+    : "Complete a baseline test before prescribing harder work.";
+  const guidance = {
+    strength: `${metric} Prioritize a progressive cycle for that lift.`,
+    olympic: `${metric} Add technique work and repeatable submaximal exposures.`,
+    engine: `${metric} Train intervals in that modality, then retest it.`,
+    gymnastics: `${metric} Use frequent submaximal sets with clean movement standards.`,
+    openSkills:
+      "Build mixed Open pieces around the weakest Olympic lifting, engine, or gymnastics contributor.",
+    consistency:
+      "Schedule the next training days toward 12 logged sessions in 28 days.",
+    recovery:
+      "Adjust intensity using readiness and RPE, and complete the planned mobility work.",
+  };
+  return guidance[category.id] || `Prioritize ${category.label.toLowerCase()}.`;
 }
 
 function getProgramDays() {
@@ -6602,6 +6697,8 @@ const FORGE_HOUR_API = {
   PLAN_SCHEMA_VERSION,
   PR_METRICS,
   READINESS_LABELS,
+  RX_CATEGORY_WEIGHTS,
+  RX_LEVEL_BANDS,
   WEEK_META,
   WEAKNESS_LABELS,
   WOD_SCHEMA_VERSION,
@@ -6636,6 +6733,7 @@ const FORGE_HOUR_API = {
   positiveNumber,
   registerServiceWorker,
   roundToNearest,
+  rxLevelBand,
   selectActivePlan,
   selectActiveWeekSessions,
   selectPlanWeekSessions,

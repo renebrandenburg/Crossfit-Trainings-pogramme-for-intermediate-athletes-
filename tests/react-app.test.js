@@ -558,6 +558,14 @@ test("React Testing Library renders the dashboard and bottom navigation", async 
     assert.ok(ui.getByRole("heading", { name: "Masters RX assessment" }));
     assert.ok(ui.getByRole("heading", { name: "RX readiness" }));
     assert.ok(ui.getByText("RX Level"));
+    assert.equal(
+      ui
+        .getByRole("progressbar", { name: "Overall RX Level" })
+        .getAttribute("aria-valuemax"),
+      "100",
+    );
+    assert.ok(ui.getByRole("heading", { name: "Suggested focus" }));
+    assert.ok(ui.getAllByText("Why this score?").length >= 7);
     assert.ok(ui.getByText("Strict press: 60 kg vs 75 kg."));
     assert.ok(ui.getAllByText("Men Masters 35-39").length >= 1);
     assert.ok(ui.getByLabelText("Deadlift 1RM"));
@@ -606,6 +614,40 @@ test("React Testing Library keeps cleared time benchmarks as test-needed values"
       },
       { timeout: 5000 },
     );
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library updates RX guidance after assessment changes", async () => {
+  const { cleanup, fireEvent, ui, waitFor } = mountApp();
+
+  try {
+    assert.ok(await ui.findByRole("heading", { name: "RX readiness" }));
+    const overall = ui.getByRole("progressbar", { name: "Overall RX Level" });
+    const initialLevel = overall.getAttribute("aria-valuenow");
+    assert.ok(ui.getByText(/Use frequent submaximal sets/));
+
+    const improvements = {
+      "Unbroken pull-ups": "25",
+      "Unbroken chest-to-bar": "18",
+      "Unbroken toes-to-bar": "25",
+      "Unbroken bar muscle-ups": "8",
+      "Unbroken ring muscle-ups": "4",
+      "Strict HSPU": "8",
+      "Handstand walk meters": "15",
+      "Unbroken double-unders": "100",
+    };
+    Object.entries(improvements).forEach(([label, value]) => {
+      fireEvent.change(ui.getByLabelText(label), { target: { value } });
+    });
+    fireEvent.click(ui.getByRole("button", { name: "Save assessment" }));
+
+    await waitFor(() => {
+      assert.notEqual(overall.getAttribute("aria-valuenow"), initialLevel);
+      assert.equal(ui.queryByText(/Use frequent submaximal sets/), null);
+      assert.ok(ui.getByText(/^Prioritize .* next training cycle/));
+    });
   } finally {
     cleanup();
   }

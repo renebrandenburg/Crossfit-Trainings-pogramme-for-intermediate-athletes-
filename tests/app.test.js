@@ -9,6 +9,8 @@ const {
   DIVISION_LABELS,
   MOVEMENT_LIBRARY,
   PR_METRICS,
+  RX_CATEGORY_WEIGHTS,
+  RX_LEVEL_BANDS,
   WEEK_META,
   WOD_SCHEMA_VERSION,
   WORKOUT_DEFINITION_VERSION,
@@ -34,6 +36,7 @@ const {
   parseTimeToSeconds,
   percent,
   roundToNearest,
+  rxLevelBand,
   selectDumbbellSnatchLoad,
   selectActivePlan,
   selectActiveWeekSessions,
@@ -698,6 +701,91 @@ test("RX readiness consistency score uses recent workout logs", () => {
     "12/12 sessions logged in the last 28 days.",
   );
   assert.ok(active.rxLevel > quiet.rxLevel);
+});
+
+test("RX readiness uses documented weights and a moderate coverage penalty", () => {
+  assert.equal(
+    Object.values(RX_CATEGORY_WEIGHTS).reduce((sum, weight) => sum + weight, 0),
+    100,
+  );
+
+  const profile = cloneDefaultProfile();
+  profile.benchmarks = {
+    ...profile.benchmarks,
+    row1k: "",
+    row2k: "",
+    run5k: "",
+    bike10MinCalories: 160,
+  };
+  const readiness = buildRxReadiness(profile, []);
+  const engine = readiness.categories.find(
+    (category) => category.id === "engine",
+  );
+  const weightedScore = Math.round(
+    readiness.categories.reduce(
+      (sum, category) => sum + category.score * category.weight,
+      0,
+    ) / 100,
+  );
+
+  assert.equal(engine.tested, 1);
+  assert.equal(engine.total, 4);
+  assert.equal(engine.coverageMultiplier, 0.625);
+  assert.equal(engine.score, 63);
+  assert.equal(readiness.rxLevel, weightedScore);
+  assert.match(engine.explanation, /adjusted to 63% for test coverage/);
+});
+
+test("RX Level bands cover every 1-100 boundary", () => {
+  assert.deepEqual(
+    RX_LEVEL_BANDS.map((band) => [band.min, band.max]),
+    [
+      [1, 49],
+      [50, 69],
+      [70, 84],
+      [85, 100],
+    ],
+  );
+  assert.equal(rxLevelBand(1).label, "Building");
+  assert.equal(rxLevelBand(49).label, "Building");
+  assert.equal(rxLevelBand(50).label, "Developing");
+  assert.equal(rxLevelBand(69).label, "Developing");
+  assert.equal(rxLevelBand(70).label, "RX-ready");
+  assert.equal(rxLevelBand(84).label, "RX-ready");
+  assert.equal(rxLevelBand(85).label, "QF-ready");
+  assert.equal(rxLevelBand(100).label, "QF-ready");
+});
+
+test("RX readiness weaknesses and guidance change with profile metrics", () => {
+  const profile = cloneDefaultProfile();
+  const logs = Array.from({ length: 12 }, (_, index) => ({
+    date: daysAgo(index * 2),
+    readiness: "green",
+    rpe: "7",
+    mobilityDone: true,
+  }));
+  const before = buildRxReadiness(profile, logs);
+  const improved = cloneDefaultProfile();
+  improved.benchmarks = {
+    ...improved.benchmarks,
+    pullUps: 25,
+    chestToBar: 18,
+    t2b: 25,
+    barMuscleUp: 8,
+    ringMuscleUp: 4,
+    strictHspu: 8,
+    handstandWalk: 15,
+    doubleUnders: 100,
+  };
+  const after = buildRxReadiness(improved, logs);
+
+  assert.ok(before.weakest.some((category) => category.id === "gymnastics"));
+  assert.ok(after.rxLevel > before.rxLevel);
+  assert.notDeepEqual(
+    after.weakest.map((category) => category.id),
+    before.weakest.map((category) => category.id),
+  );
+  assert.notEqual(after.recommendation, before.recommendation);
 });
 
 test("movement library covers gymnastics and weightlifting with video guides", () => {

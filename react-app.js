@@ -2604,9 +2604,13 @@
 
   function RxReadinessPanel({ profile, logs }) {
     const readiness = buildRxReadiness(profile, logs);
+    const priorityTests = readiness.prioritizedMissingTests.slice(0, 3);
     return h(
       "section",
-      { className: "panel", "aria-labelledby": "rxReadinessTitle" },
+      {
+        className: "panel rx-readiness-panel",
+        "aria-labelledby": "rxReadinessTitle",
+      },
       h(
         "div",
         { className: "panel-title" },
@@ -2620,49 +2624,204 @@
       ),
       h(
         "div",
-        { className: "stats-grid" },
-        h(StatCard, {
-          value: `${readiness.rxLevel}`,
-          label: "RX Level",
-        }),
-        readiness.categories.map((category) =>
-          h(StatCard, {
-            key: category.id,
-            value: `${category.score}%`,
-            label: category.missing
-              ? `${category.label} (${category.missing} tests)`
-              : category.label,
-            detail: category.summary,
-          }),
-        ),
-      ),
-      h("p", { className: "muted-copy" }, readiness.recommendation),
-      readiness.missingTests.length
-        ? h(
-            "div",
-            { className: "history-meta", "aria-label": "Missing RX tests" },
-            readiness.missingTests.slice(0, 6).map((item) =>
-              h(
-                "span",
-                {
-                  className: "metric-pill",
-                  key: `${item.categoryId}-${item.id}`,
-                },
-                `Test needed: ${item.label}`,
-              ),
-            ),
-          )
-        : null,
-      h(
-        "div",
-        { className: "history-meta" },
-        readiness.weakest.map((category) =>
+        {
+          className: `rx-level-hero rx-level-${readiness.band.id}`,
+          "aria-label": `RX Level ${readiness.rxLevel} out of 100, ${readiness.band.label}`,
+        },
+        h(
+          "div",
+          { className: "rx-level-score" },
+          h("p", { className: "stat-label" }, "RX Level"),
           h(
-            "span",
-            { className: "metric-pill", key: category.id },
-            `Focus: ${category.label}`,
+            "p",
+            { className: "rx-level-value" },
+            `${readiness.rxLevel}`,
+            h("span", null, "/100"),
           ),
         ),
+        h(
+          "div",
+          { className: "rx-level-context" },
+          h("span", { className: "metric-pill" }, readiness.band.label),
+          h(
+            "div",
+            {
+              className: "rx-score-track",
+              role: "progressbar",
+              "aria-label": "Overall RX Level",
+              "aria-valuemin": 1,
+              "aria-valuemax": 100,
+              "aria-valuenow": readiness.rxLevel,
+            },
+            h("span", { style: { width: `${readiness.rxLevel}%` } }),
+          ),
+          h("p", { className: "stat-detail" }, readiness.scoreExplanation),
+        ),
+      ),
+      h(
+        "div",
+        { className: "rx-category-grid", "aria-label": "RX categories" },
+        readiness.categories.map((category) =>
+          h(RxCategoryCard, { category, key: category.id }),
+        ),
+      ),
+      h(
+        "section",
+        { className: "rx-guidance", "aria-labelledby": "rxFocusTitle" },
+        h("h4", { id: "rxFocusTitle" }, "Suggested focus"),
+        h(
+          "div",
+          { className: "rx-focus-grid" },
+          readiness.weakest.map((category) =>
+            h(
+              "article",
+              { className: "rx-focus-card", key: category.id },
+              h(
+                "div",
+                { className: "rx-focus-heading" },
+                h("strong", null, category.label),
+                h(
+                  "span",
+                  { className: "metric-pill" },
+                  `${category.score}/100`,
+                ),
+              ),
+              h("p", null, category.guidance),
+            ),
+          ),
+        ),
+        h("p", { className: "muted-copy" }, readiness.recommendation),
+      ),
+      priorityTests.length
+        ? h(
+            "section",
+            {
+              className: "rx-missing-tests",
+              "aria-labelledby": "rxMissingTitle",
+            },
+            h(
+              "div",
+              { className: "rx-section-heading" },
+              h("h4", { id: "rxMissingTitle" }, "Tests needed"),
+              h(
+                "span",
+                { className: "metric-pill" },
+                `${readiness.missingTests.length} missing`,
+              ),
+            ),
+            h(
+              "div",
+              {
+                className: "history-meta",
+                "aria-label": "Priority missing RX tests",
+              },
+              priorityTests.map((item) =>
+                h(
+                  "span",
+                  {
+                    className: "metric-pill",
+                    key: `${item.categoryId}-${item.id}`,
+                  },
+                  `Test needed: ${item.label}`,
+                ),
+              ),
+            ),
+            readiness.missingTests.length > priorityTests.length
+              ? h(
+                  "details",
+                  { className: "rx-test-details" },
+                  h(
+                    "summary",
+                    null,
+                    `View all ${readiness.missingTests.length} missing tests`,
+                  ),
+                  h(
+                    "ul",
+                    null,
+                    readiness.prioritizedMissingTests.map((item) =>
+                      h(
+                        "li",
+                        { key: `all-${item.categoryId}-${item.id}` },
+                        h("span", null, `Test needed: ${item.label}`),
+                        ` · ${item.categoryLabel}`,
+                      ),
+                    ),
+                  ),
+                )
+              : null,
+          )
+        : null,
+    );
+  }
+
+  function RxCategoryCard({ category }) {
+    const completion = Number.isInteger(category.tested)
+      ? `${category.tested}/${category.total} tests`
+      : null;
+    return h(
+      "article",
+      { className: "rx-category-card" },
+      h(
+        "div",
+        { className: "rx-category-heading" },
+        h("p", { className: "stat-label" }, category.label),
+        h("span", { className: "metric-pill" }, `${category.weight}% weight`),
+      ),
+      h("p", { className: "rx-category-value" }, `${category.score}/100`),
+      h(
+        "div",
+        {
+          className: "rx-score-track",
+          role: "progressbar",
+          "aria-label": `${category.label} score`,
+          "aria-valuemin": 0,
+          "aria-valuemax": 100,
+          "aria-valuenow": category.score,
+        },
+        h("span", { style: { width: `${category.score}%` } }),
+      ),
+      completion
+        ? h(
+            "p",
+            { className: "rx-coverage" },
+            completion,
+            category.missing ? ` · ${category.missing} needed` : " · complete",
+          )
+        : null,
+      h("p", { className: "stat-detail" }, category.summary),
+      h(
+        "details",
+        { className: "rx-score-details" },
+        h("summary", null, "Why this score?"),
+        h("p", null, category.explanation),
+        category.contributors
+          ? h(
+              "ul",
+              null,
+              category.contributors.map((contributor) =>
+                h(
+                  "li",
+                  { key: contributor.id },
+                  `${contributor.label}: ${contributor.score}/100`,
+                ),
+              ),
+            )
+          : null,
+        category.items.length
+          ? h(
+              "ul",
+              null,
+              category.items.map((item) =>
+                h(
+                  "li",
+                  { key: item.id },
+                  item.status === "missing"
+                    ? `${item.label}: Test needed`
+                    : `${item.label}: ${item.display} / target ${item.targetDisplay} (${item.score}/100)`,
+                ),
+              ),
+            )
+          : null,
       ),
     );
   }

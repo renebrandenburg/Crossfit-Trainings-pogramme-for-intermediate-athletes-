@@ -267,6 +267,163 @@ button {
   line-height: 1.35;
 }
 
+.rx-readiness-panel {
+  overflow: hidden;
+}
+
+.rx-level-hero {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(0, 1.3fr);
+  gap: 18px;
+  align-items: center;
+  padding: 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, rgba(183, 255, 60, 0.22), var(--surface));
+}
+
+.rx-level-value {
+  margin: 6px 0 0;
+  font-size: clamp(3rem, 14vw, 5rem);
+  font-weight: 950;
+  letter-spacing: -0.06em;
+  line-height: 0.88;
+}
+
+.rx-level-value span {
+  margin-left: 5px;
+  color: var(--muted);
+  font-size: 0.28em;
+  letter-spacing: 0;
+}
+
+.rx-level-context .metric-pill {
+  border-color: var(--accent-strong);
+  color: var(--ink);
+}
+
+.rx-score-track {
+  height: 8px;
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--completion-track);
+}
+
+.rx-score-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-strong);
+}
+
+.rx-category-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.rx-category-card,
+.rx-focus-card {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.rx-category-heading,
+.rx-focus-heading,
+.rx-section-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rx-category-heading .metric-pill {
+  min-height: 24px;
+  padding: 3px 7px;
+  font-size: 0.68rem;
+}
+
+.rx-category-value {
+  margin: 8px 0 0;
+  font-size: clamp(1.5rem, 7vw, 2.35rem);
+  font-weight: 900;
+  line-height: 1;
+}
+
+.rx-coverage {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.rx-score-details,
+.rx-test-details {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.rx-score-details summary,
+.rx-test-details summary {
+  color: var(--ink);
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.rx-score-details p,
+.rx-score-details ul,
+.rx-test-details ul {
+  margin: 8px 0 0;
+}
+
+.rx-score-details ul,
+.rx-test-details ul {
+  padding-left: 18px;
+}
+
+.rx-guidance,
+.rx-missing-tests {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.rx-guidance h4,
+.rx-missing-tests h4 {
+  margin: 0 0 10px;
+}
+
+.rx-focus-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.rx-focus-heading strong {
+  font-size: 0.92rem;
+}
+
+.rx-focus-card p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.rx-section-heading {
+  align-items: center;
+}
+
+.rx-section-heading h4 {
+  margin: 0;
+}
+
 .panel,
 .week-note {
   margin-top: 12px;
@@ -902,8 +1059,13 @@ textarea:focus {
   }
 
   .stats-grid,
-  .pr-grid {
+  .pr-grid,
+  .rx-category-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .rx-focus-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .proof-details {
@@ -932,6 +1094,11 @@ textarea:focus {
 
   .status-pill {
     margin-top: 2px;
+  }
+
+  .rx-level-hero,
+  .rx-category-grid {
+    grid-template-columns: 1fr;
   }
 
   .nav-button {
