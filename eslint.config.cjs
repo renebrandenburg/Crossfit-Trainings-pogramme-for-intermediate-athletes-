@@ -11,6 +11,9 @@ module.exports = [
       "node_modules/**",
       "tmp/**",
       "temp/**",
+      "playwright-report/**",
+      "test-results/**",
+      "playwright/.auth/**",
       ".agents/**",
       ".codex/**",
       "AGENTS.md",
@@ -34,7 +37,12 @@ module.exports = [
     },
   },
   {
-    files: ["tests/**/*.js", "eslint.config.cjs"],
+    files: [
+      "tests/**/*.js",
+      "e2e/**/*.js",
+      "playwright.config.js",
+      "eslint.config.cjs",
+    ],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "commonjs",
@@ -42,6 +50,14 @@ module.exports = [
         ...globals.node,
         ...globals.browser,
       },
+    },
+  },
+  {
+    files: ["e2e/fixtures/supabase-browser-mock.js"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "script",
+      globals: globals.browser,
     },
   },
   eslintConfigPrettier,

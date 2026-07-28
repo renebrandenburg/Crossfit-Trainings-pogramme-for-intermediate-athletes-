@@ -49,6 +49,7 @@
     selectActivePlan,
     selectActiveWeekSessions,
     timerDisplaySeconds,
+    validateGeneratedWeek,
     valueFromPath,
     workoutItemsForSession,
   } = api;
@@ -1002,6 +1003,10 @@
       }
 
       const athleteState = athleteStateFromAppState(appState);
+      setSyncStatus({
+        state: "signed-in",
+        message: "Saving profile and programme changes...",
+      });
       athleteSaveTimerRef.current = window.setTimeout(async () => {
         try {
           const saved = await remoteStore.saveAthleteState(
@@ -1013,14 +1018,10 @@
             ...current,
             updatedAt: saved.updatedAt,
           }));
-          setSyncStatus((current) =>
-            current.state === "error"
-              ? {
-                  state: "signed-in",
-                  message: "Private athlete account synced.",
-                }
-              : current,
-          );
+          setSyncStatus({
+            state: "signed-in",
+            message: "Profile and programme changes synced.",
+          });
         } catch (error) {
           console.warn("Could not save athlete state.", error);
           if (!isCurrentAuth(ownerId, authEpoch)) return;
@@ -4788,6 +4789,20 @@
               createId,
               generationSeed,
             );
+            const expectedSessionCount = options.daysPerWeek * 8;
+            if (generatedPlans.length !== expectedSessionCount) {
+              throw new Error(
+                `Expected ${expectedSessionCount} generated sessions, received ${generatedPlans.length}.`,
+              );
+            }
+            for (let week = 1; week <= 8; week += 1) {
+              validateGeneratedWeek(
+                generatedPlans.filter(
+                  (session) => Number(session?.week) === week,
+                ),
+                { requiredTimeDomains: ["short", "medium", "long"] },
+              );
+            }
             onGenerate({
               sessions: generatedPlans,
               options,

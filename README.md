@@ -63,6 +63,10 @@ Run the unit and React Testing Library tests with:
 npm test
 ```
 
+Playwright covers the critical browser workflows. See
+[the E2E testing guide](docs/e2e-testing.md) for local commands, failure traces,
+staging variables, and destructive-cleanup safeguards.
+
 ## Supabase database sync
 
 Profiles, the canonical saved-programme catalog, the active plan, selected

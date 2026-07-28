@@ -5,16 +5,25 @@
   "description": "Phone-first CrossFit programme, custom builder, and PR tracker.",
   "scripts": {
     "check": "npm run lint && npm run format:check && npm run typecheck && npm test",
+    "serve:e2e": "node e2e/helpers/static-server.js",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --project jsconfig.json --pretty false",
     "prepare": "husky",
-    "test": "node --test"
+    "test": "node --test",
+    "test:e2e": "playwright test",
+    "test:e2e:smoke": "playwright test --project=chromium --grep @smoke",
+    "test:e2e:critical": "playwright test --project=chromium --grep @smoke\\|@critical",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --project=chromium --headed",
+    "test:e2e:report": "playwright show-report"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.62.0",
+    "@supabase/supabase-js": "2.57.4",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^22.20.1",
     "@types/react": "^18.3.31",

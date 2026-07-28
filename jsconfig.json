@@ -17,6 +17,8 @@
     "react-app.js",
     "supabase-sync.js",
     "supabase-config.js",
+    "playwright.config.js",
+    "e2e/**/*.js",
     "types/**/*.d.ts"
   ],
   "exclude": ["node_modules"]
