@@ -100,22 +100,31 @@ class PlanBuilderPage {
    * @param {{
    *   goal: string,
    *   days?: string,
+   *   totalDays?: string,
    *   weakness?: string,
    *   athleteLevel?: string,
    *   duration?: string,
-   *   barMuscleUpLevel?: string
+   *   barMuscleUpLevel?: string,
+   *   boxDays?: string
    * }} options
    */
   async generate({
     goal,
     days = "4",
+    totalDays = "4",
     weakness,
     athleteLevel = "intermediate",
     duration = "60",
     barMuscleUpLevel,
+    boxDays,
   }) {
     await this.generatorForm.getByLabel("Main goal").selectOption(goal);
-    await this.generatorForm.getByLabel("Sessions per week").selectOption(days);
+    await this.generatorForm
+      .getByLabel("Total weekly training")
+      .selectOption(totalDays);
+    await this.generatorForm
+      .getByLabel("App-programmed sessions")
+      .selectOption(days);
     if (weakness) {
       await this.generatorForm
         .getByLabel("Biggest weakness")
@@ -126,14 +135,28 @@ class PlanBuilderPage {
         .getByLabel("Current bar muscle-up level")
         .selectOption(barMuscleUpLevel);
     }
-    await this.generatorForm.getByLabel("Max session length").fill(duration);
+    await this.generatorForm
+      .getByLabel("Max session length")
+      .selectOption(duration);
+    if (boxDays) {
+      await this.generatorForm
+        .getByLabel("I also follow workouts at a CrossFit box")
+        .check();
+      await this.generatorForm
+        .getByLabel("Expected box workouts")
+        .fill(boxDays);
+    }
     await this.generatorForm
       .getByLabel("Athlete programming level")
       .selectOption(athleteLevel);
     await this.generatorForm
-      .getByRole("button", { name: /Generate 8-week programme/ })
+      .getByRole("button", { name: /(?:Generate|Regenerate) 8-week programme/ })
       .click();
-    await this.page.getByText(/Generated \d+ sessions\./).waitFor();
+    await this.page
+      .getByText(
+        /Generated \d+ sessions\.|Updated to \d+ app sessions per week\./,
+      )
+      .waitFor();
   }
 
   async expectActivePlan(name) {

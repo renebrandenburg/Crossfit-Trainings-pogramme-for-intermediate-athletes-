@@ -689,14 +689,24 @@ test("React Testing Library generates a level-aware bar muscle-up programme", as
       (plan) => plan.id === saved.activePlanId,
     );
     assert.equal(activePlan.title, "Get my first bar muscle-up programme");
-    assert.deepEqual(activePlan.generatorOptions, {
-      goal: "barMuscleUp",
-      daysPerWeek: 4,
-      weakness: "muscleup",
-      duration: 60,
-      athleteLevel: "rxPlus",
-      barMuscleUpLevel: "assisted",
-    });
+    assert.deepEqual(
+      {
+        goal: activePlan.generatorOptions.goal,
+        daysPerWeek: activePlan.generatorOptions.daysPerWeek,
+        weakness: activePlan.generatorOptions.weakness,
+        duration: activePlan.generatorOptions.duration,
+        athleteLevel: activePlan.generatorOptions.athleteLevel,
+        barMuscleUpLevel: activePlan.generatorOptions.barMuscleUpLevel,
+      },
+      {
+        goal: "barMuscleUp",
+        daysPerWeek: 4,
+        weakness: "muscleup",
+        duration: 60,
+        athleteLevel: "rxPlus",
+        barMuscleUpLevel: "assisted",
+      },
+    );
     assert.equal(activePlan.sessions.length, 32);
     assert.ok(
       activePlan.sessions.every(
@@ -704,6 +714,115 @@ test("React Testing Library generates a level-aware bar muscle-up programme", as
           session.sourceBarMuscleUpLevel === "assisted" &&
           session.sourceAthleteLevel === "rxPlus",
       ),
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library creates a two-day plan and counts a box workout separately", async () => {
+  const { cleanup, fireEvent, ui, waitFor } = mountApp();
+
+  try {
+    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    fireEvent.change(ui.getByLabelText("App-programmed sessions"), {
+      target: { value: "2" },
+    });
+    fireEvent.click(
+      ui.getByLabelText("I also follow workouts at a CrossFit box"),
+    );
+    fireEvent.click(
+      ui.getByRole("button", { name: "Generate 8-week programme" }),
+    );
+
+    await waitFor(() => {
+      const saved = JSON.parse(
+        window.localStorage.getItem("forge-hour-state-v1"),
+      );
+      const activePlan = saved.plans.find(
+        (plan) => plan.id === saved.activePlanId,
+      );
+      assert.equal(activePlan.generatorOptions.programDaysPerWeek, 2);
+      assert.equal(activePlan.generatorOptions.expectedBoxDays, 2);
+      assert.equal(activePlan.generatorOptions.totalTrainingDays, 4);
+      assert.equal(activePlan.generatorOptions.sessionDuration, 75);
+      assert.equal(activePlan.sessions.length, 16);
+      assert.ok(activePlan.sessions.every((session) => session.twoDayStrategy));
+    });
+
+    fireEvent.click(ui.getByRole("button", { name: "Log" }));
+    fireEvent.change(ui.getByLabelText("Workout type"), {
+      target: { value: "box" },
+    });
+    fireEvent.change(ui.getByLabelText("Box workout name"), {
+      target: { value: "Community chipper" },
+    });
+    fireEvent.click(ui.getByLabelText("Heavy squats"));
+    fireEvent.click(ui.getByLabelText("Long conditioning"));
+    fireEvent.click(ui.getByRole("button", { name: "Save workout log" }));
+
+    await waitFor(() => {
+      const saved = JSON.parse(
+        window.localStorage.getItem("forge-hour-state-v1"),
+      );
+      const boxLog = activeScores(saved).logs.find(
+        (log) => log.workoutSource === "box",
+      );
+      assert.equal(boxLog.dayTitle, "Community chipper");
+      assert.deepEqual(boxLog.movementPatterns, ["squat", "long_conditioning"]);
+    });
+
+    fireEvent.click(ui.getByRole("button", { name: "Home" }));
+    await waitFor(() => {
+      assert.ok(ui.getByText("0/2"));
+      assert.ok(ui.getByText("1/4"));
+      assert.ok(ui.getByText("Box workout"));
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library marks a logged custom session complete without double counting", async () => {
+  const storedState = canonicalPlanState({
+    logs: [
+      {
+        id: "custom-completion-log",
+        date: "2026-07-29",
+        week: 1,
+        dayId: "saved-session-1",
+        dayTitle: "Saved canonical session",
+        workoutSource: "custom",
+        readiness: "green",
+        createdAt: "2026-07-29T10:00:00.000Z",
+      },
+      {
+        id: "custom-completion-retry",
+        date: "2026-07-29",
+        week: 1,
+        dayId: "saved-session-1",
+        dayTitle: "Saved canonical session",
+        workoutSource: "custom",
+        readiness: "green",
+        createdAt: "2026-07-29T10:01:00.000Z",
+      },
+    ],
+  });
+  const { cleanup, ui } = mountApp({ storedState });
+
+  try {
+    assert.ok(await ui.findByRole("heading", { name: "Training dashboard" }));
+    assert.match(
+      ui.getByText("Sessions logged").closest(".stat-card").textContent,
+      /1\/1/,
+    );
+    assert.match(
+      ui.getByText("Total training").closest(".stat-card").textContent,
+      /1\/1/,
+    );
+    assert.match(
+      ui.getByText("Progression week").closest(".stat-card").textContent,
+      /Complete/,
     );
   } finally {
     cleanup();
@@ -2218,7 +2337,7 @@ test("React Testing Library reports timer metadata pending on a legacy schema", 
     );
     assert.ok(
       await mounted.ui.findByText(
-        "Account synced. Timer or competition-proof metadata stays local until the Supabase schema is updated.",
+        "Account synced. Some workout metadata stays local until the Supabase schema is updated.",
       ),
     );
     const workoutWrites = calls.filter(
@@ -2296,7 +2415,7 @@ test("React Testing Library isolates signed-in scores from legacy guest scores",
 
     const saved = readState();
     assert.equal(saved.schemaVersion, 4);
-    assert.equal(saved.planSchemaVersion, 3);
+    assert.equal(saved.planSchemaVersion, 4);
     assert.equal(Object.hasOwn(saved, "logs"), false);
     assert.equal(saved.scoreDataByOwner.guest.logs[0].id, "guest-log");
     assert.equal(saved.scoreDataByOwner["user-1"].logs[0].id, "remote-log");

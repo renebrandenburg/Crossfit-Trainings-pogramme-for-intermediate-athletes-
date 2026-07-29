@@ -18,13 +18,16 @@
   const {
     ATHLETE_LEVELS,
     BAR_MUSCLE_UP_LEVELS,
+    DAY_OF_WEEK_OPTIONS,
     DIVISION_LABELS,
+    EQUIPMENT_OPTIONS,
     GOAL_LABELS,
     PLAN_SCHEMA_VERSION,
     PR_METRICS,
     READINESS_LABELS,
     WEEK_META,
     WEAKNESS_LABELS,
+    applyReadinessVariant,
     buildGeneratedProgramme,
     buildRxReadiness,
     buildSession,
@@ -42,14 +45,17 @@
     inferWorkoutTimer,
     isBetterPr,
     migratePlanState,
+    normalizeGeneratorOptions,
     normalizePrValue,
     positiveNumber,
+    regeneratePlanFrequency,
     registerServiceWorker,
     splitLines,
     selectActivePlan,
     selectActiveWeekSessions,
     timerDisplaySeconds,
     validateGeneratedWeek,
+    weeklyTrainingProgress,
     valueFromPath,
     workoutItemsForSession,
   } = api;
@@ -120,6 +126,9 @@
    * @property {string} activeScoreOwner
    * @property {number} selectedWeek
    * @property {string} themePreference
+   * @property {any[]=} logs
+   * @property {any[]=} prAttempts
+   * @property {Object<string, any>=} prs
    */
 
   /** @returns {AppState} */
@@ -1074,6 +1083,24 @@
       replaceActive,
     }) {
       const currentActivePlan = selectActivePlan(appState);
+      const normalizedOptions = normalizeGeneratorOptions(options);
+      const previousOptions = currentActivePlan?.generatorOptions
+        ? normalizeGeneratorOptions(currentActivePlan.generatorOptions)
+        : null;
+      const frequencyChanged = Boolean(
+        replaceActive &&
+        currentActivePlan?.kind === "generated" &&
+        previousOptions?.programDaysPerWeek !==
+          normalizedOptions.programDaysPerWeek,
+      );
+      if (
+        frequencyChanged &&
+        !window.confirm(
+          "Changing your weekly frequency will regenerate future workouts. Completed workouts will remain unchanged.",
+        )
+      ) {
+        return;
+      }
       if (
         replaceActive &&
         currentActivePlan?.kind === "generated" &&
@@ -1096,17 +1123,33 @@
         replaceActive && currentActivePlan?.kind === "generated"
           ? currentActivePlan.id
           : createId();
-      const nextPlan = {
-        id: planId,
-        title: `${GOAL_LABELS[options.goal] || "Generated"} programme`,
-        kind: "generated",
-        generatorOptions: options,
-        generationSeed,
-        createdAt:
-          planId === currentActivePlan?.id ? currentActivePlan.createdAt : now,
-        updatedAt: now,
-        sessions: normalizedSessions,
-      };
+      const nextPlan = frequencyChanged
+        ? {
+            ...regeneratePlanFrequency({
+              plan: currentActivePlan,
+              options: normalizedOptions,
+              profile: appState.profile,
+              selectedWeek: appState.selectedWeek,
+              logs: selectScoreData(appStateRef.current).logs || [],
+              regeneratedSessions: normalizedSessions,
+            }),
+            title: `${GOAL_LABELS[normalizedOptions.primaryGoal] || "Generated"} programme`,
+            generationSeed,
+            updatedAt: now,
+          }
+        : {
+            id: planId,
+            title: `${GOAL_LABELS[normalizedOptions.primaryGoal] || "Generated"} programme`,
+            kind: "generated",
+            generatorOptions: normalizedOptions,
+            generationSeed,
+            createdAt:
+              planId === currentActivePlan?.id
+                ? currentActivePlan.createdAt
+                : now,
+            updatedAt: now,
+            sessions: normalizedSessions,
+          };
 
       updateAppState((current) => ({
         ...current,
@@ -1117,16 +1160,22 @@
               )
             : [nextPlan, ...current.plans],
         activePlanId: planId,
-        selectedWeek: 1,
+        selectedWeek: frequencyChanged ? current.selectedWeek : 1,
       }));
+      const selectionWeek = frequencyChanged ? appState.selectedWeek : 1;
+      const nextSelectedSession = nextPlan.sessions.find(
+        (session) => Number(session.week) === selectionWeek,
+      );
       setLogSelection({
-        dayId: normalizedSessions[0]?.id || getNextDayForToday().id,
+        dayId: nextSelectedSession?.id || getNextDayForToday().id,
       });
       setPendingTimerResult(null);
       notify(
-        planId === currentActivePlan?.id
-          ? `Regenerated ${sessions.length} sessions.`
-          : `Generated ${sessions.length} sessions.`,
+        frequencyChanged
+          ? `Updated to ${normalizedOptions.programDaysPerWeek} app sessions per week. Completed workouts were preserved.`
+          : planId === currentActivePlan?.id
+            ? `Regenerated ${sessions.length} sessions.`
+            : `Generated ${sessions.length} sessions.`,
       );
     }
 
@@ -1504,11 +1553,14 @@
                   if (!refreshed || !isCurrentAuth(ownerId, authEpoch)) return;
                   const proofPending = uploaded.competitionProofPending || 0;
                   const timerPending = uploaded.timerResultPending || 0;
-                  const optionalMetadataPending = proofPending + timerPending;
+                  const workoutMetadataPending =
+                    uploaded.workoutMetadataPending || 0;
+                  const optionalMetadataPending =
+                    proofPending + timerPending + workoutMetadataPending;
                   setSyncStatus({
                     state: "signed-in",
                     message: optionalMetadataPending
-                      ? "Account synced. Timer or competition-proof metadata stays local until the Supabase schema is updated."
+                      ? "Account synced. Some workout metadata stays local until the Supabase schema is updated."
                       : "Private athlete account synced to Supabase.",
                   });
                   notify(
@@ -1590,11 +1642,12 @@
                   if (!refreshed || !isCurrentAuth(ownerId, authEpoch)) return;
                   const optionalMetadataPending =
                     (uploaded.competitionProofPending || 0) +
-                    (uploaded.timerResultPending || 0);
+                    (uploaded.timerResultPending || 0) +
+                    (uploaded.workoutMetadataPending || 0);
                   setSyncStatus({
                     state: "signed-in",
                     message: optionalMetadataPending
-                      ? "Guest data imported. Timer or competition-proof metadata stays local until the Supabase schema is updated."
+                      ? "Guest data imported. Some workout metadata stays local until the Supabase schema is updated."
                       : "Guest profile, programmes, and scores imported.",
                   });
                   notify(
@@ -1690,16 +1743,17 @@
                     if (!isCurrentAuth(ownerId, authEpoch)) return;
                     const optionalMetadataPending =
                       syncResult?.competitionProofSynced === false ||
-                      syncResult?.timerResultSynced === false;
+                      syncResult?.timerResultSynced === false ||
+                      syncResult?.workoutMetadataSynced === false;
                     setSyncStatus({
                       state: "signed-in",
                       message: optionalMetadataPending
-                        ? "Workout saved. Timer or competition-proof metadata remains local until the Supabase schema is updated."
+                        ? "Workout saved. Some workout metadata remains local until the Supabase schema is updated."
                         : "Scores are syncing with Supabase.",
                     });
                     notify(
                       optionalMetadataPending
-                        ? "Workout saved. Timer or proof metadata stays local until the Supabase schema is updated."
+                        ? "Workout saved. Some workout metadata stays local until the Supabase schema is updated."
                         : "Workout log saved.",
                     );
                   })
@@ -2086,9 +2140,18 @@
     const completedDays = completedDayIds.size;
     const latestRpe = appState.logs.find((log) => log.rpe);
     const latestPr = appState.prAttempts.find((attempt) => attempt.isPr);
-    const weekSessionCount = weekSessions.length;
+    const trainingProgress = activePlan
+      ? weeklyTrainingProgress(activePlan, appState.logs, appState.selectedWeek)
+      : null;
+    const weekSessionCount =
+      trainingProgress?.programTarget || weekSessions.length;
+    const completedProgression =
+      trainingProgress?.completedProgramWorkouts ?? completedDays;
     const weekPercent = weekSessionCount
-      ? Math.round((completedDays / weekSessionCount) * 100)
+      ? Math.min(
+          100,
+          Math.round((completedProgression / weekSessionCount) * 100),
+        )
       : 0;
     const nextDay = getNextDayForToday();
     const session = activePlan
@@ -2123,19 +2186,74 @@
         "div",
         { className: "stats-grid", id: "statsGrid" },
         h(StatCard, {
-          value: `${completedDays}/${weekSessionCount}`,
-          label: "Sessions logged",
+          value: `${completedProgression}/${weekSessionCount}`,
+          label:
+            activePlan?.kind === "generated"
+              ? "App progression"
+              : "Sessions logged",
         }),
-        h(StatCard, { value: `${weekPercent}%`, label: "Week complete" }),
+        trainingProgress
+          ? h(StatCard, {
+              value: `${trainingProgress.totalCompleted}/${trainingProgress.totalTarget}`,
+              label: "Total training",
+            })
+          : h(StatCard, { value: `${weekPercent}%`, label: "Week complete" }),
+        trainingProgress
+          ? h(StatCard, {
+              value: `${trainingProgress.completedBoxWorkouts}/${trainingProgress.expectedBoxDays}`,
+              label: "Box workouts",
+            })
+          : h(StatCard, {
+              value: latestRpe ? latestRpe.rpe : "-",
+              label: "Latest RPE",
+            }),
         h(StatCard, {
-          value: latestRpe ? latestRpe.rpe : "-",
-          label: "Latest RPE",
-        }),
-        h(StatCard, {
-          value: latestPr ? latestPr.metricName : "-",
-          label: "Latest PR",
+          value: trainingProgress
+            ? trainingProgress.progressionComplete
+              ? "Complete"
+              : `${weekPercent}%`
+            : latestPr
+              ? latestPr.metricName
+              : "-",
+          label: trainingProgress ? "Progression week" : "Latest PR",
         }),
       ),
+      trainingProgress && trainingProgress.expectedBoxDays
+        ? h(
+            "section",
+            { className: "panel", "aria-label": "Weekly training schedule" },
+            h("h3", null, "This week"),
+            h(
+              "p",
+              { className: "muted-copy" },
+              `${trainingProgress.completedProgramWorkouts} of ${trainingProgress.programTarget} app sessions · ${trainingProgress.completedBoxWorkouts} of ${trainingProgress.expectedBoxDays} box workouts`,
+            ),
+            h(
+              "ul",
+              null,
+              logsThisWeek
+                .filter((log) => log.workoutSource === "box")
+                .map((log) =>
+                  h(
+                    "li",
+                    { key: log.id },
+                    `✓ ${formatDate(log.date)} — ${log.dayTitle}`,
+                  ),
+                ),
+              Array.from(
+                {
+                  length: Math.max(
+                    0,
+                    trainingProgress.expectedBoxDays -
+                      trainingProgress.completedBoxWorkouts,
+                  ),
+                },
+                (_value, index) =>
+                  h("li", { key: `box-placeholder-${index}` }, "○ Box workout"),
+              ),
+            ),
+          )
+        : null,
       h(
         "div",
         { id: "nextSession" },
@@ -2926,7 +3044,9 @@
     return {
       id: plan.id,
       week: plan.week,
-      weekday: `Week ${plan.week}`,
+      weekday: plan.preferredDay
+        ? plan.preferredDay[0].toUpperCase() + plan.preferredDay.slice(1)
+        : `Week ${plan.week}`,
       shortTitle: plan.title,
       title: plan.title,
       focus: plan.focus,
@@ -2934,6 +3054,8 @@
       segments: customPlanSegments(plan),
       addOns: plan.addOns || [],
       duration: plan.duration,
+      twoDayStrategy: Boolean(plan.twoDayStrategy),
+      readinessVariant: plan.readinessVariant,
     };
   }
 
@@ -2966,6 +3088,10 @@
     onDelete = null,
     onTimerFinish,
   }) {
+    const [readiness, setReadiness] = ReactRuntime.useState("normal");
+    const readinessSession = session.twoDayStrategy
+      ? applyReadinessVariant(session, readiness)
+      : session;
     return h(
       "article",
       { className: "day-card", id: session.id },
@@ -2989,9 +3115,33 @@
           { className: "muted-copy" },
           session.focus || "Custom training session",
         ),
-        h(SegmentList, { segments: session.segments }),
-        session.addOns && session.addOns.length
-          ? h(AddOnList, { addOns: session.addOns })
+        session.twoDayStrategy
+          ? h(
+              "label",
+              null,
+              "Pre-workout readiness",
+              h(
+                "select",
+                {
+                  value: readiness,
+                  onChange: (event) => setReadiness(event.target.value),
+                },
+                h("option", { value: "low" }, "Low — reduce volume"),
+                h("option", { value: "normal" }, "Normal — use the plan"),
+                h("option", { value: "high" }, "High — optional accessory"),
+              ),
+            )
+          : null,
+        readiness === "low" && session.twoDayStrategy
+          ? h(
+              "p",
+              { className: "warning-copy" },
+              "Use 75% of accessory and conditioning volume. Keep technical work; avoid maximal attempts.",
+            )
+          : null,
+        h(SegmentList, { segments: readinessSession.segments }),
+        readinessSession.addOns && readinessSession.addOns.length
+          ? h(AddOnList, { addOns: readinessSession.addOns })
           : null,
         h(WorkoutTimer, { session, onFinish: onTimerFinish }),
         h(
@@ -4678,6 +4828,43 @@
                   ),
                 )
               : null,
+            activePlan?.kind === "generated"
+              ? (() => {
+                  const settings = normalizeGeneratorOptions(
+                    activePlan.generatorOptions,
+                  );
+                  return h(
+                    "div",
+                    {
+                      className: "plan-review",
+                      "aria-label": "Active plan settings",
+                    },
+                    h("h4", null, "Active plan settings"),
+                    h(
+                      "p",
+                      null,
+                      `Weekly app workouts: ${settings.programDaysPerWeek}`,
+                    ),
+                    h(
+                      "p",
+                      null,
+                      `Expected box workouts: ${settings.expectedBoxDays}`,
+                    ),
+                    h(
+                      "p",
+                      null,
+                      `Preferred app days: ${settings.preferredProgramDays
+                        .map((day) => day[0].toUpperCase() + day.slice(1))
+                        .join(" and ")}`,
+                    ),
+                    h(
+                      "p",
+                      null,
+                      `Session duration: ${settings.sessionDuration} minutes`,
+                    ),
+                  );
+                })()
+              : null,
           )
         : null,
       h(CustomPlanForm, {
@@ -4743,16 +4930,55 @@
     initialOptions,
     onNotify,
   }) {
+    const normalizedInitial = normalizeGeneratorOptions(initialOptions || {});
     const defaults = {
-      goal: initialOptions?.goal || "stronger",
-      daysPerWeek: Number(initialOptions?.daysPerWeek) || 4,
+      goal: initialOptions ? normalizedInitial.primaryGoal : "stronger",
+      secondaryGoal: initialOptions ? normalizedInitial.secondaryGoal : null,
+      daysPerWeek: initialOptions ? normalizedInitial.programDaysPerWeek : 4,
       weakness: initialOptions?.weakness || "squat",
       barMuscleUpLevel: initialOptions?.barMuscleUpLevel || "highPull",
       athleteLevel: initialOptions?.athleteLevel || "intermediate",
-      duration: positiveNumber(initialOptions?.duration, 60),
+      duration: initialOptions ? normalizedInitial.sessionDuration : 60,
+      usesBoxProgramming: initialOptions
+        ? normalizedInitial.usesBoxProgramming
+        : false,
+      expectedBoxDays: initialOptions ? normalizedInitial.expectedBoxDays : 0,
+      totalTrainingDays: initialOptions
+        ? normalizedInitial.totalTrainingDays
+        : 4,
+      preferredProgramDays: initialOptions
+        ? normalizedInitial.preferredProgramDays
+        : ["monday", "tuesday", "thursday", "saturday"],
+      availableEquipment: initialOptions
+        ? normalizedInitial.availableEquipment
+        : Object.keys(EQUIPMENT_OPTIONS),
+      barbellDropPolicy: initialOptions
+        ? normalizedInitial.barbellDropPolicy
+        : "allowed",
     };
     const [selectedGoal, setSelectedGoal] = ReactRuntime.useState(
       defaults.goal,
+    );
+    const [selectedFrequency, setSelectedFrequency] = ReactRuntime.useState(
+      defaults.daysPerWeek,
+    );
+    const [usesBoxProgramming, setUsesBoxProgramming] = ReactRuntime.useState(
+      defaults.usesBoxProgramming,
+    );
+    const [selectedDuration, setSelectedDuration] = ReactRuntime.useState(
+      defaults.duration,
+    );
+    const [expectedBoxDays, setExpectedBoxDays] = ReactRuntime.useState(
+      defaults.expectedBoxDays || 2,
+    );
+    const [totalTrainingDays, setTotalTrainingDays] = ReactRuntime.useState(
+      defaults.totalTrainingDays,
+    );
+    const [preferredDays, setPreferredDays] = ReactRuntime.useState(
+      defaults.preferredProgramDays,
+    );
+    const [availableEquipment, setAvailableEquipment] = ReactRuntime.useState(
+      defaults.availableEquipment,
     );
     return h(
       "form",
@@ -4765,13 +4991,25 @@
             /** @type {HTMLFormElement} */ (event.currentTarget),
           );
           const options = {
-            goal: String(data.get("generatorGoal") || "stronger"),
-            daysPerWeek: Number(data.get("generatorDays") || 4),
+            primaryGoal: String(data.get("generatorGoal") || "stronger"),
+            secondaryGoal: String(data.get("secondaryGoal") || "") || null,
+            programDaysPerWeek: Number(data.get("generatorDays") || 4),
             weakness:
               selectedGoal === "barMuscleUp"
                 ? "muscleup"
                 : String(data.get("generatorWeakness") || "squat"),
-            duration: positiveNumber(data.get("generatorDuration"), 60),
+            sessionDuration: positiveNumber(
+              data.get("generatorDuration"),
+              selectedFrequency === 2 ? 75 : 60,
+            ),
+            usesBoxProgramming,
+            expectedBoxDays: usesBoxProgramming ? expectedBoxDays : 0,
+            totalTrainingDays,
+            preferredProgramDays: preferredDays,
+            availableEquipment,
+            barbellDropPolicy: String(
+              data.get("barbellDropPolicy") || "allowed",
+            ),
             athleteLevel: String(
               data.get("generatorAthleteLevel") || "intermediate",
             ),
@@ -4781,6 +5019,31 @@
               data.get("barMuscleUpLevel") || "highPull",
             );
           }
+          if (preferredDays.length !== options.programDaysPerWeek) {
+            onNotify(
+              `Select exactly ${options.programDaysPerWeek} preferred app days.`,
+            );
+            return;
+          }
+          if (
+            totalTrainingDays !==
+            options.programDaysPerWeek + options.expectedBoxDays
+          ) {
+            onNotify(
+              "Total weekly training must equal app-programmed plus expected box workouts.",
+            );
+            return;
+          }
+          if (
+            !["barbell", "rack", "pullupBar"].every((item) =>
+              availableEquipment.includes(item),
+            )
+          ) {
+            onNotify(
+              "Barbell, rack, and pull-up bar are required for this progression programme.",
+            );
+            return;
+          }
           const generationSeed = createGenerationSeed();
           try {
             const generatedPlans = buildGeneratedProgramme(
@@ -4789,7 +5052,7 @@
               createId,
               generationSeed,
             );
-            const expectedSessionCount = options.daysPerWeek * 8;
+            const expectedSessionCount = options.programDaysPerWeek * 8;
             if (generatedPlans.length !== expectedSessionCount) {
               throw new Error(
                 `Expected ${expectedSessionCount} generated sessions, received ${generatedPlans.length}.`,
@@ -4800,7 +5063,13 @@
                 generatedPlans.filter(
                   (session) => Number(session?.week) === week,
                 ),
-                { requiredTimeDomains: ["short", "medium", "long"] },
+                {
+                  requiredTimeDomains:
+                    options.programDaysPerWeek === 2
+                      ? ["short", "long"]
+                      : ["short", "medium", "long"],
+                  requireTwoDayStructure: options.programDaysPerWeek === 2,
+                },
               );
             }
             onGenerate({
@@ -4861,19 +5130,100 @@
         h(
           "label",
           null,
-          "Sessions per week",
+          "App-programmed sessions",
           h(
             "select",
             {
               id: "generatorDays",
               name: "generatorDays",
               required: true,
-              defaultValue: String(defaults.daysPerWeek),
+              value: String(selectedFrequency),
+              onChange: (event) => {
+                const frequency = Number(event.target.value);
+                setSelectedFrequency(frequency);
+                if (usesBoxProgramming) {
+                  const boxDays = Math.max(
+                    1,
+                    Math.min(6, totalTrainingDays - frequency),
+                  );
+                  setExpectedBoxDays(boxDays);
+                  setTotalTrainingDays(frequency + boxDays);
+                } else {
+                  setTotalTrainingDays((current) =>
+                    Math.max(frequency, current),
+                  );
+                }
+                const defaultsByFrequency = {
+                  2: ["tuesday", "saturday"],
+                  3: ["monday", "wednesday", "saturday"],
+                  4: ["monday", "tuesday", "thursday", "saturday"],
+                  5: ["monday", "tuesday", "wednesday", "friday", "saturday"],
+                };
+                setPreferredDays(defaultsByFrequency[frequency]);
+                setSelectedDuration(frequency === 2 ? 75 : 60);
+              },
             },
-            h("option", { value: "4" }, "4 days"),
+            h("option", { value: "2" }, "2 days"),
             h("option", { value: "3" }, "3 days"),
-            h("option", { value: "5" }, "5 days"),
+            h("option", { value: "4" }, "4 days"),
+            defaults.daysPerWeek === 5
+              ? h("option", { value: "5" }, "5 days (existing plan)")
+              : null,
           ),
+        ),
+      ),
+      h(
+        "label",
+        null,
+        "Total weekly training",
+        h(
+          "select",
+          {
+            id: "totalTrainingDays",
+            name: "totalTrainingDays",
+            value: String(totalTrainingDays),
+            onChange: (event) => {
+              const total = Number(event.target.value);
+              if (usesBoxProgramming) {
+                const boxDays = Math.max(
+                  1,
+                  Math.min(6, total - selectedFrequency),
+                );
+                setExpectedBoxDays(boxDays);
+                setTotalTrainingDays(selectedFrequency + boxDays);
+              } else {
+                setTotalTrainingDays(total);
+              }
+            },
+          },
+          [2, 3, 4, 5, 6, 7, 8, 9, 10].map((days) =>
+            h(
+              "option",
+              {
+                key: days,
+                value: String(days),
+                disabled: days < selectedFrequency,
+              },
+              `${days} sessions`,
+            ),
+          ),
+        ),
+      ),
+      h(
+        "label",
+        null,
+        "Secondary goal (optional)",
+        h(
+          "select",
+          {
+            id: "secondaryGoal",
+            name: "secondaryGoal",
+            defaultValue: defaults.secondaryGoal || "",
+          },
+          h("option", { value: "" }, "No secondary goal"),
+          Object.entries(GOAL_LABELS)
+            .filter(([value]) => value !== selectedGoal)
+            .map(([value, label]) => h("option", { key: value, value }, label)),
         ),
       ),
       h(
@@ -4918,16 +5268,24 @@
           "label",
           null,
           "Max session length",
-          h("input", {
-            id: "generatorDuration",
-            name: "generatorDuration",
-            type: "number",
-            min: "45",
-            max: "60",
-            step: "5",
-            inputMode: "numeric",
-            defaultValue: String(defaults.duration),
-          }),
+          h(
+            "select",
+            {
+              id: "generatorDuration",
+              name: "generatorDuration",
+              value: String(selectedDuration),
+              onChange: (event) =>
+                setSelectedDuration(Number(event.target.value)),
+            },
+            (selectedFrequency === 2 ? [60, 75, 90] : [45, 50, 55, 60]).map(
+              (minutes) =>
+                h(
+                  "option",
+                  { key: minutes, value: String(minutes) },
+                  `${minutes} minutes`,
+                ),
+            ),
+          ),
         ),
       ),
       h(
@@ -4946,6 +5304,144 @@
             h("option", { key: value, value }, label),
           ),
         ),
+      ),
+      h(
+        "section",
+        { className: "builder-subsection", "aria-label": "Box training" },
+        h(
+          "label",
+          { className: "check-row" },
+          h("input", {
+            id: "usesBoxProgramming",
+            name: "usesBoxProgramming",
+            type: "checkbox",
+            checked: usesBoxProgramming,
+            onChange: (event) => {
+              const checked = event.target.checked;
+              setUsesBoxProgramming(checked);
+              if (checked) {
+                const boxDays = Math.max(
+                  1,
+                  Math.min(6, totalTrainingDays - selectedFrequency),
+                );
+                setExpectedBoxDays(boxDays);
+                setTotalTrainingDays(selectedFrequency + boxDays);
+              } else {
+                setTotalTrainingDays(selectedFrequency);
+              }
+            },
+          }),
+          "I also follow workouts at a CrossFit box",
+        ),
+        usesBoxProgramming
+          ? h(
+              "label",
+              null,
+              "Expected box workouts",
+              h("input", {
+                id: "expectedBoxDays",
+                name: "expectedBoxDays",
+                type: "number",
+                min: "1",
+                max: "6",
+                step: "1",
+                value: String(expectedBoxDays),
+                onChange: (event) => {
+                  const boxDays = Number(event.target.value);
+                  setExpectedBoxDays(boxDays);
+                  setTotalTrainingDays(selectedFrequency + boxDays);
+                },
+              }),
+            )
+          : null,
+      ),
+      h(
+        "fieldset",
+        { className: "builder-subsection" },
+        h("legend", null, "Preferred app days"),
+        DAY_OF_WEEK_OPTIONS.map((day) =>
+          h(
+            "label",
+            { key: day, className: "check-row" },
+            h("input", {
+              type: "checkbox",
+              name: "preferredProgramDay",
+              value: day,
+              checked: preferredDays.includes(day),
+              onChange: (event) =>
+                setPreferredDays((current) =>
+                  event.target.checked
+                    ? [...current, day]
+                    : current.filter((item) => item !== day),
+                ),
+            }),
+            day[0].toUpperCase() + day.slice(1),
+          ),
+        ),
+        h(
+          "p",
+          { className: "muted-copy" },
+          "Ideally, leave at least one day between app-programmed sessions.",
+        ),
+      ),
+      h(
+        "fieldset",
+        { className: "builder-subsection" },
+        h("legend", null, "Available equipment"),
+        Object.entries(EQUIPMENT_OPTIONS).map(([value, label]) => {
+          const required = ["barbell", "rack", "pullupBar"].includes(value);
+          return h(
+            "label",
+            { key: value, className: "check-row" },
+            h("input", {
+              type: "checkbox",
+              name: "availableEquipment",
+              value,
+              checked: availableEquipment.includes(value),
+              disabled: required,
+              onChange: (event) =>
+                setAvailableEquipment((current) =>
+                  event.target.checked
+                    ? [...current, value]
+                    : current.filter((item) => item !== value),
+                ),
+            }),
+            `${label}${required ? " (required)" : ""}`,
+          );
+        }),
+      ),
+      h(
+        "label",
+        null,
+        "Barbell dropping",
+        h(
+          "select",
+          {
+            id: "barbellDropPolicy",
+            name: "barbellDropPolicy",
+            defaultValue: defaults.barbellDropPolicy,
+          },
+          h("option", { value: "allowed" }, "Allowed"),
+          h("option", { value: "drop_pads_only" }, "Drop pads required"),
+          h("option", { value: "not_allowed" }, "Barbell cannot be dropped"),
+        ),
+      ),
+      h(
+        "section",
+        { className: "plan-review", "aria-label": "Your weekly structure" },
+        h("h4", null, "Your weekly structure"),
+        h(
+          "p",
+          null,
+          `${selectedFrequency} app-programmed progression sessions`,
+        ),
+        h(
+          "p",
+          null,
+          `${usesBoxProgramming ? expectedBoxDays : 0} expected CrossFit box workouts`,
+        ),
+        h("p", null, `${totalTrainingDays} total training sessions`),
+        h("p", null, `${selectedDuration} minutes per app session`),
       ),
       h(
         "label",
@@ -5351,6 +5847,7 @@
     onClearLogs,
   }) {
     const [formVersion, setFormVersion] = ReactRuntime.useState(0);
+    const [workoutSource, setWorkoutSource] = ReactRuntime.useState("app");
     const selectedWeek = appState.selectedWeek;
     const activePlan = selectActivePlan(appState);
     const selectedDayId =
@@ -5390,13 +5887,24 @@
           onSubmit: async (event) => {
             event.preventDefault();
             const data = new FormData(event.currentTarget);
-            const storedDay = findTrainingSessionForState(
-              String(data.get("logDay")),
-              Number(data.get("logWeek")),
-              appState,
-            );
-            const day =
-              matchingTimer?.sessionSnapshot?.id === String(data.get("logDay"))
+            const isBoxWorkout = workoutSource === "box";
+            const storedDay = isBoxWorkout
+              ? null
+              : findTrainingSessionForState(
+                  String(data.get("logDay")),
+                  Number(data.get("logWeek")),
+                  appState,
+                );
+            const day = isBoxWorkout
+              ? {
+                  id: `box-${String(data.get("logDate"))}-${createId()}`,
+                  week: Number(data.get("logWeek")),
+                  shortTitle:
+                    String(data.get("boxWorkoutTitle") || "").trim() ||
+                    "CrossFit box workout",
+                }
+              : matchingTimer?.sessionSnapshot?.id ===
+                  String(data.get("logDay"))
                 ? matchingTimer.sessionSnapshot
                 : storedDay;
 
@@ -5414,7 +5922,21 @@
               week: day.week || Number(data.get("logWeek")),
               dayId: day.id,
               dayTitle: day.shortTitle,
-              readiness: String(data.get("readiness")),
+              workoutSource: isBoxWorkout
+                ? "box"
+                : activePlan?.kind === "custom"
+                  ? "custom"
+                  : "app",
+              readiness: isBoxWorkout ? null : String(data.get("readiness")),
+              difficulty: isBoxWorkout
+                ? Number(data.get("boxDifficulty"))
+                : null,
+              movementPatterns: isBoxWorkout
+                ? data.getAll("boxMovementPattern").map(String)
+                : [],
+              durationMinutes: isBoxWorkout
+                ? Number(data.get("boxDuration"))
+                : null,
               rpe: String(data.get("rpe") || "").trim(),
               strengthResult: String(data.get("strengthResult") || "").trim(),
               wodScore: String(data.get("wodScore") || "").trim(),
@@ -5435,6 +5957,22 @@
             }
           },
         },
+        h(
+          "label",
+          null,
+          "Workout type",
+          h(
+            "select",
+            {
+              id: "workoutSource",
+              name: "workoutSource",
+              value: workoutSource,
+              onChange: (event) => setWorkoutSource(event.target.value),
+            },
+            h("option", { value: "app" }, "App-programmed workout"),
+            h("option", { value: "box" }, "CrossFit box workout"),
+          ),
+        ),
         h(
           "div",
           { className: "form-row" },
@@ -5470,70 +6008,148 @@
             ),
           ),
         ),
-        h(
-          "label",
-          null,
-          "Session",
-          h(
-            "select",
-            {
-              id: "logDay",
-              name: "logDay",
-              required: true,
-              disabled: Boolean(
-                activePlan &&
-                !activeSessions.length &&
-                !matchingTimer?.sessionSnapshot,
-              ),
-              value: selectedDayId,
-              onChange: (event) =>
-                onLogSelectionChange({
-                  dayId: event.target.value,
+        workoutSource === "box"
+          ? h(
+              ReactRuntime.Fragment,
+              null,
+              h(
+                "label",
+                null,
+                "Box workout name",
+                h("input", {
+                  id: "boxWorkoutTitle",
+                  name: "boxWorkoutTitle",
+                  type: "text",
+                  placeholder: "Community WOD",
                 }),
-            },
-            h(
-              "optgroup",
-              { label: activePlan?.title || "CrossFit Training Programme" },
-              activePlan
-                ? activeSessions.length
-                  ? activeSessions.map((session) =>
+              ),
+              h(
+                "div",
+                { className: "form-row" },
+                h(
+                  "label",
+                  null,
+                  "Estimated difficulty",
+                  h(
+                    "select",
+                    {
+                      id: "boxDifficulty",
+                      name: "boxDifficulty",
+                      defaultValue: "3",
+                    },
+                    [1, 2, 3, 4, 5].map((value) =>
                       h(
                         "option",
-                        { key: session.id, value: session.id },
-                        `Week ${session.week}: ${session.title}`,
+                        { key: value, value: String(value) },
+                        String(value),
                       ),
-                    )
-                  : h(
-                      "option",
-                      { value: "", disabled: true },
-                      `No sessions scheduled for week ${selectedWeek}`,
-                    )
-                : getProgramDays().map((day) =>
-                    h(
-                      "option",
-                      { key: day.id, value: day.id },
-                      `${day.weekday} - ${day.shortTitle}`,
                     ),
                   ),
-            ),
-            matchingTimer?.sessionSnapshot &&
-              !findTrainingSessionForState(
-                matchingTimer.sessionSnapshot.id,
-                selectedWeek,
-                appState,
-              )
-              ? h(
-                  "optgroup",
-                  { label: "Competition proof" },
+                ),
+                h(
+                  "label",
+                  null,
+                  "Conditioning duration",
+                  h("input", {
+                    id: "boxDuration",
+                    name: "boxDuration",
+                    type: "number",
+                    min: "1",
+                    max: "300",
+                    step: "1",
+                    defaultValue: "60",
+                  }),
+                ),
+              ),
+              h(
+                "fieldset",
+                null,
+                h("legend", null, "Main movement categories"),
+                [
+                  ["squat", "Heavy squats"],
+                  ["hinge", "Deadlifts or hinging"],
+                  ["olympic_lifting", "Olympic lifting"],
+                  ["vertical_pull", "Pull-ups or muscle-ups"],
+                  ["vertical_push", "Pressing"],
+                  ["long_conditioning", "Long conditioning"],
+                  ["short_conditioning", "Short conditioning"],
+                  ["aerobic", "Rowing, cycling, or running"],
+                ].map(([value, label]) =>
                   h(
-                    "option",
-                    { value: matchingTimer.sessionSnapshot.id },
-                    matchingTimer.sessionSnapshot.shortTitle,
+                    "label",
+                    { key: value, className: "check-row" },
+                    h("input", {
+                      type: "checkbox",
+                      name: "boxMovementPattern",
+                      value,
+                    }),
+                    label,
                   ),
-                )
-              : null,
-          ),
-        ),
+                ),
+              ),
+            )
+          : h(
+              "label",
+              null,
+              "Session",
+              h(
+                "select",
+                {
+                  id: "logDay",
+                  name: "logDay",
+                  required: true,
+                  disabled: Boolean(
+                    activePlan &&
+                    !activeSessions.length &&
+                    !matchingTimer?.sessionSnapshot,
+                  ),
+                  value: selectedDayId,
+                  onChange: (event) =>
+                    onLogSelectionChange({ dayId: event.target.value }),
+                },
+                h(
+                  "optgroup",
+                  { label: activePlan?.title || "CrossFit Training Programme" },
+                  activePlan
+                    ? activeSessions.length
+                      ? activeSessions.map((session) =>
+                          h(
+                            "option",
+                            { key: session.id, value: session.id },
+                            `Week ${session.week}: ${session.title}`,
+                          ),
+                        )
+                      : h(
+                          "option",
+                          { value: "", disabled: true },
+                          `No sessions scheduled for week ${selectedWeek}`,
+                        )
+                    : getProgramDays().map((day) =>
+                        h(
+                          "option",
+                          { key: day.id, value: day.id },
+                          `${day.weekday} - ${day.shortTitle}`,
+                        ),
+                      ),
+                ),
+                matchingTimer?.sessionSnapshot &&
+                  !findTrainingSessionForState(
+                    matchingTimer.sessionSnapshot.id,
+                    selectedWeek,
+                    appState,
+                  )
+                  ? h(
+                      "optgroup",
+                      { label: "Competition proof" },
+                      h(
+                        "option",
+                        { value: matchingTimer.sessionSnapshot.id },
+                        matchingTimer.sessionSnapshot.shortTitle,
+                      ),
+                    )
+                  : null,
+              ),
+            ),
         h(
           "div",
           { className: "form-row" },
@@ -5720,9 +6336,34 @@
         { className: "history-meta" },
         h(
           "span",
-          { className: `metric-pill readiness-${log.readiness}` },
-          READINESS_LABELS[log.readiness] || log.readiness,
+          { className: "metric-pill" },
+          log.workoutSource === "box"
+            ? "Box workout"
+            : log.workoutSource === "custom"
+              ? "Custom workout"
+              : "App workout",
         ),
+        log.readiness
+          ? h(
+              "span",
+              { className: `metric-pill readiness-${log.readiness}` },
+              READINESS_LABELS[log.readiness] || log.readiness,
+            )
+          : null,
+        log.difficulty
+          ? h(
+              "span",
+              { className: "metric-pill" },
+              `Difficulty ${log.difficulty}/5`,
+            )
+          : null,
+        log.durationMinutes
+          ? h(
+              "span",
+              { className: "metric-pill" },
+              `${log.durationMinutes} min`,
+            )
+          : null,
         log.rpe
           ? h("span", { className: "metric-pill" }, `RPE ${log.rpe}`)
           : null,

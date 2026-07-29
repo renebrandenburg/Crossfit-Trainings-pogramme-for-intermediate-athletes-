@@ -196,7 +196,11 @@ test("Supabase sync helpers map workout logs to database rows and back", () => {
     week: 2,
     dayId: "day1",
     dayTitle: "Back squat + T2B",
+    workoutSource: "app",
     readiness: "green",
+    difficulty: null,
+    movementPatterns: [],
+    durationMinutes: null,
     rpe: "8",
     strengthResult: "Back squat smooth",
     wodScore: "4 rounds",
@@ -233,6 +237,106 @@ test("Supabase sync helpers map workout logs to database rows and back", () => {
     "user-1",
   );
   assert.equal("competition_proof" in ordinaryRow, false);
+});
+
+test("Supabase sync maps lightweight box workout logs", () => {
+  const log = {
+    id: "box-log-1",
+    date: "2026-07-29",
+    week: 1,
+    dayId: "box-2026-07-29",
+    dayTitle: "Community WOD",
+    workoutSource: "box",
+    readiness: null,
+    difficulty: 4,
+    movementPatterns: ["squat", "long_conditioning"],
+    durationMinutes: 55,
+    rpe: "",
+    strengthResult: "",
+    wodScore: "",
+    timerResult: null,
+    competitionProof: null,
+    notes: "Heavy legs",
+    mobilityDone: false,
+    createdAt: "2026-07-29T10:00:00.000Z",
+  };
+  const row = logToRow(log, "user-1");
+  assert.equal(row.workout_source, "box");
+  assert.equal(row.readiness, null);
+  assert.deepEqual(row.movement_patterns, ["squat", "long_conditioning"]);
+  assert.deepEqual(rowToLog(row), log);
+});
+
+test("Supabase sync preserves box metadata across a legacy workout-log schema", async () => {
+  const boxLog = {
+    id: "legacy-box-log",
+    date: "2026-07-29",
+    week: 1,
+    dayId: "box-2026-07-29",
+    dayTitle: "Community WOD",
+    workoutSource: "box",
+    readiness: null,
+    difficulty: 4,
+    movementPatterns: ["squat", "long_conditioning"],
+    durationMinutes: 55,
+    notes: "Heavy legs",
+    createdAt: "2026-07-29T10:00:00.000Z",
+  };
+  const missingColumns = [
+    "workout_source",
+    "difficulty",
+    "movement_patterns",
+    "duration_minutes",
+  ];
+  const calls = [];
+  const client = {
+    from: () => ({
+      upsert: async (payload) => {
+        calls.push(payload);
+        const missingColumn = missingColumns.find(
+          (column) => column in payload,
+        );
+        if (missingColumn) {
+          return {
+            data: null,
+            error: {
+              code: "PGRST204",
+              message: `Could not find the '${missingColumn}' column in the schema cache`,
+            },
+          };
+        }
+        return { data: payload, error: null };
+      },
+    }),
+  };
+
+  const result = await createSupabaseStore(client).saveLog(boxLog, "user-1");
+  const compatiblePayload = calls.at(-1);
+  assert.equal(result.workoutMetadataSynced, false);
+  missingColumns.forEach((column) => {
+    assert.equal(Object.hasOwn(compatiblePayload, column), false);
+  });
+  assert.equal(compatiblePayload.readiness, "green");
+
+  const legacyRemote = rowToLog({
+    ...compatiblePayload,
+    id: boxLog.id,
+    date: boxLog.date,
+    week: boxLog.week,
+    day_id: boxLog.dayId,
+    day_title: boxLog.dayTitle,
+    created_at: boxLog.createdAt,
+  });
+  const merged = mergeById([boxLog], [legacyRemote]);
+  assert.equal(merged[0].workoutSource, "box");
+  assert.equal(merged[0].readiness, null);
+  assert.equal(merged[0].difficulty, 4);
+  assert.deepEqual(merged[0].movementPatterns, ["squat", "long_conditioning"]);
+  assert.equal(merged[0].durationMinutes, 55);
+  assert.deepEqual(
+    unsyncedById([boxLog], [legacyRemote]).map((log) => log.id),
+    [boxLog.id],
+  );
 });
 
 test("Supabase sync omits optional log columns missing from a legacy schema", async () => {
@@ -340,6 +444,7 @@ test("Supabase retry sends timer and proof payloads after a legacy schema upgrad
     prs: 0,
     competitionProofPending: 1,
     timerResultPending: 1,
+    workoutMetadataPending: 0,
   });
   assert.deepEqual(retry, {
     logs: 1,
@@ -347,6 +452,7 @@ test("Supabase retry sends timer and proof payloads after a legacy schema upgrad
     prs: 0,
     competitionProofPending: 0,
     timerResultPending: 0,
+    workoutMetadataPending: 0,
   });
   assert.equal(calls.length, 4);
   assert.equal(calls[0][0].competition_proof.proofId, "proof-1");
@@ -588,6 +694,7 @@ test("Supabase score sync never uploads canonical training plans", async () => {
     prs: 0,
     competitionProofPending: 0,
     timerResultPending: 0,
+    workoutMetadataPending: 0,
   });
   assert.deepEqual(tables, []);
 });

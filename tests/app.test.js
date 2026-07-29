@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 
 const {
   ATHLETE_LEVELS,
+  applyReadinessVariant,
   DEFAULT_PROFILE,
   DIVISION_LABELS,
   MOVEMENT_LIBRARY,
@@ -32,6 +33,8 @@ const {
   kg,
   migrateGeneratedProgrammePlans,
   migratePlanState,
+  regeneratePlanFrequency,
+  normalizeGeneratorOptions,
   normalizePrValue,
   parseTimeToSeconds,
   percent,
@@ -47,6 +50,8 @@ const {
   renderWorkoutDescription,
   validateWorkoutDefinition,
   validateGeneratedWeek,
+  validateWeeklyPlan,
+  weeklyTrainingProgress,
   workoutExpectedDurationSeconds,
   workoutDefinitionErrors,
   workoutItemsForSession,
@@ -65,6 +70,21 @@ function wodSegment(session) {
 
 function wodItems(session) {
   return workoutItemsForSession(session);
+}
+
+function definitionExercises(definition) {
+  const main =
+    definition?.format?.type === "emom"
+      ? (definition.format.stations || []).flatMap(
+          (station) => station.exercises || [],
+        )
+      : definition?.exercises || [];
+  return [
+    ...(definition?.buyIn || []),
+    ...main,
+    ...(definition?.afterEachRound || []),
+    ...(definition?.cashOut || []),
+  ];
 }
 
 function daysAgo(days) {
@@ -267,6 +287,259 @@ test("needs-based generator creates complete eight-week programmes", () => {
   assert.match(dayOneWods.join(" "), /Benchmark/);
   assert.match(JSON.stringify(plans[0]), /Back squat/);
   assert.match(JSON.stringify(plans[0]), /pull-ups and chest-to-bar/);
+});
+
+test("two-day generator creates intentional progression weeks without truncation", () => {
+  const options = {
+    primaryGoal: "stronger",
+    secondaryGoal: "endurance",
+    programDaysPerWeek: 2,
+    weakness: "pulling",
+    sessionDuration: 75,
+    usesBoxProgramming: true,
+    expectedBoxDays: 2,
+    preferredProgramDays: ["tuesday", "saturday"],
+    availableEquipment: [
+      "barbell",
+      "rack",
+      "pullupBar",
+      "dumbbells",
+      "kettlebells",
+      "box",
+      "rings",
+      "rower",
+      "bike",
+      "running",
+    ],
+    barbellDropPolicy: "allowed",
+  };
+  const sessions = buildGeneratedProgramme(
+    options,
+    cloneDefaultProfile(),
+    (id) => id,
+    "two-day-seed",
+  );
+  assert.equal(sessions.length, 16);
+  for (let week = 1; week <= 8; week += 1) {
+    const weekSessions = sessions.filter((session) => session.week === week);
+    assert.equal(weekSessions.length, 2);
+    assert.ok(weekSessions.every((session) => session.twoDayStrategy));
+    assert.match(weekSessions[0].title, /Primary strength \+ skill/);
+    assert.match(weekSessions[1].title, /Secondary strength \+ engine/);
+    assert.ok(
+      weekSessions.every((session) => session.progressionBlocks.length >= 3),
+    );
+    assert.deepEqual(
+      validateWeeklyPlan(weekSessions, {
+        requiredTimeDomains: ["short", "long"],
+        requireTwoDayStructure: true,
+      }).errors,
+      [],
+    );
+  }
+});
+
+test("two-day readiness and frequency changes preserve canonical history", () => {
+  const profile = cloneDefaultProfile();
+  const fourDay = buildGeneratedProgramme(
+    { goal: "balanced", daysPerWeek: 4, weakness: "pulling", duration: 60 },
+    profile,
+    (id) => id,
+    "frequency-seed",
+  );
+  const completed = fourDay.find(
+    (session) => session.week === 2 && /D1:/.test(session.title),
+  );
+  const plan = {
+    id: "active-plan",
+    title: "Balanced programme",
+    kind: "generated",
+    generatorOptions: {
+      goal: "balanced",
+      daysPerWeek: 4,
+      weakness: "pulling",
+      duration: 60,
+    },
+    generationSeed: "frequency-seed",
+    createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-01T00:00:00.000Z",
+    sessions: fourDay,
+  };
+  const nextPlan = regeneratePlanFrequency({
+    plan,
+    options: {
+      ...plan.generatorOptions,
+      programDaysPerWeek: 2,
+      sessionDuration: 75,
+      usesBoxProgramming: true,
+      expectedBoxDays: 2,
+      preferredProgramDays: ["tuesday", "saturday"],
+    },
+    profile,
+    selectedWeek: 2,
+    logs: [
+      {
+        id: "completed-log",
+        week: 2,
+        dayId: completed.id,
+        workoutSource: "app",
+      },
+    ],
+    idFactory: (id) => id,
+  });
+  assert.equal(
+    nextPlan.sessions.find((session) => session.id === completed.id),
+    completed,
+  );
+  assert.equal(
+    nextPlan.sessions.filter((session) => session.week === 2).length,
+    2,
+  );
+  assert.equal(
+    nextPlan.sessions.filter((session) => session.week === 3).length,
+    2,
+  );
+
+  const progress = weeklyTrainingProgress(
+    nextPlan,
+    [
+      {
+        id: "completed-log",
+        week: 2,
+        dayId: completed.id,
+        workoutSource: "app",
+      },
+      { id: "box-log", week: 2, dayId: "box-1", workoutSource: "box" },
+    ],
+    2,
+  );
+  assert.equal(progress.completedProgramWorkouts, 1);
+  assert.equal(progress.completedBoxWorkouts, 1);
+  assert.equal(progress.totalCompleted, 2);
+  assert.equal(progress.progressionComplete, false);
+
+  const low = applyReadinessVariant(
+    nextPlan.sessions.find((session) => session.twoDayStrategy),
+    "low",
+  );
+  assert.equal(low.runtimeVolumeMultiplier, 0.75);
+  assert.equal(
+    nextPlan.sessions.find((session) => session.twoDayStrategy)
+      .runtimeVolumeMultiplier,
+    undefined,
+  );
+});
+
+test("weekly progress counts custom sessions by source and de-duplicates programme logs", () => {
+  const customPlan = {
+    id: "custom-plan",
+    kind: "custom",
+    sessions: [{ id: "custom-day", week: 1 }],
+  };
+  const customProgress = weeklyTrainingProgress(
+    customPlan,
+    [
+      {
+        id: "custom-log",
+        week: 1,
+        dayId: "custom-day",
+        workoutSource: "custom",
+      },
+    ],
+    1,
+  );
+  assert.equal(customProgress.completedProgramWorkouts, 1);
+  assert.equal(customProgress.totalCompleted, 1);
+  assert.equal(customProgress.totalTarget, 1);
+  assert.equal(customProgress.progressionComplete, true);
+
+  const generatedPlan = {
+    id: "generated-plan",
+    kind: "generated",
+    generatorOptions: { programDaysPerWeek: 2 },
+    sessions: [
+      { id: "day-one", week: 1 },
+      { id: "day-two", week: 1 },
+    ],
+  };
+  const duplicateProgress = weeklyTrainingProgress(
+    generatedPlan,
+    [
+      { id: "first", week: 1, dayId: "day-one", workoutSource: "app" },
+      { id: "retry", week: 1, dayId: "day-one", workoutSource: "app" },
+    ],
+    1,
+  );
+  assert.equal(duplicateProgress.completedProgramWorkouts, 1);
+  assert.equal(duplicateProgress.totalCompleted, 1);
+  assert.equal(duplicateProgress.progressionComplete, false);
+});
+
+test("generator options derive total training days from app and box frequency", () => {
+  assert.deepEqual(
+    normalizeGeneratorOptions({
+      programDaysPerWeek: 2,
+      usesBoxProgramming: false,
+      expectedBoxDays: 5,
+      totalTrainingDays: 7,
+    }).totalTrainingDays,
+    2,
+  );
+  assert.deepEqual(
+    normalizeGeneratorOptions({
+      programDaysPerWeek: 2,
+      usesBoxProgramming: true,
+      expectedBoxDays: 2,
+      totalTrainingDays: 6,
+    }).totalTrainingDays,
+    4,
+  );
+});
+
+test("two-day generation respects minimal equipment and restricted barbell dropping", () => {
+  const availableEquipment = ["barbell", "rack", "pullupBar"];
+  const sessions = buildGeneratedProgramme(
+    {
+      primaryGoal: "endurance",
+      secondaryGoal: "olympicLifting",
+      programDaysPerWeek: 2,
+      weakness: "rowing",
+      sessionDuration: 75,
+      availableEquipment,
+      barbellDropPolicy: "drop_pads_only",
+    },
+    cloneDefaultProfile(),
+    (id) => id,
+    "minimal-equipment-no-drop",
+  );
+  const unavailable =
+    /row|bike|run|shuttle|dumbbell|\bDB\b|kettlebell|\bKB\b|box (?:jump|step)|ring/i;
+  sessions.forEach((session) => {
+    assert.deepEqual(session.availableEquipment, availableEquipment);
+    definitionExercises(session.workoutDefinition).forEach((exercise) => {
+      assert.doesNotMatch(exercise.movement, unavailable);
+      const movement = String(exercise.movement || "");
+      const loadedBarbell =
+        exercise.load &&
+        !/dumbbell|\bDB\b|kettlebell|\bKB\b|sandbag/i.test(movement) &&
+        /clean|snatch|deadlift|barbell|front squat|overhead squat|thruster|push press|jerk/i.test(
+          movement,
+        );
+      assert.equal(Boolean(loadedBarbell), false);
+    });
+  });
+  for (let week = 1; week <= 8; week += 1) {
+    assert.deepEqual(
+      validateWeeklyPlan(
+        sessions.filter((session) => session.week === week),
+        {
+          requiredTimeDomains: ["short", "long"],
+          requireTwoDayStructure: true,
+        },
+      ).errors,
+      [],
+    );
+  }
 });
 
 test("generated weeks satisfy short, medium, and long time domains", () => {

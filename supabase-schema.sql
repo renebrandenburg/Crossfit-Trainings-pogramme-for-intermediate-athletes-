@@ -5,7 +5,21 @@ create table if not exists public.workout_logs (
   week integer not null check (week between 1 and 8),
   day_id text not null,
   day_title text not null,
-  readiness text not null check (readiness in ('green', 'amber', 'red')),
+  workout_source text not null default 'app'
+    check (workout_source in ('app', 'box', 'custom')),
+  readiness text,
+  difficulty smallint check (difficulty is null or difficulty between 1 and 5),
+  movement_patterns text[] not null default '{}'
+    check (
+      movement_patterns <@ array[
+        'squat', 'hinge', 'horizontal_push', 'vertical_push',
+        'horizontal_pull', 'vertical_pull', 'olympic_lifting', 'gymnastics',
+        'short_conditioning', 'medium_conditioning', 'long_conditioning',
+        'aerobic', 'sprint'
+      ]::text[]
+    ),
+  duration_minutes integer
+    check (duration_minutes is null or duration_minutes between 1 and 300),
   rpe text,
   strength_result text,
   wod_score text,
@@ -13,7 +27,11 @@ create table if not exists public.workout_logs (
   competition_proof jsonb,
   notes text,
   mobility_done boolean not null default false,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint workout_logs_readiness_valid check (
+    (workout_source = 'box' and (readiness is null or readiness in ('green', 'amber', 'red')))
+    or (workout_source in ('app', 'custom') and readiness in ('green', 'amber', 'red'))
+  )
 );
 
 alter table public.workout_logs

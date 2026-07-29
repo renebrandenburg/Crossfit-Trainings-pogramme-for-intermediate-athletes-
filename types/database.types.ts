@@ -106,16 +106,20 @@ export type Database = {
           date: string
           day_id: string
           day_title: string
+          difficulty: number | null
+          duration_minutes: number | null
           id: string
           mobility_done: boolean
+          movement_patterns: string[]
           notes: string | null
-          readiness: string
+          readiness: string | null
           rpe: string | null
           strength_result: string | null
           timer_result: Json | null
           user_id: string
           week: number
           wod_score: string | null
+          workout_source: string
         }
         Insert: {
           competition_proof?: Json | null
@@ -123,16 +127,20 @@ export type Database = {
           date: string
           day_id: string
           day_title: string
+          difficulty?: number | null
+          duration_minutes?: number | null
           id: string
           mobility_done?: boolean
+          movement_patterns?: string[]
           notes?: string | null
-          readiness: string
+          readiness?: string | null
           rpe?: string | null
           strength_result?: string | null
           timer_result?: Json | null
           user_id: string
           week: number
           wod_score?: string | null
+          workout_source?: string
         }
         Update: {
           competition_proof?: Json | null
@@ -140,16 +148,20 @@ export type Database = {
           date?: string
           day_id?: string
           day_title?: string
+          difficulty?: number | null
+          duration_minutes?: number | null
           id?: string
           mobility_done?: boolean
+          movement_patterns?: string[]
           notes?: string | null
-          readiness?: string
+          readiness?: string | null
           rpe?: string | null
           strength_result?: string | null
           timer_result?: Json | null
           user_id?: string
           week?: number
           wod_score?: string | null
+          workout_source?: string
         }
         Relationships: []
       }

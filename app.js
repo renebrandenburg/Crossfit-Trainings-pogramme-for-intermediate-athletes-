@@ -959,8 +959,51 @@ const MOVEMENT_LIBRARY = [
 ];
 
 const WOD_SCHEMA_VERSION = 8;
-const PLAN_SCHEMA_VERSION = 3;
+const PLAN_SCHEMA_VERSION = 4;
 const WORKOUT_DEFINITION_VERSION = 1;
+const TRAINING_STIMULI = [
+  "squat",
+  "hinge",
+  "horizontal_push",
+  "vertical_push",
+  "horizontal_pull",
+  "vertical_pull",
+  "olympic_lifting",
+  "gymnastics",
+  "short_conditioning",
+  "medium_conditioning",
+  "long_conditioning",
+  "aerobic",
+  "sprint",
+];
+const EQUIPMENT_OPTIONS = {
+  barbell: "Barbell and plates",
+  rack: "Squat rack",
+  pullupBar: "Pull-up bar",
+  dumbbells: "Dumbbells",
+  kettlebells: "Kettlebells",
+  box: "Plyometric box",
+  rings: "Gymnastics rings",
+  rower: "Rowing machine",
+  bike: "Bike erg",
+  running: "Running space",
+};
+const DEFAULT_EQUIPMENT = Object.keys(EQUIPMENT_OPTIONS);
+const DAY_OF_WEEK_OPTIONS = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+];
+const DEFAULT_PROGRAM_DAYS = {
+  2: ["tuesday", "saturday"],
+  3: ["monday", "wednesday", "saturday"],
+  4: ["monday", "tuesday", "thursday", "saturday"],
+  5: ["monday", "tuesday", "wednesday", "friday", "saturday"],
+};
 const ATHLETE_LEVELS = {
   accessible: "Accessible / scaled",
   intermediate: "Intermediate",
@@ -1574,7 +1617,8 @@ function renderDashboard() {
   const logsThisWeek = state.logs.filter(
     (log) => log.week === state.selectedWeek,
   );
-  const mainDayIds = getProgramDays().map((day) => day.id);
+  const programmeDays = getProgramDays();
+  const mainDayIds = programmeDays.map((day) => day.id);
   const completedDays = new Set(
     logsThisWeek
       .filter((log) => mainDayIds.includes(log.dayId))
@@ -1582,10 +1626,13 @@ function renderDashboard() {
   ).size;
   const latestRpe = state.logs.find((log) => log.rpe);
   const latestPr = state.prAttempts.find((attempt) => attempt.isPr);
-  const weekPercent = Math.round((completedDays / 4) * 100);
+  const programmeTarget = programmeDays.length;
+  const weekPercent = programmeTarget
+    ? Math.round((completedDays / programmeTarget) * 100)
+    : 0;
 
   elements.statsGrid.innerHTML = [
-    statCard(`${completedDays}/4`, "Sessions logged"),
+    statCard(`${completedDays}/${programmeTarget}`, "Sessions logged"),
     statCard(`${weekPercent}%`, "Week complete"),
     statCard(latestRpe ? latestRpe.rpe : "-", "Latest RPE"),
     statCard(latestPr ? latestPr.metricName : "-", "Latest PR"),
@@ -2296,7 +2343,149 @@ function generatedWeekErrors(sessions, requirements = {}) {
       }
     });
   }
+  sessions.forEach((session, index) => {
+    const label = `session ${index + 1}`;
+    const durationTotal = Object.values(session?.segmentMinutes || {}).reduce(
+      (sum, value) => sum + Number(value || 0),
+      0,
+    );
+    if (durationTotal !== Number(session?.duration)) {
+      errors.push(`${label}: segment duration does not match session duration`);
+    }
+    const equipmentErrors = workoutEquipmentErrors(
+      session?.workoutDefinition,
+      session?.availableEquipment,
+    );
+    equipmentErrors.forEach((error) => errors.push(`${label}: ${error}`));
+    if (
+      ["not_allowed", "drop_pads_only"].includes(session?.barbellDropPolicy)
+    ) {
+      if (
+        session.barbellDropPolicy === "not_allowed" &&
+        !arrayOrEmpty(session.strength).some((item) =>
+          /no dropping/i.test(item),
+        )
+      ) {
+        errors.push(`${label}: no-drop barbell policy requires a control cue`);
+      }
+      if (
+        allWorkoutExercises(session?.workoutDefinition).some(
+          isBarbellConditioningExercise,
+        )
+      ) {
+        errors.push(
+          `${label}: restricted barbell dropping cannot use timed barbell cycling`,
+        );
+      }
+    }
+  });
+  if (requirements.requireTwoDayStructure) {
+    if (sessions.length !== 2)
+      errors.push("two-day week requires two sessions");
+    if (sessions.some((session) => !session?.twoDayStrategy)) {
+      errors.push("two-day week must use the dedicated two-day strategy");
+    }
+    const stimuli = new Set(
+      sessions.flatMap((session) => session.stimuli || []),
+    );
+    if (
+      !["squat", "hinge", "olympic_lifting"].some((item) => stimuli.has(item))
+    ) {
+      errors.push("two-day week requires a lower-body or Olympic exposure");
+    }
+    if (
+      !["horizontal_push", "vertical_push"].some((item) => stimuli.has(item))
+    ) {
+      errors.push("two-day week requires an upper-body strength exposure");
+    }
+    if (!stimuli.has("gymnastics")) {
+      errors.push("two-day week requires a skill progression exposure");
+    }
+    if (
+      !stimuli.has("short_conditioning") ||
+      !stimuli.has("long_conditioning")
+    ) {
+      errors.push("two-day week requires complementary conditioning exposures");
+    }
+    sessions.forEach((session, index) => {
+      if (
+        !Array.isArray(session.progressionBlocks) ||
+        !session.progressionBlocks.length
+      ) {
+        errors.push(
+          `session ${index + 1}: every focus requires progression metadata`,
+        );
+      }
+    });
+  }
   return [...new Set(errors)];
+}
+
+function validateWeeklyPlan(sessions, requirements = {}) {
+  const errors = generatedWeekErrors(sessions, requirements);
+  const warnings = [];
+  const stimuli = sessions.flatMap((session) => session?.stimuli || []);
+  const heavyPulling = stimuli.filter(
+    (item) => item === "vertical_pull",
+  ).length;
+  if (heavyPulling > 1) {
+    warnings.push(
+      "Repeated vertical pulling should be monitored around box workouts.",
+    );
+  }
+  return { valid: errors.length === 0, errors, warnings };
+}
+
+function workoutEquipmentErrors(definition, availableEquipment) {
+  if (!definition || !Array.isArray(availableEquipment)) return [];
+  const equipment = new Set(availableEquipment);
+  const errors = [];
+  const requirements = [
+    [/row/i, "rower"],
+    [/bike/i, "bike"],
+    [/run|shuttle/i, "running"],
+    [/dumbbell|\bDB\b/i, "dumbbells"],
+    [/kettlebell|\bKB\b/i, "kettlebells"],
+    [/box (?:jump|step)/i, "box"],
+    [/ring/i, "rings"],
+  ];
+  allWorkoutExercises(definition).forEach((exercise) => {
+    const movement = String(exercise?.movement || "");
+    requirements.forEach(([pattern, required]) => {
+      if (pattern.test(movement) && !equipment.has(required)) {
+        errors.push(`${movement} requires unavailable ${required}`);
+      }
+    });
+  });
+  return [...new Set(errors)];
+}
+
+function applyReadinessVariant(session, readiness = "normal") {
+  const normalized = ["low", "normal", "high"].includes(readiness)
+    ? readiness
+    : "normal";
+  const variant = structuredClone(session);
+  variant.readinessVariant = normalized;
+  variant.canonicalSessionId = session.id;
+  if (normalized === "low") {
+    variant.strength = [
+      ...arrayOrEmpty(variant.strength).slice(0, 2),
+      "Low readiness: use 75% of planned accessory and conditioning volume; no maximal attempts.",
+    ];
+    if (variant.segmentMinutes?.wod) {
+      variant.segmentMinutes.wod = Math.max(
+        6,
+        Math.round(Number(variant.segmentMinutes.wod) * 0.75),
+      );
+    }
+    variant.runtimeVolumeMultiplier = 0.75;
+  } else if (normalized === "high") {
+    variant.addOns = [
+      ...arrayOrEmpty(variant.addOns),
+      "Optional bonus: one easy accessory set. Stop well before failure.",
+    ];
+  }
+  return variant;
 }
 
 function validateGeneratedWeek(sessions, requirements) {
@@ -2516,7 +2705,8 @@ function formatClock(seconds) {
 }
 
 function weeklyTimeDomains(options) {
-  const days = clamp(Number(options?.daysPerWeek) || 4, 3, 5);
+  const days = clamp(Number(options?.daysPerWeek) || 4, 2, 5);
+  if (days === 2) return ["short", "long"];
   if (days === 3) return ["short", "medium", "long"];
   if (days === 4) return ["short", "medium", "medium", "long"];
   const extraLongEligible =
@@ -2646,6 +2836,9 @@ function buildGeneratedProgramme(
   generationSeed,
 ) {
   const normalized = normalizeGeneratorOptions(options);
+  const frequencyStrategy = generationStrategyForFrequency(
+    normalized.programDaysPerWeek,
+  );
   const hasExplicitSeed = Boolean(generationSeed || normalized.generationSeed);
   const seed = normalizeGenerationSeed(
     generationSeed || normalized.generationSeed,
@@ -2659,6 +2852,7 @@ function buildGeneratedProgramme(
 
   for (let week = 1; week <= 8; week += 1) {
     let validWeek = null;
+    let lastValidationError = null;
     for (let weekAttempt = 0; weekAttempt < 12; weekAttempt += 1) {
       const weekContext = {
         ...generationContext,
@@ -2668,34 +2862,111 @@ function buildGeneratedProgramme(
       const candidate = [];
       for (let day = 1; day <= normalized.daysPerWeek; day += 1) {
         candidate.push(
-          buildGeneratedSession(
+          applyGeneratedSessionConstraints(
+            frequencyStrategy.buildSession(
+              normalized,
+              profile,
+              week,
+              day,
+              idFactory,
+              weekContext,
+            ),
             normalized,
-            profile,
-            week,
             day,
-            idFactory,
-            weekContext,
           ),
         );
       }
       try {
         validateGeneratedWeek(candidate, {
-          requiredTimeDomains: ["short", "medium", "long"],
+          requiredTimeDomains: frequencyStrategy.requiredTimeDomains,
+          requireTwoDayStructure: frequencyStrategy.requireTwoDayStructure,
         });
         validWeek = candidate;
         generationContext.usedWodSignatures = weekContext.usedWodSignatures;
         break;
       } catch (error) {
         if (!(error instanceof WorkoutValidationError)) throw error;
+        lastValidationError = error;
       }
     }
     if (!validWeek) {
-      throw new Error(`Could not create a valid generated week ${week}.`);
+      const details = arrayOrEmpty(lastValidationError?.errors).join("; ");
+      throw new Error(
+        `Could not create a valid generated week ${week}.${details ? ` ${details}` : ""}`,
+      );
     }
     sessions.push(...validWeek);
   }
 
   return sessions;
+}
+
+function generationStrategyForFrequency(programDaysPerWeek) {
+  switch (programDaysPerWeek) {
+    case 2:
+      return {
+        buildSession: buildTwoDaySession,
+        requiredTimeDomains: ["short", "long"],
+        requireTwoDayStructure: true,
+      };
+    case 3:
+      return {
+        buildSession: buildThreeDaySession,
+        requiredTimeDomains: ["short", "medium", "long"],
+        requireTwoDayStructure: false,
+      };
+    case 4:
+      return {
+        buildSession: buildFourDaySession,
+        requiredTimeDomains: ["short", "medium", "long"],
+        requireTwoDayStructure: false,
+      };
+    default:
+      return {
+        buildSession: buildLegacyFrequencySession,
+        requiredTimeDomains: ["short", "medium", "long"],
+        requireTwoDayStructure: false,
+      };
+  }
+}
+
+function buildThreeDaySession(...args) {
+  return buildGeneratedSession(...args);
+}
+
+function buildFourDaySession(...args) {
+  return buildGeneratedSession(...args);
+}
+
+function buildLegacyFrequencySession(...args) {
+  return buildGeneratedSession(...args);
+}
+
+function applyGeneratedSessionConstraints(session, options, day) {
+  const dropNote =
+    options.barbellDropPolicy === "not_allowed"
+      ? "Lower every barbell repetition under control; no dropping or touch-and-go cycling."
+      : options.barbellDropPolicy === "drop_pads_only"
+        ? "Use drop pads for every dropped barbell repetition."
+        : null;
+  const strength = arrayOrEmpty(session.strength);
+  return {
+    ...session,
+    strength:
+      dropNote && !strength.includes(dropNote)
+        ? [...strength, dropNote]
+        : strength,
+    workoutDefinition: adaptWorkoutToBarbellDropPolicy(
+      adaptWorkoutToEquipment(
+        session.workoutDefinition,
+        options.availableEquipment,
+      ),
+      options.barbellDropPolicy,
+    ),
+    preferredDay: options.preferredProgramDays[day - 1],
+    availableEquipment: [...options.availableEquipment],
+    barbellDropPolicy: options.barbellDropPolicy,
+  };
 }
 
 function createGenerationSeed() {
@@ -2819,6 +3090,100 @@ function selectPlanWeekSessions(plan, week) {
 
 function selectActiveWeekSessions(state, week = state && state.selectedWeek) {
   return selectPlanWeekSessions(selectActivePlan(state), week);
+}
+
+function weeklyTrainingProgress(plan, logs, week) {
+  const selectedWeek = clamp(Math.round(Number(week) || 1), 1, 8);
+  const sessions = selectPlanWeekSessions(plan, selectedWeek);
+  const sessionIds = new Set(sessions.map((session) => session.id));
+  const weekLogs = arrayOrEmpty(logs).filter(
+    (log) => Number(log.week) === selectedWeek,
+  );
+  const completedProgramIds = new Set(
+    weekLogs
+      .filter((log) => {
+        const source = log.workoutSource || "app";
+        const validProgrammeSource =
+          plan?.kind === "generated" ? source === "app" : source !== "box";
+        return validProgrammeSource && sessionIds.has(log.dayId);
+      })
+      .map((log) => log.dayId),
+  );
+  const completedBoxIds = new Set(
+    weekLogs.filter((log) => log.workoutSource === "box").map((log) => log.id),
+  );
+  const options = normalizeGeneratorOptions(plan?.generatorOptions || {});
+  const programTarget =
+    plan?.kind === "generated" ? options.programDaysPerWeek : sessions.length;
+  const expectedBoxDays =
+    plan?.kind === "generated" ? options.expectedBoxDays : 0;
+  return {
+    completedProgramWorkouts: completedProgramIds.size,
+    completedBoxWorkouts: completedBoxIds.size,
+    programTarget,
+    expectedBoxDays,
+    totalCompleted: completedProgramIds.size + completedBoxIds.size,
+    totalTarget:
+      plan?.kind === "generated"
+        ? programTarget + expectedBoxDays
+        : programTarget,
+    progressionComplete: completedProgramIds.size >= programTarget,
+  };
+}
+
+function regeneratePlanFrequency({
+  plan,
+  options,
+  profile,
+  selectedWeek,
+  logs,
+  idFactory = createId,
+  regeneratedSessions = null,
+}) {
+  if (!plan || plan.kind !== "generated") {
+    throw new Error("Only generated plans can change programme frequency.");
+  }
+  const normalizedOptions = normalizeGeneratorOptions(options);
+  const currentWeek = clamp(Math.round(Number(selectedWeek) || 1), 1, 8);
+  const loggedIds = new Set(
+    arrayOrEmpty(logs)
+      .filter((log) => (log.workoutSource || "app") === "app")
+      .map((log) => log.dayId),
+  );
+  const regenerated =
+    regeneratedSessions ||
+    buildGeneratedProgramme(
+      normalizedOptions,
+      profile,
+      idFactory,
+      normalizeGenerationSeed(plan.generationSeed),
+    );
+  const past = plan.sessions.filter(
+    (session) => Number(session.week) < currentWeek,
+  );
+  const completedCurrent = plan.sessions.filter(
+    (session) =>
+      Number(session.week) === currentWeek && loggedIds.has(session.id),
+  );
+  const remainingCount = Math.max(
+    0,
+    normalizedOptions.programDaysPerWeek - completedCurrent.length,
+  );
+  const currentCandidates = regenerated
+    .filter(
+      (session) =>
+        Number(session.week) === currentWeek && !loggedIds.has(session.id),
+    )
+    .slice(0, remainingCount);
+  const future = regenerated.filter(
+    (session) => Number(session.week) > currentWeek,
+  );
+  return {
+    ...plan,
+    generatorOptions: normalizedOptions,
+    updatedAt: new Date().toISOString(),
+    sessions: [...past, ...completedCurrent, ...currentCandidates, ...future],
+  };
 }
 
 function normalizeCanonicalPlans(plans) {
@@ -2963,7 +3328,13 @@ function migrateCanonicalGeneratedPlans(plans, profile) {
     ).some(
       (weekSessions) =>
         weekSessions.length === options.daysPerWeek &&
-        generatedWeekErrors(weekSessions).length > 0,
+        generatedWeekErrors(weekSessions, {
+          requiredTimeDomains:
+            options.daysPerWeek === 2
+              ? ["short", "long"]
+              : ["short", "medium", "long"],
+          requireTwoDayStructure: options.daysPerWeek === 2,
+        }).length > 0,
     );
     if (!hasStaleSession && !hasInvalidCompleteWeek) return plan;
 
@@ -3013,16 +3384,9 @@ function preserveGeneratedSessionIdentity(session, replacement) {
 
 function sameGeneratorOptions(left, right) {
   if (left == null || right == null) return left === right;
-  return (
-    left.goal === right.goal &&
-    left.weakness === right.weakness &&
-    (left.athleteLevel || "intermediate") ===
-      (right.athleteLevel || "intermediate") &&
-    (left.barMuscleUpLevel || null) === (right.barMuscleUpLevel || null) &&
-    Number(left.daysPerWeek) === Number(right.daysPerWeek) &&
-    Number(left.duration) === Number(right.duration) &&
-    (left.generationSeed || null) === (right.generationSeed || null)
-  );
+  const normalizedLeft = normalizeGeneratorOptions(left);
+  const normalizedRight = normalizeGeneratorOptions(right);
+  return JSON.stringify(normalizedLeft) === JSON.stringify(normalizedRight);
 }
 
 function groupLegacySessionsIntoPlans(sessions) {
@@ -3134,12 +3498,12 @@ function legacyManualPlan(sessions, index) {
 function generatorOptionsFromSessions(sessions) {
   const first = sessions.find((session) => session && session.generated) || {};
   return {
-    goal: first.sourceGoal,
+    primaryGoal: first.sourceGoal,
     weakness: first.sourceWeakness,
     athleteLevel: first.sourceAthleteLevel,
     barMuscleUpLevel: first.sourceBarMuscleUpLevel,
-    daysPerWeek: Math.max(...sessions.map(parsePlanDay), 3),
-    duration: Number(first.duration) || 60,
+    programDaysPerWeek: Math.max(...sessions.map(parsePlanDay), 3),
+    sessionDuration: Number(first.duration) || 60,
     generationSeed: first.generationSeed,
   };
 }
@@ -3277,23 +3641,88 @@ function parsePlanDay(plan) {
 
 function normalizeGeneratorOptions(options) {
   const source = options || {};
-  const goal = GOAL_LABELS[source.goal] ? source.goal : "balanced";
+  const requestedGoal = source.primaryGoal || source.goal;
+  const goal = GOAL_LABELS[requestedGoal] ? requestedGoal : "balanced";
+  const requestedSecondaryGoal = source.secondaryGoal;
+  const secondaryGoal =
+    GOAL_LABELS[requestedSecondaryGoal] && requestedSecondaryGoal !== goal
+      ? requestedSecondaryGoal
+      : null;
   const weakness =
     goal === "barMuscleUp"
       ? "muscleup"
       : WEAKNESS_LABELS[source.weakness]
         ? source.weakness
         : "squat";
-  const daysPerWeek = clamp(Math.round(Number(source.daysPerWeek) || 4), 3, 5);
-  const duration = clamp(
-    roundToNearest(Number(source.duration) || 60, 5),
-    45,
-    60,
+  const daysPerWeek = clamp(
+    Math.round(Number(source.programDaysPerWeek ?? source.daysPerWeek) || 4),
+    2,
+    5,
   );
+  const requestedDuration = Number(source.sessionDuration ?? source.duration);
+  const duration =
+    daysPerWeek === 2
+      ? [60, 75, 90].reduce((closest, option) =>
+          Math.abs(option - (requestedDuration || 75)) <
+          Math.abs(closest - (requestedDuration || 75))
+            ? option
+            : closest,
+        )
+      : clamp(roundToNearest(requestedDuration || 60, 5), 45, 60);
   const athleteLevel = ATHLETE_LEVELS[source.athleteLevel]
     ? source.athleteLevel
     : "intermediate";
-  const normalized = { goal, weakness, athleteLevel, daysPerWeek, duration };
+  const usesBoxProgramming =
+    typeof source.usesBoxProgramming === "boolean"
+      ? source.usesBoxProgramming
+      : Number(source.expectedBoxDays) > 0;
+  const expectedBoxDays = usesBoxProgramming
+    ? clamp(Math.round(Number(source.expectedBoxDays) || 1), 1, 6)
+    : 0;
+  const totalTrainingDays = daysPerWeek + expectedBoxDays;
+  const requestedDays = Array.isArray(source.preferredProgramDays)
+    ? [...new Set(source.preferredProgramDays.map(String))].filter((day) =>
+        DAY_OF_WEEK_OPTIONS.includes(day),
+      )
+    : [];
+  const preferredProgramDays =
+    requestedDays.length === daysPerWeek
+      ? requestedDays
+      : [...DEFAULT_PROGRAM_DAYS[daysPerWeek]];
+  const requestedEquipment = Array.isArray(source.availableEquipment)
+    ? [...new Set(source.availableEquipment.map(String))].filter((item) =>
+        Object.prototype.hasOwnProperty.call(EQUIPMENT_OPTIONS, item),
+      )
+    : [...DEFAULT_EQUIPMENT];
+  const availableEquipment = ["barbell", "rack", "pullupBar"].every((item) =>
+    requestedEquipment.includes(item),
+  )
+    ? requestedEquipment
+    : [...DEFAULT_EQUIPMENT];
+  const barbellDropPolicy = [
+    "allowed",
+    "drop_pads_only",
+    "not_allowed",
+  ].includes(source.barbellDropPolicy)
+    ? source.barbellDropPolicy
+    : "allowed";
+  const normalized = {
+    primaryGoal: goal,
+    secondaryGoal,
+    programDaysPerWeek: daysPerWeek,
+    usesBoxProgramming,
+    expectedBoxDays,
+    totalTrainingDays,
+    preferredProgramDays,
+    sessionDuration: duration,
+    availableEquipment,
+    barbellDropPolicy,
+    goal,
+    weakness,
+    athleteLevel,
+    daysPerWeek,
+    duration,
+  };
   if (goal === "barMuscleUp") {
     normalized.barMuscleUpLevel = BAR_MUSCLE_UP_LEVELS[source.barMuscleUpLevel]
       ? source.barMuscleUpLevel
@@ -3303,6 +3732,339 @@ function normalizeGeneratorOptions(options) {
     normalized.generationSeed = normalizeGenerationSeed(source.generationSeed);
   }
   return normalized;
+}
+
+function buildTwoDaySession(
+  options,
+  profile,
+  week,
+  day,
+  idFactory,
+  generationContext,
+) {
+  const phaseGoal =
+    options.goal === "barMuscleUp" ? "gymnastics" : options.goal;
+  const phase = getGeneratedWeekPhase(week, phaseGoal);
+  const timeDomain = day === 1 ? "short" : "long";
+  const variation = generationVariation(generationContext, week, day, 0);
+  const requestedWodMinutes = selectTimeDomainDuration(
+    timeDomain,
+    options.duration,
+    week,
+    day,
+    variation,
+  );
+  const conditioningGoal =
+    day === 2 && options.secondaryGoal ? options.secondaryGoal : options.goal;
+  const workoutGoal =
+    conditioningGoal === "barMuscleUp"
+      ? "gymnastics"
+      : conditioningGoal === "mastersRxOpen"
+        ? "balanced"
+        : conditioningGoal;
+  const workoutDefinition = adaptWorkoutToBarbellDropPolicy(
+    adaptWorkoutToEquipment(
+      claimUniqueGeneratedWod(
+        (collisionSalt) =>
+          generatedWodItems(
+            workoutGoal,
+            options.weakness,
+            day === 1 ? 1 : 4,
+            week,
+            profile,
+            phase,
+            requestedWodMinutes,
+            generationVariation(generationContext, week, day, collisionSalt),
+            options.barMuscleUpLevel,
+            timeDomain,
+            options.athleteLevel,
+          ),
+        generationContext,
+      ),
+      options.availableEquipment,
+    ),
+    options.barbellDropPolicy,
+  );
+  const wodMinutes = workoutExpectedDurationSeconds(workoutDefinition) / 60;
+  const segmentMinutes = getTwoDaySegmentMinutes(
+    options.duration,
+    day,
+    wodMinutes,
+  );
+  const skillStimulus = ["muscleup", "t2b", "pulling"].includes(
+    options.weakness,
+  )
+    ? "vertical_pull"
+    : options.weakness === "olympic"
+      ? "olympic_lifting"
+      : "gymnastics";
+  const stimuli =
+    day === 1
+      ? ["squat", skillStimulus, "gymnastics", "short_conditioning"]
+      : ["olympic_lifting", "vertical_push", "aerobic", "long_conditioning"];
+  const progressionBlocks =
+    day === 1
+      ? [
+          { id: "primary-strength", type: "percentage", stimuli: ["squat"] },
+          {
+            id: "skill-progression",
+            type: "skill_stage",
+            stimuli: [skillStimulus, "gymnastics"],
+          },
+          {
+            id: "short-conditioning",
+            type: "density",
+            stimuli: ["short_conditioning"],
+          },
+        ]
+      : [
+          {
+            id: "secondary-strength",
+            type: "percentage",
+            stimuli: ["olympic_lifting", "vertical_push"],
+          },
+          {
+            id: "weakness-progression",
+            type: "volume",
+            stimuli: [skillStimulus],
+          },
+          {
+            id: "engine-progression",
+            type: "interval",
+            stimuli: ["aerobic", "long_conditioning"],
+          },
+        ];
+  const dropNote =
+    options.barbellDropPolicy === "not_allowed"
+      ? "Lower every barbell repetition under control; no dropping or touch-and-go cycling."
+      : options.barbellDropPolicy === "drop_pads_only"
+        ? "Use drop pads for every dropped barbell repetition."
+        : null;
+  const session = {
+    id: idFactory(`generated-${options.goal}-two-day-w${week}-d${day}`),
+    week,
+    title:
+      day === 1
+        ? `W${week} D1: Primary strength + skill`
+        : `W${week} D2: Secondary strength + engine`,
+    focus:
+      day === 1
+        ? `${GOAL_LABELS[options.goal]} progression with ${WEAKNESS_LABELS[options.weakness].toLowerCase()} skill work and controlled short conditioning.`
+        : `${GOAL_LABELS[options.secondaryGoal || options.goal]} support work, weakness progression, and sustainable engine development.`,
+    warmup: generatedWarmup(options.goal, options.weakness, day),
+    strength: [
+      ...twoDayStrengthItems(options, profile, week, day, phase),
+      ...(dropNote ? [dropNote] : []),
+    ],
+    workoutDefinition,
+    mobility: generatedMobility(options.weakness),
+    duration: options.duration,
+    segmentMinutes,
+    blockMinutes: getTwoDayBlockMinutes(options.duration, day, wodMinutes),
+    intensity: phase.intensity,
+    generated: true,
+    twoDayStrategy: true,
+    stimuli: [...new Set(stimuli)],
+    progressionBlocks,
+    wodSchemaVersion: WOD_SCHEMA_VERSION,
+    sourceGoal: options.goal,
+    sourceSecondaryGoal: options.secondaryGoal,
+    sourceWeakness: options.weakness,
+    sourceAthleteLevel: options.athleteLevel,
+    preferredDay: options.preferredProgramDays[day - 1],
+    availableEquipment: [...options.availableEquipment],
+    barbellDropPolicy: options.barbellDropPolicy,
+    createdAt: new Date().toISOString(),
+  };
+  if (generationContext && generationContext.seed) {
+    session.generationSeed = generationContext.seed;
+    session.origin = "generated";
+    session.customized = false;
+  }
+  return session;
+}
+
+function twoDayStrengthItems(options, profile, week, day, phase) {
+  if (day === 1) {
+    return [
+      `Back squat ${phase.reps} at ${percent(phase.load)} (${kg(profile.maxes.backSquat, phase.load)})`,
+      gymnasticsSkillBlock(options.weakness, week),
+      weaknessAccessory(options.weakness, week),
+    ];
+  }
+  const techniqueLoad = Math.min(0.82, Math.max(0.55, phase.oly));
+  const pressLoad = week === 4 ? 0.55 : week >= 7 ? 0.75 : 0.65 + week * 0.01;
+  return [
+    `Hang clean 6x2 at ${percent(techniqueLoad)} (${kg(profile.maxes.cleanJerk, techniqueLoad)}), reset each rep`,
+    `Push press 4x6 at ${percent(pressLoad)} of strict press (${kg(profile.maxes.strictPress, pressLoad)})`,
+    weaknessAccessory(options.weakness, week),
+  ];
+}
+
+function getTwoDaySegmentMinutes(duration, day, wodMinutes) {
+  const warmup = duration === 90 ? 12 : duration === 75 ? 10 : 8;
+  const mobility = duration === 90 ? 10 : duration === 75 ? 8 : 5;
+  const wod = Math.round(Number(wodMinutes));
+  return {
+    warmup,
+    strength: duration - warmup - mobility - wod,
+    wod,
+    mobility,
+  };
+}
+
+function getTwoDayBlockMinutes(duration, day, wodMinutes) {
+  const target =
+    duration === 90
+      ? { primary: 25, secondary: 18 }
+      : duration === 75
+        ? { primary: 22, secondary: 15 }
+        : { primary: 20, secondary: 12 };
+  const segments = getTwoDaySegmentMinutes(duration, day, wodMinutes);
+  return {
+    primary: target.primary,
+    secondary: Math.max(8, segments.strength - target.primary),
+    conditioning: segments.wod,
+  };
+}
+
+function adaptWorkoutToEquipment(definition, availableEquipment) {
+  const equipment = new Set(availableEquipment || DEFAULT_EQUIPMENT);
+  const next = structuredClone(definition);
+  const adapt = (exercise) => {
+    const movement = String(exercise.movement || "");
+    let replacement = movement;
+    let target = exercise.target;
+    let load = exercise.load;
+    if (/row/i.test(movement) && !equipment.has("rower")) {
+      replacement = equipment.has("bike")
+        ? movement.replace(/row/gi, "bike erg")
+        : equipment.has("running")
+          ? movement.replace(/row/gi, "run")
+          : "burpees";
+    } else if (/bike/i.test(movement) && !equipment.has("bike")) {
+      replacement = equipment.has("rower")
+        ? movement.replace(/bike(?: erg)?/gi, "row")
+        : equipment.has("running")
+          ? movement.replace(/bike(?: erg)?/gi, "run")
+          : "burpees";
+    } else if (/run|shuttle/i.test(movement) && !equipment.has("running")) {
+      replacement = equipment.has("rower")
+        ? "row"
+        : equipment.has("bike")
+          ? "bike erg"
+          : "burpees";
+    }
+    if (replacement !== movement && replacement === "burpees") {
+      target = bodyweightFallbackTarget(exercise.target);
+      load = undefined;
+    }
+    if (/dumbbell|\bDB\b/i.test(replacement) && !equipment.has("dumbbells")) {
+      if (equipment.has("kettlebells")) {
+        replacement = replacement.replace(/dumbbell|\bDB\b/gi, "kettlebell");
+      } else {
+        replacement = "alternating reverse lunges";
+        target = bodyweightFallbackTarget(exercise.target);
+        load = undefined;
+      }
+    }
+    if (
+      /kettlebell|\bKB\b/i.test(replacement) &&
+      !equipment.has("kettlebells")
+    ) {
+      if (equipment.has("dumbbells")) {
+        replacement = replacement.replace(/kettlebell|\bKB\b/gi, "dumbbell");
+      } else {
+        replacement = "air squats";
+        target = bodyweightFallbackTarget(exercise.target);
+        load = undefined;
+      }
+    }
+    if (/box (?:jump|step)/i.test(replacement) && !equipment.has("box")) {
+      replacement = replacement.replace(
+        /box (?:jump|step)(?:-over)?s?/gi,
+        "walking lunges",
+      );
+    }
+    if (/ring/i.test(replacement) && !equipment.has("rings")) {
+      replacement = replacement.replace(/ring rows?/gi, "strict pull-ups");
+    }
+    const adapted = { ...exercise, movement: replacement, target };
+    if (load === undefined) delete adapted.load;
+    else adapted.load = load;
+    return adapted;
+  };
+  next.buyIn = arrayOrEmpty(next.buyIn).map(adapt);
+  next.afterEachRound = arrayOrEmpty(next.afterEachRound).map(adapt);
+  next.cashOut = arrayOrEmpty(next.cashOut).map(adapt);
+  if (next.format?.type === "emom") {
+    next.format.stations = arrayOrEmpty(next.format.stations).map((station) =>
+      station?.type === "rest"
+        ? station
+        : { ...station, exercises: arrayOrEmpty(station.exercises).map(adapt) },
+    );
+  } else {
+    next.exercises = arrayOrEmpty(next.exercises).map(adapt);
+  }
+  return next;
+}
+
+function bodyweightFallbackTarget(target) {
+  const value = Number(target?.value) || 10;
+  const reps =
+    target?.type === "reps"
+      ? value
+      : target?.type === "seconds"
+        ? Math.round(value / 5)
+        : Math.round(value / 20);
+  return { type: "reps", value: clamp(reps, 6, 20) };
+}
+
+function isBarbellConditioningExercise(exercise) {
+  const movement = String(exercise?.movement || "");
+  return Boolean(
+    exercise?.load &&
+    !/dumbbell|\bDB\b|kettlebell|\bKB\b|sandbag/i.test(movement) &&
+    /clean|snatch|deadlift|barbell|front squat|overhead squat|thruster|push press|jerk/i.test(
+      movement,
+    ),
+  );
+}
+
+function adaptWorkoutToBarbellDropPolicy(definition, policy) {
+  if (!["not_allowed", "drop_pads_only"].includes(policy)) {
+    return definition;
+  }
+  const next = structuredClone(definition);
+  const adapt = (exercise) => {
+    if (!isBarbellConditioningExercise(exercise)) return exercise;
+    const movement = String(exercise.movement || "");
+    const replacement = /press|thruster|jerk/i.test(movement)
+      ? "hand-release push-ups"
+      : /squat/i.test(movement)
+        ? "air squats"
+        : "alternating reverse lunges";
+    const adapted = {
+      ...exercise,
+      movement: replacement,
+      target: bodyweightFallbackTarget(exercise.target),
+    };
+    delete adapted.load;
+    return adapted;
+  };
+  next.buyIn = arrayOrEmpty(next.buyIn).map(adapt);
+  next.afterEachRound = arrayOrEmpty(next.afterEachRound).map(adapt);
+  next.cashOut = arrayOrEmpty(next.cashOut).map(adapt);
+  if (next.format?.type === "emom") {
+    next.format.stations = arrayOrEmpty(next.format.stations).map((station) =>
+      station?.type === "rest"
+        ? station
+        : { ...station, exercises: arrayOrEmpty(station.exercises).map(adapt) },
+    );
+  } else {
+    next.exercises = arrayOrEmpty(next.exercises).map(adapt);
+  }
+  return next;
 }
 
 function buildGeneratedSession(
@@ -6689,8 +7451,10 @@ function registerServiceWorker() {
 const FORGE_HOUR_API = {
   ATHLETE_LEVELS,
   BAR_MUSCLE_UP_LEVELS,
+  DAY_OF_WEEK_OPTIONS,
   DEFAULT_PROFILE,
   DIVISION_LABELS,
+  EQUIPMENT_OPTIONS,
   GOAL_LABELS,
   MASTERS_RX_TARGETS,
   MOVEMENT_LIBRARY,
@@ -6703,6 +7467,8 @@ const FORGE_HOUR_API = {
   WEAKNESS_LABELS,
   WOD_SCHEMA_VERSION,
   WORKOUT_DEFINITION_VERSION,
+  TRAINING_STIMULI,
+  applyReadinessVariant,
   buildGeneratedProgramme,
   buildRxReadiness,
   buildSession,
@@ -6725,6 +7491,8 @@ const FORGE_HOUR_API = {
   kg,
   migratePlanState,
   migrateGeneratedProgrammePlans,
+  normalizeGeneratorOptions,
+  regeneratePlanFrequency,
   renderWorkoutDescription,
   renderWorkoutItems,
   normalizePrValue,
@@ -6743,6 +7511,8 @@ const FORGE_HOUR_API = {
   valueFromPath,
   validateWorkoutDefinition,
   validateGeneratedWeek,
+  validateWeeklyPlan,
+  weeklyTrainingProgress,
   generatedWeekErrors,
   selectDumbbellSnatchLoad,
   workoutExpectedDurationSeconds,

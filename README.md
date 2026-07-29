@@ -4,7 +4,7 @@ A phone-first CrossFit training programme and PR tracker for intermediate athlet
 
 ## What is included
 
-- Four-day CrossFit programme capped at 60 minutes per session.
+- Configurable two-, three-, or four-day app programming, with intentional two-day progression sessions designed to complement CrossFit box workouts.
 - Eight-week progression cycle with recalculated loads from the athlete's 1RMs.
 - Needs-based programme generator for strength, endurance, gymnastics, running and bodyweight capacity, or all-round goals.
 - Dedicated eight-week bar muscle-up programme with level-aware first-rep or consistency progressions, three focused skill exposures per week, and supporting Olympic-lifting and engine sessions.
@@ -12,7 +12,8 @@ A phone-first CrossFit training programme and PR tracker for intermediate athlet
 - WOD variation across time domains and formats: AMRAP, intervals, for-time, EMOM, ladder, repeat sets, chipper, and benchmark.
 - Manual training programme builder for adding your own sessions.
 - Movement library for gymnastics and weightlifting skills with cues, progressions, scaling, and video guide links.
-- Workout logging for readiness, RPE, strength or skill results, WOD score, notes, and mobility.
+- Separate app and box workout logging, with readiness, difficulty, movement-pattern, duration, RPE, result, notes, and mobility data where applicable.
+- Frequency-aware dashboard totals that distinguish app progression completion from total weekly training.
 - iPhone Competition Proof recording with a synchronized timer overlay, local video preview, and save/share controls.
 - PR tracker for major lifts, rowing, Murph, and gymnastics benchmarks.
 - RX readiness dashboard for strength, Olympic lifting, engine, gymnastics, Open skills, and recovery focus areas.
@@ -116,11 +117,12 @@ device bucket and can be retried from the Account panel.
    link. Confirm **Import guest data** only when that device's guest profile,
    programmes, and scores should become the account state.
 
-The migrations add the private `athlete_states` document plus nullable
-`timer_result` and `competition_proof` JSON metadata without creating video
-storage. They also add document-shape, size, non-empty, and finite-value data
-constraints plus owner/recency indexes. Generated public-schema types are
-committed at `types/database.types.ts`.
+The migrations add the private `athlete_states` document; structured workout
+source, box-workout metadata, and nullable `timer_result` and
+`competition_proof` JSON metadata without creating video storage. They also add
+document-shape, size, non-empty, finite-value, source, difficulty, duration, and
+training-stimulus constraints plus owner/recency indexes. Generated
+public-schema types are committed at `types/database.types.ts`.
 
 Run the local database authorization and constraint suites with:
 

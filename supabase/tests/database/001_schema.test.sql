@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(70);
+select plan(83);
 
 select has_table('public', 'workout_logs', 'workout_logs exists');
 select has_table('public', 'pr_attempts', 'pr_attempts exists');
@@ -21,6 +21,10 @@ select has_column(
   'competition_proof',
   'workout_logs has competition_proof'
 );
+select has_column('public', 'workout_logs', 'workout_source', 'workout_logs has workout_source');
+select has_column('public', 'workout_logs', 'difficulty', 'workout_logs has difficulty');
+select has_column('public', 'workout_logs', 'movement_patterns', 'workout_logs has movement_patterns');
+select has_column('public', 'workout_logs', 'duration_minutes', 'workout_logs has duration_minutes');
 select col_type_is(
   'public',
   'workout_logs',
@@ -35,6 +39,10 @@ select col_type_is(
   'jsonb',
   'competition_proof is jsonb'
 );
+select col_type_is('public', 'workout_logs', 'workout_source', 'text', 'workout_source is text');
+select col_type_is('public', 'workout_logs', 'difficulty', 'smallint', 'difficulty is smallint');
+select col_type_is('public', 'workout_logs', 'movement_patterns', 'text[]', 'movement_patterns is text[]');
+select col_type_is('public', 'workout_logs', 'duration_minutes', 'integer', 'duration_minutes is integer');
 
 select ok(
   (select relrowsecurity from pg_class where oid = 'public.workout_logs'::regclass),
@@ -206,6 +214,26 @@ select ok(
       and convalidated
   ),
   'workout_logs competition-proof shape constraint is validated'
+);
+select ok(
+  exists(select 1 from pg_constraint where conname = 'workout_logs_source_valid' and conrelid = 'public.workout_logs'::regclass and convalidated),
+  'workout source constraint is validated'
+);
+select ok(
+  exists(select 1 from pg_constraint where conname = 'workout_logs_readiness_valid' and conrelid = 'public.workout_logs'::regclass and convalidated),
+  'source-aware readiness constraint is validated'
+);
+select ok(
+  exists(select 1 from pg_constraint where conname = 'workout_logs_difficulty_valid' and conrelid = 'public.workout_logs'::regclass and convalidated),
+  'difficulty constraint is validated'
+);
+select ok(
+  exists(select 1 from pg_constraint where conname = 'workout_logs_movement_patterns_valid' and conrelid = 'public.workout_logs'::regclass and convalidated),
+  'movement-pattern constraint is validated'
+);
+select ok(
+  exists(select 1 from pg_constraint where conname = 'workout_logs_duration_minutes_valid' and conrelid = 'public.workout_logs'::regclass and convalidated),
+  'duration constraint is validated'
 );
 select ok(
   exists(

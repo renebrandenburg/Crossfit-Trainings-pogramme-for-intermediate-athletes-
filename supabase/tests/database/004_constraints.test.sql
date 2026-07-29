@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(18);
+select plan(22);
 
 insert into auth.users (id, email)
 values ('11111111-1111-4111-8111-111111111111', 'constraint-user@example.test');
@@ -23,6 +23,45 @@ select lives_ok(
       '{"note":"Verified"}'::jsonb
     )$$,
   'valid object metadata is accepted'
+);
+select lives_ok(
+  $$insert into public.workout_logs (
+      id, user_id, date, week, day_id, day_title, workout_source,
+      difficulty, movement_patterns, duration_minutes
+    ) values (
+      'valid-box-workout',
+      '11111111-1111-4111-8111-111111111111',
+      '2026-07-14', 1, 'box-1', 'Community WOD', 'box',
+      4, array['squat', 'long_conditioning'], 55
+    )$$,
+  'box workout metadata is accepted without readiness'
+);
+select throws_ok(
+  $$insert into public.workout_logs (
+      id, user_id, date, week, day_id, day_title, workout_source
+    ) values (
+      'invalid-source', '11111111-1111-4111-8111-111111111111',
+      '2026-07-14', 1, 'other-1', 'Invalid source', 'other'
+    )$$,
+  null, null, 'invalid workout source is rejected'
+);
+select throws_ok(
+  $$insert into public.workout_logs (
+      id, user_id, date, week, day_id, day_title, workout_source, movement_patterns
+    ) values (
+      'invalid-pattern', '11111111-1111-4111-8111-111111111111',
+      '2026-07-14', 1, 'box-2', 'Invalid pattern', 'box', array['chaos']
+    )$$,
+  null, null, 'unknown movement pattern is rejected'
+);
+select throws_ok(
+  $$insert into public.workout_logs (
+      id, user_id, date, week, day_id, day_title, workout_source, difficulty
+    ) values (
+      'invalid-difficulty', '11111111-1111-4111-8111-111111111111',
+      '2026-07-14', 1, 'box-3', 'Invalid difficulty', 'box', 6
+    )$$,
+  null, null, 'difficulty outside one to five is rejected'
 );
 select throws_ok(
   $$insert into public.workout_logs (

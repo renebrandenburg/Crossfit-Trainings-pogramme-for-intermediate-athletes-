@@ -7,7 +7,11 @@
     "week",
     "day_id",
     "day_title",
+    "workout_source",
     "readiness",
+    "difficulty",
+    "movement_patterns",
+    "duration_minutes",
     "rpe",
     "strength_result",
     "wod_score",
@@ -36,10 +40,48 @@
     "notes",
     "updated_at",
   ].join(",");
-  const OPTIONAL_LOG_COLUMNS = ["competition_proof", "timer_result"];
+  const WORKOUT_METADATA_COLUMNS = new Set([
+    "workout_source",
+    "difficulty",
+    "movement_patterns",
+    "duration_minutes",
+  ]);
+  const OPTIONAL_LOG_COLUMNS = [
+    "competition_proof",
+    "timer_result",
+    ...WORKOUT_METADATA_COLUMNS,
+  ];
   const OPTIONAL_LOG_FIELDS = [
-    { column: "competition_proof", property: "competitionProof" },
-    { column: "timer_result", property: "timerResult" },
+    {
+      column: "competition_proof",
+      property: "competitionProof",
+      remoteNeedsValue: true,
+    },
+    {
+      column: "timer_result",
+      property: "timerResult",
+      remoteNeedsValue: true,
+    },
+    {
+      column: "workout_source",
+      property: "workoutSource",
+      hasValue: (value) => Boolean(value && value !== "app"),
+    },
+    {
+      column: "difficulty",
+      property: "difficulty",
+      hasValue: (value) => value !== null && value !== undefined,
+    },
+    {
+      column: "movement_patterns",
+      property: "movementPatterns",
+      hasValue: (value) => Array.isArray(value) && value.length > 0,
+    },
+    {
+      column: "duration_minutes",
+      property: "durationMinutes",
+      hasValue: (value) => value !== null && value !== undefined,
+    },
   ];
   const SELECT_PAGE_SIZE = 1000;
   const ATHLETE_STATE_SCHEMA_VERSION = 1;
@@ -47,6 +89,22 @@
   const ATHLETE_STATE_COLUMNS = "user_id,schema_version,state,updated_at";
   const LOWER_IS_BETTER_PR_IDS = new Set(["row1k", "row2k", "run5k", "murph"]);
   const LEGACY_RECORD_UPDATED_AT = "1970-01-01T00:00:00.000Z";
+  const WORKOUT_SOURCES = new Set(["app", "box", "custom"]);
+  const TRAINING_STIMULI = new Set([
+    "squat",
+    "hinge",
+    "horizontal_push",
+    "vertical_push",
+    "horizontal_pull",
+    "vertical_pull",
+    "olympic_lifting",
+    "gymnastics",
+    "short_conditioning",
+    "medium_conditioning",
+    "long_conditioning",
+    "aerobic",
+    "sprint",
+  ]);
 
   /**
    * @typedef {Error & {operation?: string, code?: string, retryable?: boolean}} ForgeHourSyncError
@@ -226,9 +284,19 @@
       const localRecord = merged.get(record.id);
       const preservedOptionalFields = Object.fromEntries(
         OPTIONAL_LOG_FIELDS.filter(
-          ({ property }) => localRecord?.[property] && !record[property],
+          ({ property, hasValue = Boolean, remoteNeedsValue = false }) =>
+            hasValue(localRecord?.[property]) &&
+            (remoteNeedsValue
+              ? !hasValue(record[property])
+              : !Object.prototype.hasOwnProperty.call(record, property)),
         ).map(({ property }) => [property, localRecord[property]]),
       );
+      if (
+        localRecord?.workoutSource === "box" &&
+        !Object.prototype.hasOwnProperty.call(record, "workoutSource")
+      ) {
+        preservedOptionalFields.readiness = localRecord.readiness;
+      }
       merged.set(record.id, { ...record, ...preservedOptionalFields });
     });
     return Array.from(merged.values()).sort(byNewestCreatedAt);
@@ -250,8 +318,18 @@
         record.id &&
         (!remoteById.has(record.id) ||
           OPTIONAL_LOG_FIELDS.some(
-            ({ property }) =>
-              record[property] && !remoteById.get(record.id)[property],
+            ({ property, hasValue = Boolean, remoteNeedsValue = false }) => {
+              const remoteRecord = remoteById.get(record.id);
+              return (
+                hasValue(record[property]) &&
+                (remoteNeedsValue
+                  ? !hasValue(remoteRecord[property])
+                  : !Object.prototype.hasOwnProperty.call(
+                      remoteRecord,
+                      property,
+                    ))
+              );
+            },
           )),
     );
   }
@@ -263,19 +341,52 @@
       "Workout week",
       "validate_local_data",
     );
-    const readiness = requiredString(
-      log.readiness,
-      "Workout readiness",
-      "validate_local_data",
-    );
+    const workoutSource = String(log.workoutSource || "app");
+    if (!WORKOUT_SOURCES.has(workoutSource)) {
+      throw syncError(
+        "validate_local_data",
+        new Error("Workout source is invalid"),
+      );
+    }
+    const readiness = log.readiness
+      ? requiredString(
+          log.readiness,
+          "Workout readiness",
+          "validate_local_data",
+        )
+      : null;
+    const difficulty =
+      log.difficulty === null ||
+      log.difficulty === undefined ||
+      log.difficulty === ""
+        ? null
+        : Number(log.difficulty);
+    const durationMinutes =
+      log.durationMinutes === null ||
+      log.durationMinutes === undefined ||
+      log.durationMinutes === ""
+        ? null
+        : Number(log.durationMinutes);
+    const movementPatterns = Array.isArray(log.movementPatterns)
+      ? [...new Set(log.movementPatterns.map(String))]
+      : [];
     if (
       week < 1 ||
       week > 8 ||
-      !["green", "amber", "red"].includes(readiness)
+      (workoutSource !== "box" &&
+        !["green", "amber", "red"].includes(readiness)) ||
+      (readiness !== null && !["green", "amber", "red"].includes(readiness)) ||
+      (difficulty !== null &&
+        (!Number.isInteger(difficulty) || difficulty < 1 || difficulty > 5)) ||
+      (durationMinutes !== null &&
+        (!Number.isInteger(durationMinutes) ||
+          durationMinutes < 1 ||
+          durationMinutes > 300)) ||
+      movementPatterns.some((stimulus) => !TRAINING_STIMULI.has(stimulus))
     ) {
       throw syncError(
         "validate_local_data",
-        new Error("Workout week or readiness is invalid"),
+        new Error("Workout metadata is invalid"),
       );
     }
     const row = {
@@ -293,7 +404,11 @@
         "Workout title",
         "validate_local_data",
       ),
+      workout_source: workoutSource,
       readiness,
+      difficulty,
+      movement_patterns: movementPatterns,
+      duration_minutes: durationMinutes,
       rpe: log.rpe || null,
       strength_result: log.strengthResult || null,
       wod_score: log.wodScore || null,
@@ -333,6 +448,9 @@
   function withoutColumn(row, column) {
     const compatibleRow = { ...row };
     delete compatibleRow[column];
+    if (column === "workout_source" && compatibleRow.readiness == null) {
+      compatibleRow.readiness = "green";
+    }
     return compatibleRow;
   }
 
@@ -345,14 +463,33 @@
         new Error("Workout week is outside the supported cycle"),
       );
     }
-    const readiness = requiredString(row.readiness, "Workout readiness");
-    if (!["green", "amber", "red"].includes(readiness)) {
+    const workoutSource = String(row.workout_source || "app");
+    const readiness = row.readiness == null ? null : String(row.readiness);
+    const difficulty = row.difficulty == null ? null : Number(row.difficulty);
+    const durationMinutes =
+      row.duration_minutes == null ? null : Number(row.duration_minutes);
+    const movementPatterns = Array.isArray(row.movement_patterns)
+      ? row.movement_patterns.map(String)
+      : [];
+    if (
+      !WORKOUT_SOURCES.has(workoutSource) ||
+      (workoutSource !== "box" &&
+        !["green", "amber", "red"].includes(readiness)) ||
+      (readiness !== null && !["green", "amber", "red"].includes(readiness)) ||
+      (difficulty !== null &&
+        (!Number.isInteger(difficulty) || difficulty < 1 || difficulty > 5)) ||
+      (durationMinutes !== null &&
+        (!Number.isInteger(durationMinutes) ||
+          durationMinutes < 1 ||
+          durationMinutes > 300)) ||
+      movementPatterns.some((stimulus) => !TRAINING_STIMULI.has(stimulus))
+    ) {
       throw syncError(
         "validate_remote_data",
-        new Error("Workout readiness is invalid"),
+        new Error("Workout metadata is invalid"),
       );
     }
-    return {
+    const log = {
       id: requiredString(row.id, "Workout ID"),
       date: requiredString(row.date, "Workout date"),
       week,
@@ -371,6 +508,19 @@
       mobilityDone: Boolean(row.mobility_done),
       createdAt: requiredString(row.created_at, "Workout creation time"),
     };
+    if (Object.prototype.hasOwnProperty.call(row, "workout_source")) {
+      log.workoutSource = workoutSource;
+    }
+    if (Object.prototype.hasOwnProperty.call(row, "difficulty")) {
+      log.difficulty = difficulty;
+    }
+    if (Object.prototype.hasOwnProperty.call(row, "movement_patterns")) {
+      log.movementPatterns = movementPatterns;
+    }
+    if (Object.prototype.hasOwnProperty.call(row, "duration_minutes")) {
+      log.durationMinutes = durationMinutes;
+    }
+    return log;
   }
 
   function prAttemptToRow(attempt, userId) {
@@ -738,6 +888,9 @@
         return {
           competitionProofSynced: !omittedColumns.has("competition_proof"),
           timerResultSynced: !omittedColumns.has("timer_result"),
+          workoutMetadataSynced: ![...WORKOUT_METADATA_COLUMNS].some((column) =>
+            omittedColumns.has(column),
+          ),
         };
       },
       async clearLogs() {
@@ -770,6 +923,7 @@
         );
         let competitionProofPending = 0;
         let timerResultPending = 0;
+        let workoutMetadataPending = 0;
 
         if (logs.length) {
           const rows = logs.map((log) => logToRow(log, userId));
@@ -784,6 +938,19 @@
           }
           if (omittedColumns.has("timer_result")) {
             timerResultPending = rows.filter((row) => row.timer_result).length;
+          }
+          if (
+            [...WORKOUT_METADATA_COLUMNS].some((column) =>
+              omittedColumns.has(column),
+            )
+          ) {
+            workoutMetadataPending = rows.filter(
+              (row) =>
+                row.workout_source !== "app" ||
+                row.difficulty !== null ||
+                row.movement_patterns.length > 0 ||
+                row.duration_minutes !== null,
+            ).length;
           }
           assertNoError(result, "upload_workout_logs");
         }
@@ -804,6 +971,7 @@
           prs: prs.length,
           competitionProofPending,
           timerResultPending,
+          workoutMetadataPending,
         };
       },
     };
