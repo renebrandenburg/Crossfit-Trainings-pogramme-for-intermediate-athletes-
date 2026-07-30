@@ -96,6 +96,12 @@ stations before a plan can be saved or displayed. Scaling alternatives remain
 separate, explicitly labelled guidance. Manual and customized sessions keep
 their free-form text unchanged.
 
+Movement names, aliases, roles, equipment requirements, Olympic-lifting
+families, conditioning eligibility, Learn content, and ordered generator pool
+membership live in `movement-catalog.js`. The generator keeps progression,
+targets, loading, and workout-structure decisions in `app.js` and resolves
+movement prescriptions through the catalog without changing persisted IDs.
+
 Local account data in `forge-hour-state-v1` is partitioned by authenticated user
 ID. Legacy profile, programme, and score data is migrated into a separate
 `guest` bucket and is never shown in a signed-in account unless the athlete

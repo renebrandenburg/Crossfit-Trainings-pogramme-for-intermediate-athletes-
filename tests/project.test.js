@@ -105,7 +105,12 @@ test("HTML mounts the React app and references the required assets", () => {
   );
   assert.equal((html.match(/integrity="sha384-/g) || []).length, 4);
   assert.match(html, /<script src="\.\/supabase-config\.js" defer><\/script>/);
+  assert.match(html, /<script src="\.\/movement-catalog\.js" defer><\/script>/);
   assert.match(html, /<script src="\.\/app\.js" defer><\/script>/);
+  assert.ok(
+    html.indexOf("./movement-catalog.js") < html.indexOf("./app.js"),
+    "the movement catalog must load before the generator",
+  );
   assert.match(html, /<script src="\.\/supabase-sync\.js" defer><\/script>/);
   assert.match(html, /<script src="\.\/react-app\.js" defer><\/script>/);
 });
@@ -187,6 +192,7 @@ test("service worker precaches the app and only the primary CDN runtimes", async
   const assets = [
     "index.html",
     "styles.css",
+    "movement-catalog.js",
     "app.js",
     "supabase-config.js",
     "supabase-sync.js",
@@ -285,7 +291,10 @@ test("service worker preserves unrelated caches during version transitions", asy
   });
   await activationPromise;
 
-  assert.deepEqual(calls.deleted, ["crossfit-training-programme-v9"]);
+  assert.deepEqual(calls.deleted, [
+    "crossfit-training-programme-v9",
+    "crossfit-training-programme-v10",
+  ]);
 });
 
 test("project documentation describes the current feature set", () => {

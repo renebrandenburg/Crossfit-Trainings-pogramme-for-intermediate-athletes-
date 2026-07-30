@@ -14,6 +14,7 @@
     "maxNodeModuleJsDepth": 0
   },
   "include": [
+    "movement-catalog.js",
     "react-app.js",
     "supabase-sync.js",
     "supabase-config.js",

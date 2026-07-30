@@ -1888,6 +1888,26 @@ test("movement semantics reject drills, alternatives, and accidental WOD duplica
   });
   assert.deepEqual(workoutDefinitionErrors(scalingAlternative), []);
 
+  const legacyCustomMovement = semanticWorkout({
+    exercises: [
+      {
+        id: "custom-crawl",
+        movementId: "custom-crawl",
+        movement: "custom crawl",
+        target: { type: "reps", value: 10 },
+      },
+    ],
+  });
+  assert.deepEqual(workoutDefinitionErrors(legacyCustomMovement), []);
+  assert.match(
+    generatedSessionErrors({
+      workoutDefinition: legacyCustomMovement,
+      warmup: [],
+      strength: [],
+    }).join(" "),
+    /generated movement is not registered: custom-crawl/,
+  );
+
   const mixedOlympicFamily = semanticWorkout({
     olympicFamily: "clean",
     exercises: [

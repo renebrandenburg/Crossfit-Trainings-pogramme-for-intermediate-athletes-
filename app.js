@@ -415,561 +415,37 @@ const WEAKNESS_LABELS = {
   t2b: "Toes-to-bar",
 };
 
-function crossFitVideoSearch(query) {
-  return `https://www.youtube.com/@CrossFit/search?query=${encodeURIComponent(query)}`;
+const MOVEMENT_CATALOG_API =
+  typeof module !== "undefined" && module.exports
+    ? require("./movement-catalog.js")
+    : globalThis.ForgeHourMovementCatalog;
+
+if (!MOVEMENT_CATALOG_API) {
+  throw new Error("Movement catalog failed to load.");
 }
 
-const CROSSFIT_MOVEMENT_SOURCE =
-  "https://www.crossfit.com/essentials/movements";
+const {
+  MASTERS_MOVEMENT_VARIATIONS,
+  MOVEMENT_CATALOG,
+  MOVEMENT_LIBRARY,
+  WEAKNESS_MOVEMENT_IDS,
+  getBarbellDropSubstitution,
+  getEquipmentSubstitution,
+  getMovementDefinition,
+  getOlympicFamily,
+  getOrderedMovementPool,
+  isConditioningEligible,
+  isRegisteredMovement,
+  resolveMovementId,
+  sameMovement,
+} = MOVEMENT_CATALOG_API;
 
-const MOVEMENT_LIBRARY = [
-  {
-    id: "strict-pull-up",
-    name: "Strict pull-up",
-    category: "Gymnastics",
-    level: "Base strength",
-    focus:
-      "Build the pulling strength that makes kipping and chest-to-bar safer.",
-    cues: [
-      "Start from an active hang.",
-      "Pull elbows toward the ribs.",
-      "Finish chin clearly over the bar.",
-    ],
-    progressions: [
-      "Ring row",
-      "Band-assisted strict pull-up",
-      "Eccentric pull-up",
-      "Strict pull-up",
-    ],
-    scale: "Ring rows or banded strict pull-ups.",
-    videoUrl: crossFitVideoSearch("strict pull-up CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-  {
-    id: "kipping-pull-up",
-    name: "Kipping pull-up",
-    category: "Gymnastics",
-    level: "Intermediate",
-    focus: "Use a controlled hollow-to-arch swing before adding speed.",
-    cues: [
-      "Keep arms long through the swing.",
-      "Snap from arch to hollow.",
-      "Press away from the bar on the way down.",
-    ],
-    progressions: [
-      "Beat swing",
-      "Kip swing with active shoulders",
-      "Single kipping pull-up",
-      "Small sets",
-    ],
-    scale: "Beat swings, jumping pull-ups, or strict volume.",
-    videoUrl: crossFitVideoSearch("kipping pull-up CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-  {
-    id: "chest-to-bar",
-    name: "Chest-to-bar pull-up",
-    category: "Gymnastics",
-    level: "Intermediate",
-    focus: "Add range of motion and a stronger pull without losing rhythm.",
-    cues: [
-      "Open the shoulders in the arch.",
-      "Drive hips before pulling.",
-      "Pull the bar to the lower chest.",
-    ],
-    progressions: [
-      "Kip swing",
-      "Kipping pull-up",
-      "Banded chest-to-bar",
-      "Singles and doubles",
-    ],
-    scale: "Chin-over-bar pull-ups, banded chest-to-bar, or ring rows.",
-    videoUrl: crossFitVideoSearch("chest-to-bar pull-up CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-  {
-    id: "toes-to-bar",
-    name: "Toes-to-bar",
-    category: "Gymnastics",
-    level: "Intermediate",
-    focus: "Connect lats and abs so the feet rise without a wild swing.",
-    cues: [
-      "Stay long in the arch.",
-      "Press down on the bar.",
-      "Close fast and push away after contact.",
-    ],
-    progressions: [
-      "Hanging knee raise",
-      "Kip swing",
-      "Knees-to-elbows",
-      "Toes-to-bar singles",
-    ],
-    scale: "Knees-to-chest, hanging knee raises, or lying leg raises.",
-    videoUrl: crossFitVideoSearch("toes-to-bar CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-  {
-    id: "bar-muscle-up",
-    name: "Bar muscle-up",
-    category: "Gymnastics",
-    level: "Advanced",
-    focus:
-      "Turn a strong kip and close pull into a fast turnover above the bar.",
-    cues: [
-      "Keep the bar close.",
-      "Drive hips toward the bar.",
-      "Turn over with fast elbows and press tall.",
-    ],
-    progressions: [
-      "Chest-to-bar",
-      "Box bar muscle-up transition",
-      "Banded turnover",
-      "Singles",
-    ],
-    scale:
-      "Jumping bar muscle-ups, banded transitions, or chest-to-bar pull-ups.",
-    videoUrl: crossFitVideoSearch("bar muscle-up CrossFit tutorial"),
-    sourceUrl: "https://www.crossfit.com/essentials/the-muscle-up",
-  },
-  {
-    id: "ring-muscle-up",
-    name: "Ring muscle-up",
-    category: "Gymnastics",
-    level: "Advanced",
-    focus:
-      "Combine false grip strength, a high pull, and a close ring transition.",
-    cues: [
-      "Keep rings close to the body.",
-      "Pull low to the ribs.",
-      "Sit through the transition before the dip.",
-    ],
-    progressions: [
-      "False grip hang",
-      "Low-ring transition",
-      "Strict ring dip",
-      "Assisted ring muscle-up",
-    ],
-    scale:
-      "Low-ring transitions, banded ring muscle-ups, or ring rows plus dips.",
-    videoUrl: crossFitVideoSearch("ring muscle-up CrossFit tutorial"),
-    sourceUrl: "https://www.crossfit.com/essentials/the-muscle-up",
-  },
-  {
-    id: "ring-dip",
-    name: "Ring dip",
-    category: "Gymnastics",
-    level: "Strength",
-    focus: "Own support stability before adding depth or volume.",
-    cues: [
-      "Lock out with rings close.",
-      "Lower under control.",
-      "Keep shoulders away from the ears.",
-    ],
-    progressions: [
-      "Top support hold",
-      "Eccentric ring dip",
-      "Banded ring dip",
-      "Strict ring dip",
-    ],
-    scale: "Box dips, banded ring dips, or push-ups.",
-    videoUrl: crossFitVideoSearch("ring dip CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-  {
-    id: "handstand-push-up",
-    name: "Handstand push-up",
-    category: "Gymnastics",
-    level: "Intermediate",
-    focus:
-      "Stack the body, control the descent, and finish with a locked-out line.",
-    cues: [
-      "Hands just outside shoulder width.",
-      "Lower head between the hands.",
-      "Press through and finish ribs down.",
-    ],
-    progressions: [
-      "Pike push-up",
-      "Wall walk hold",
-      "Strict negative",
-      "Kipping handstand push-up",
-    ],
-    scale: "Pike push-ups, box handstand push-ups, or dumbbell strict press.",
-    videoUrl: crossFitVideoSearch("handstand push-up CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-  {
-    id: "handstand-walk",
-    name: "Handstand walk",
-    category: "Gymnastics",
-    level: "Advanced",
-    focus:
-      "Balance comes from a stacked line, fingertip pressure, and small steps.",
-    cues: [
-      "Push tall through the floor.",
-      "Keep ribs tucked.",
-      "Shift weight before moving the hands.",
-    ],
-    progressions: [
-      "Wall walk",
-      "Shoulder taps",
-      "Box weight shifts",
-      "Short freestanding walks",
-    ],
-    scale: "Wall walks, bear crawls, or handstand shoulder taps.",
-    videoUrl: crossFitVideoSearch("handstand walk CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-  {
-    id: "rope-climb",
-    name: "Rope climb",
-    category: "Gymnastics",
-    level: "Intermediate",
-    focus: "Use the feet first so the arms do not become the limiter.",
-    cues: [
-      "Jump high and lock the feet.",
-      "Stand before pulling.",
-      "Reach long, then re-clamp.",
-    ],
-    progressions: [
-      "Foot lock drill",
-      "Rope pull from floor",
-      "Half rope climb",
-      "Full rope climb",
-    ],
-    scale: "Rope pulls from the floor or towel pull-ups.",
-    videoUrl: crossFitVideoSearch("rope climb CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-  {
-    id: "pistol-squat",
-    name: "Pistol squat",
-    category: "Gymnastics",
-    level: "Intermediate",
-    focus:
-      "Develop single-leg control through the whole range without collapsing the knee.",
-    cues: [
-      "Keep the working foot rooted.",
-      "Reach the free leg forward.",
-      "Stand through the midfoot.",
-    ],
-    progressions: [
-      "Box pistol",
-      "Counterweight pistol",
-      "Assisted pistol",
-      "Alternating pistols",
-    ],
-    scale: "Box pistols, step-ups, or assisted pistols.",
-    videoUrl: crossFitVideoSearch("pistol squat CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-  {
-    id: "back-squat",
-    name: "Back squat",
-    category: "Weightlifting",
-    level: "Strength",
-    focus:
-      "Build lower-body strength with a stable brace and full-foot pressure.",
-    cues: [
-      "Brace before the descent.",
-      "Knees track over toes.",
-      "Drive the floor away to stand.",
-    ],
-    progressions: [
-      "Air squat",
-      "Tempo goblet squat",
-      "Light back squat",
-      "Working sets",
-    ],
-    scale: "Goblet squat, box squat, or reduced range of motion.",
-    videoUrl: crossFitVideoSearch("back squat CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-  {
-    id: "front-squat",
-    name: "Front squat",
-    category: "Weightlifting",
-    level: "Strength",
-    focus:
-      "Train upright squatting and front-rack positions for cleans and thrusters.",
-    cues: [
-      "Elbows high.",
-      "Stay tall through the torso.",
-      "Keep pressure through the whole foot.",
-    ],
-    progressions: [
-      "Goblet squat",
-      "Front-rack hold",
-      "Tempo front squat",
-      "Front squat",
-    ],
-    scale: "Goblet squat, cross-arm front squat, or box front squat.",
-    videoUrl: crossFitVideoSearch("front squat CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-  {
-    id: "overhead-squat",
-    name: "Overhead squat",
-    category: "Weightlifting",
-    level: "Mobility and strength",
-    focus: "Own the overhead position while squatting with control.",
-    cues: [
-      "Press up into the bar.",
-      "Keep armpits forward.",
-      "Sit straight down between the heels.",
-    ],
-    progressions: [
-      "PVC pass-through",
-      "PVC overhead squat",
-      "Snatch balance",
-      "Loaded overhead squat",
-    ],
-    scale: "PVC overhead squat, front squat, or reduced range.",
-    videoUrl: crossFitVideoSearch("overhead squat CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-  {
-    id: "deadlift",
-    name: "Deadlift",
-    category: "Weightlifting",
-    level: "Strength",
-    focus: "Create a strong hinge pattern for pulling from the floor.",
-    cues: [
-      "Bar over midfoot.",
-      "Lats tight before the bar leaves.",
-      "Hips and shoulders rise together.",
-    ],
-    progressions: [
-      "Kettlebell deadlift",
-      "Romanian deadlift",
-      "Tempo deadlift",
-      "Working deadlift",
-    ],
-    scale: "Kettlebell deadlift, raised bar deadlift, or lighter sets.",
-    videoUrl: crossFitVideoSearch("deadlift CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-  {
-    id: "shoulder-press",
-    name: "Shoulder press",
-    category: "Weightlifting",
-    level: "Base strength",
-    focus: "Build strict overhead strength without using the legs.",
-    cues: [
-      "Squeeze legs and glutes.",
-      "Move the head back, then through.",
-      "Finish with biceps by the ears.",
-    ],
-    progressions: [
-      "Dumbbell strict press",
-      "Barbell strict press",
-      "Tempo strict press",
-      "Heavy sets",
-    ],
-    scale: "Dumbbell strict press or seated press.",
-    videoUrl: crossFitVideoSearch("shoulder press CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-  {
-    id: "push-press",
-    name: "Push press",
-    category: "Weightlifting",
-    level: "Power",
-    focus: "Transfer leg drive into the bar while keeping the torso vertical.",
-    cues: [
-      "Dip straight down.",
-      "Drive hard with the legs.",
-      "Press after the hips open.",
-    ],
-    progressions: [
-      "Dip-drive drill",
-      "Dumbbell push press",
-      "Light barbell push press",
-      "Cycling sets",
-    ],
-    scale: "Dumbbell push press or lighter barbell loads.",
-    videoUrl: crossFitVideoSearch("push press CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-  {
-    id: "push-jerk",
-    name: "Push jerk",
-    category: "Weightlifting",
-    level: "Power",
-    focus: "Drive the bar up, then receive it with locked arms and bent knees.",
-    cues: [
-      "Dip vertical.",
-      "Punch under the bar.",
-      "Stand to finish before lowering.",
-    ],
-    progressions: [
-      "Jump and land drill",
-      "Tall jerk",
-      "Push jerk from rack",
-      "Cycling push jerks",
-    ],
-    scale: "Push press or light technique triples.",
-    videoUrl: crossFitVideoSearch("push jerk CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-  {
-    id: "split-jerk",
-    name: "Split jerk",
-    category: "Weightlifting",
-    level: "Olympic lifting",
-    focus: "Receive heavy loads overhead with a balanced split stance.",
-    cues: [
-      "Dip and drive vertical.",
-      "Punch up as the feet split.",
-      "Recover front foot, then back foot.",
-    ],
-    progressions: [
-      "Jerk footwork",
-      "Tall split jerk",
-      "Paused split jerk",
-      "Split jerk",
-    ],
-    scale: "Push jerk, power jerk, or footwork with an empty bar.",
-    videoUrl: crossFitVideoSearch("split jerk CrossFit tutorial"),
-    sourceUrl: "https://www.crossfit.com/essentials/the-clean-and-jerk",
-  },
-  {
-    id: "clean",
-    name: "Clean",
-    category: "Weightlifting",
-    level: "Olympic lifting",
-    focus:
-      "Move the bar from the floor to the front rack with speed and a strong catch.",
-    cues: [
-      "Push the floor away.",
-      "Keep the bar close.",
-      "Receive with elbows fast and high.",
-    ],
-    progressions: [
-      "Clean deadlift",
-      "Hang power clean",
-      "Front squat",
-      "Squat clean",
-    ],
-    scale: "Hang clean, power clean, or medicine-ball clean.",
-    videoUrl: crossFitVideoSearch("clean CrossFit tutorial"),
-    sourceUrl: "https://www.crossfit.com/essentials/the-clean-and-jerk",
-  },
-  {
-    id: "power-clean",
-    name: "Power clean",
-    category: "Weightlifting",
-    level: "Olympic lifting",
-    focus: "Catch the bar above parallel with a fast turnover.",
-    cues: [
-      "Finish the pull.",
-      "Move elbows around quickly.",
-      "Meet the bar with a partial squat.",
-    ],
-    progressions: [
-      "Clean pull",
-      "Hang power clean",
-      "Tall power clean",
-      "Power clean",
-    ],
-    scale: "Hang power clean or medicine-ball clean.",
-    videoUrl: crossFitVideoSearch("power clean CrossFit tutorial"),
-    sourceUrl: "https://www.crossfit.com/essentials/the-clean-and-jerk",
-  },
-  {
-    id: "clean-and-jerk",
-    name: "Clean and jerk",
-    category: "Weightlifting",
-    level: "Olympic lifting",
-    focus: "Combine a stable clean with a decisive overhead finish.",
-    cues: [
-      "Reset the brace after the clean.",
-      "Dip vertical.",
-      "Lock out before recovering the feet.",
-    ],
-    progressions: [
-      "Clean",
-      "Front squat",
-      "Push jerk",
-      "Clean and jerk singles",
-    ],
-    scale: "Power clean and push press, or clean plus push jerk.",
-    videoUrl: crossFitVideoSearch("clean and jerk CrossFit tutorial"),
-    sourceUrl: "https://www.crossfit.com/essentials/the-clean-and-jerk",
-  },
-  {
-    id: "snatch",
-    name: "Snatch",
-    category: "Weightlifting",
-    level: "Olympic lifting",
-    focus: "Move the bar from floor to overhead in one fast, balanced motion.",
-    cues: [
-      "Stay patient to the knee.",
-      "Jump vertically.",
-      "Punch under and stabilize overhead.",
-    ],
-    progressions: [
-      "Burgener warm-up",
-      "Hang power snatch",
-      "Overhead squat",
-      "Squat snatch",
-    ],
-    scale: "Hang power snatch, dumbbell snatch, or PVC technique work.",
-    videoUrl: crossFitVideoSearch("snatch CrossFit tutorial"),
-    sourceUrl: "https://www.crossfit.com/essentials/the-snatch",
-  },
-  {
-    id: "power-snatch",
-    name: "Power snatch",
-    category: "Weightlifting",
-    level: "Olympic lifting",
-    focus: "Receive the snatch above parallel with speed and stable shoulders.",
-    cues: ["Keep the bar close.", "Finish tall.", "Punch up as the feet move."],
-    progressions: [
-      "Snatch high pull",
-      "Hang power snatch",
-      "Tall power snatch",
-      "Power snatch",
-    ],
-    scale: "Dumbbell snatch, hang power snatch, or PVC drills.",
-    videoUrl: crossFitVideoSearch("power snatch CrossFit tutorial"),
-    sourceUrl: "https://www.crossfit.com/essentials/the-snatch",
-  },
-  {
-    id: "thruster",
-    name: "Thruster",
-    category: "Weightlifting",
-    level: "CrossFit staple",
-    focus: "Blend a front squat and push press into one smooth rep.",
-    cues: [
-      "Elbows stay high in the squat.",
-      "Drive out of the legs.",
-      "Finish locked out overhead.",
-    ],
-    progressions: [
-      "Front squat",
-      "Push press",
-      "Pause thruster",
-      "Cycling thrusters",
-    ],
-    scale:
-      "Dumbbell thruster, lighter barbell, or front squat plus push press.",
-    videoUrl: crossFitVideoSearch("thruster CrossFit tutorial"),
-    sourceUrl: CROSSFIT_MOVEMENT_SOURCE,
-  },
-];
-
+const canonicalMovementId = resolveMovementId;
+const olympicFamilyForMovement = getOlympicFamily;
 const WOD_SCHEMA_VERSION = 9;
 const PLAN_SCHEMA_VERSION = 5;
 const WORKOUT_DEFINITION_VERSION = 2;
 const OLYMPIC_FAMILIES = new Set(["clean", "snatch"]);
-const TECHNICAL_DRILL_MOVEMENT_IDS = new Set([
-  "bar-muscle-up-transition",
-  "hang-power-clean-drill",
-  "technique-row",
-]);
-const CONDITIONING_MOVEMENT_EXCLUSIONS = new Set([
-  ...TECHNICAL_DRILL_MOVEMENT_IDS,
-]);
 const TRAINING_STIMULI = [
   "squat",
   "hinge",
@@ -2003,29 +1479,6 @@ function statCard(value, label) {
   `;
 }
 
-function canonicalMovementId(value) {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\bdb\b/g, "dumbbell")
-    .replace(/\bkb\b/g, "kettlebell")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  const aliases = {
-    "hang-power-clean-drills": "hang-power-clean-drill",
-    "bar-muscle-up-transitions": "bar-muscle-up-transition",
-    "technique-row": "technique-row",
-  };
-  return aliases[normalized] || normalized;
-}
-
-function olympicFamilyForMovement(value) {
-  const movement = String(value || "").toLowerCase();
-  if (/snatch|overhead squat|overhead hold/.test(movement)) return "snatch";
-  if (/clean|front-rack|front rack/.test(movement)) return "clean";
-  return null;
-}
-
 function hasUnresolvedMovementAlternative(value) {
   const movement = String(value || "").trim();
   if (!movement) return false;
@@ -2041,19 +1494,7 @@ function hasUnresolvedGeneratedPrescriptionChoice(value) {
 }
 
 function movementIsConditioningEligible(exercise) {
-  const id = canonicalMovementId(exercise?.movementId || exercise?.movement);
-  return (
-    Boolean(id) &&
-    !CONDITIONING_MOVEMENT_EXCLUSIONS.has(id) &&
-    !/\b(?:drills?|practice|rehearsal)\b/i.test(exercise?.movement || "")
-  );
-}
-
-function sameMovement(left, right) {
-  return (
-    canonicalMovementId(left?.movementId || left?.movement) ===
-    canonicalMovementId(right?.movementId || right?.movement)
-  );
+  return isConditioningEligible(exercise?.movementId || exercise?.movement);
 }
 
 class WorkoutValidationError extends Error {
@@ -2396,6 +1837,13 @@ function validateWorkoutDefinition(definition) {
 function generatedSessionErrors(session) {
   const errors = workoutDefinitionErrors(session?.workoutDefinition);
   if (!session || typeof session !== "object") return errors;
+  allWorkoutExercises(session.workoutDefinition).forEach((exercise) => {
+    if (!isRegisteredMovement(exercise?.movementId || exercise?.movement)) {
+      errors.push(
+        `generated movement is not registered: ${exercise?.movementId || exercise?.movement || "unknown"}`,
+      );
+    }
+  });
   const family = session.olympicFamily;
   if (family != null && !OLYMPIC_FAMILIES.has(family)) {
     errors.push("session Olympic family is invalid");
@@ -4096,67 +3544,15 @@ function adaptWorkoutToEquipment(definition, availableEquipment) {
   const equipment = new Set(availableEquipment || DEFAULT_EQUIPMENT);
   const next = structuredClone(definition);
   const adapt = (exercise) => {
-    const movement = String(exercise.movement || "");
-    let replacement = movement;
-    let target = exercise.target;
-    let load = exercise.load;
-    if (/row/i.test(movement) && !equipment.has("rower")) {
-      replacement = equipment.has("bike")
-        ? movement.replace(/row/gi, "bike erg")
-        : equipment.has("running")
-          ? movement.replace(/row/gi, "run")
-          : "burpees";
-    } else if (/bike/i.test(movement) && !equipment.has("bike")) {
-      replacement = equipment.has("rower")
-        ? movement.replace(/bike(?: erg)?/gi, "row")
-        : equipment.has("running")
-          ? movement.replace(/bike(?: erg)?/gi, "run")
-          : "burpees";
-    } else if (/run|shuttle/i.test(movement) && !equipment.has("running")) {
-      replacement = equipment.has("rower")
-        ? "row"
-        : equipment.has("bike")
-          ? "bike erg"
-          : "burpees";
-    }
-    if (replacement !== movement && replacement === "burpees") {
-      target = bodyweightFallbackTarget(exercise.target);
-      load = undefined;
-    }
-    if (/dumbbell|\bDB\b/i.test(replacement) && !equipment.has("dumbbells")) {
-      if (equipment.has("kettlebells")) {
-        replacement = replacement.replace(/dumbbell|\bDB\b/gi, "kettlebell");
-      } else {
-        replacement = "alternating reverse lunges";
-        target = bodyweightFallbackTarget(exercise.target);
-        load = undefined;
-      }
-    }
-    if (
-      /kettlebell|\bKB\b/i.test(replacement) &&
-      !equipment.has("kettlebells")
-    ) {
-      if (equipment.has("dumbbells")) {
-        replacement = replacement.replace(/kettlebell|\bKB\b/gi, "dumbbell");
-      } else {
-        replacement = "air squats";
-        target = bodyweightFallbackTarget(exercise.target);
-        load = undefined;
-      }
-    }
-    if (/box (?:jump|step)/i.test(replacement) && !equipment.has("box")) {
-      replacement = replacement.replace(
-        /box (?:jump|step)(?:-over)?s?/gi,
-        "walking lunges",
-      );
-    }
-    if (/ring/i.test(replacement) && !equipment.has("rings")) {
-      replacement = replacement.replace(/ring rows?/gi, "strict pull-ups");
-    }
+    const substitution = getEquipmentSubstitution(exercise, equipment);
+    const target = substitution.resetTarget
+      ? bodyweightFallbackTarget(exercise.target)
+      : exercise.target;
+    const load = substitution.clearLoad ? undefined : exercise.load;
     const adapted = {
       ...exercise,
-      movementId: canonicalMovementId(replacement),
-      movement: replacement,
+      movementId: substitution.movementId,
+      movement: substitution.displayName,
       target,
     };
     if (load === undefined) delete adapted.load;
@@ -4209,16 +3605,11 @@ function adaptWorkoutToBarbellDropPolicy(definition, policy) {
   const next = structuredClone(definition);
   const adapt = (exercise) => {
     if (!isBarbellConditioningExercise(exercise)) return exercise;
-    const movement = String(exercise.movement || "");
-    const replacement = /press|thruster|jerk/i.test(movement)
-      ? "hand-release push-ups"
-      : /squat/i.test(movement)
-        ? "air squats"
-        : "alternating reverse lunges";
+    const replacement = getBarbellDropSubstitution(exercise);
     const adapted = {
       ...exercise,
-      movementId: canonicalMovementId(replacement),
-      movement: replacement,
+      movementId: replacement.id,
+      movement: replacement.displayName,
       target: bodyweightFallbackTarget(exercise.target),
     };
     delete adapted.load;
@@ -5466,10 +4857,7 @@ function generatedWodMovementPool(
     profile.maxes.snatch,
     goal === "stronger" ? 0.55 : 0.45,
   );
-  const monoOptions =
-    goal === "endurance"
-      ? ["row", "bike", "run", "ski", "shuttle run"]
-      : ["row", "bike", "run", "double unders", "ski"];
+  const monoOptions = getOrderedMovementPool("monostructural", goal);
   const mono = (() => {
     if (weakness === "rowing" && day === 2) return "row";
     if (["running", "runningBodyweight"].includes(weakness) && day % 2 === 0) {
@@ -5485,84 +4873,98 @@ function generatedWodMovementPool(
   const gymOptions = {
     stronger: [
       repsExercise("gymnastics", "toes-to-bar", 8),
-      repsExercise("gymnastics", "box jumps", 8),
+      repsExercise("gymnastics", "box-jumps", 8),
       repsExercise("gymnastics", "push-ups", 10),
-      repsExercise("gymnastics", "chest-to-bar pull-ups", 6),
-      repsExercise("gymnastics", "wall balls", 12),
+      repsExercise("gymnastics", "chest-to-bar-pull-ups", 6),
+      repsExercise("gymnastics", "wall-balls", 12),
     ],
     endurance: [
       repsExercise("gymnastics", "burpees", 10),
-      repsExercise("gymnastics", "wall balls", 14),
+      repsExercise("gymnastics", "wall-balls", 14),
       repsExercise("gymnastics", "sit-ups", 12),
-      repsExercise("gymnastics", "box step-overs", 10),
-      repsExercise("gymnastics", "air squats", 12),
+      repsExercise("gymnastics", "box-step-overs", 10),
+      repsExercise("gymnastics", "air-squats", 12),
     ],
     gymnastics: [
       repsExercise("gymnastics", "pull-ups", 8),
       repsExercise("gymnastics", "toes-to-bar", 10),
-      repsExercise("gymnastics", "chest-to-bar pull-ups", 6),
-      repsExercise("gymnastics", "wall walk", 1),
-      durationExercise("gymnastics", "handstand hold", 30),
+      repsExercise("gymnastics", "chest-to-bar-pull-ups", 6),
+      repsExercise("gymnastics", "wall-walk", 1),
+      durationExercise("gymnastics", "handstand-hold", 30),
     ],
     balanced: [
       repsExercise("gymnastics", "pull-ups", 10),
-      repsExercise("gymnastics", "wall balls", 12),
+      repsExercise("gymnastics", "wall-balls", 12),
       repsExercise("gymnastics", "toes-to-bar", 10),
       repsExercise("gymnastics", "burpees", 8),
-      repsExercise("gymnastics", "air squats", 15),
+      repsExercise("gymnastics", "air-squats", 15),
     ],
   };
   const weightOptions = {
     stronger: [
-      repsExercise("weighted", "power cleans", 6, cleanLoad),
-      repsExercise("weighted", "DB front squats", 8),
+      repsExercise("weighted", "power-cleans", 6, cleanLoad),
+      repsExercise("weighted", "dumbbell-front-squats", 8),
       repsExercise(
         "weighted",
         "deadlifts",
         6,
         kg(profile.maxes.cleanJerk, 0.85),
       ),
-      repsExercise("weighted", "DB snatches", 8),
-      repsExercise("weighted", "push jerks", 6, lightCleanLoad),
+      repsExercise("weighted", "dumbbell-snatches", 8),
+      repsExercise("weighted", "push-jerks", 6, lightCleanLoad),
     ],
     endurance: [
-      repsExercise("weighted", "light KB swings", 12),
-      repsExercise("weighted", "DB snatches", 10),
-      repsExercise("weighted", "goblet squats", 12),
-      repsExercise("weighted", "power cleans", 8, lightCleanLoad),
-      repsExercise("weighted", "alternating DB step-ups", 16),
+      repsExercise("weighted", "light-kettlebell-swings", 12),
+      repsExercise("weighted", "dumbbell-snatches", 10),
+      repsExercise("weighted", "goblet-squats", 12),
+      repsExercise("weighted", "power-cleans", 8, lightCleanLoad),
+      repsExercise("weighted", "alternating-dumbbell-step-ups", 16),
     ],
     gymnastics: [
-      repsExercise("weighted", "DB snatches", 8, snatchLoad),
-      repsExercise("weighted", "light KB swings", 10),
-      repsExercise("weighted", "overhead squats", 8, snatchLoad),
-      repsExercise("weighted", "medicine-ball cleans", 10),
-      repsExercise("weighted", "DB lunges", 12),
+      repsExercise("weighted", "dumbbell-snatches", 8, snatchLoad),
+      repsExercise("weighted", "light-kettlebell-swings", 10),
+      repsExercise("weighted", "overhead-squats", 8, snatchLoad),
+      repsExercise("weighted", "medicine-ball-cleans", 10),
+      repsExercise("weighted", "dumbbell-lunges", 12),
     ],
     balanced: [
-      repsExercise("weighted", "power cleans", 8, lightCleanLoad),
-      repsExercise("weighted", "overhead squats", 8, snatchLoad),
-      repsExercise("weighted", "DB snatches", 10),
-      repsExercise("weighted", "KB swings", 12),
-      repsExercise("weighted", "clean and jerks", 8, lightCleanLoad),
+      repsExercise("weighted", "power-cleans", 8, lightCleanLoad),
+      repsExercise("weighted", "overhead-squats", 8, snatchLoad),
+      repsExercise("weighted", "dumbbell-snatches", 10),
+      repsExercise("weighted", "kettlebell-swings", 12),
+      repsExercise("weighted", "clean-and-jerks", 8, lightCleanLoad),
     ],
   };
 
-  const selectedGymOptions = gymOptions[goal] || gymOptions.balanced;
-  const baseWeightOptions = weightOptions[goal] || weightOptions.balanced;
+  const orderOptionsFromCatalog = (pool, options) => {
+    const byMovementId = new Map(
+      options.map((exercise) => [exercise.movementId, exercise]),
+    );
+    return getOrderedMovementPool(pool, goal)
+      .map((movementId) => byMovementId.get(movementId))
+      .filter(Boolean);
+  };
+  const selectedGymOptions = orderOptionsFromCatalog(
+    "gymnastics",
+    gymOptions[goal] || gymOptions.balanced,
+  );
+  const baseWeightOptions = orderOptionsFromCatalog(
+    "weighted",
+    weightOptions[goal] || weightOptions.balanced,
+  );
   const selectedWeightOptions = OLYMPIC_FAMILIES.has(olympicFamily)
     ? baseWeightOptions.filter((exercise) => {
         const family = olympicFamilyForMovement(exercise.movement);
         return family == null || family === olympicFamily;
       })
     : baseWeightOptions;
-  const simpleGymOptions = [
+  const simpleGymOptions = orderOptionsFromCatalog("simpleGymnastics", [
     repsExercise("simple-gym", "burpees", 8),
     repsExercise("simple-gym", "sit-ups", 10),
     repsExercise("simple-gym", "push-ups", 10),
-    repsExercise("simple-gym", "air squats", 12),
-    repsExercise("simple-gym", "ring rows", 8),
-  ];
+    repsExercise("simple-gym", "air-squats", 12),
+    repsExercise("simple-gym", "ring-rows", 8),
+  ]);
   const gym = pick(
     selectedGymOptions,
     week +
@@ -5595,7 +4997,7 @@ function generatedWodMovementPool(
     monoAmrap: monoAmrap(mono, goal),
     monoInterval: monoInterval(mono, goal),
     shortMono: shortMono(mono),
-    easyMono: durationExercise("easy-monostructural", `easy ${mono}`, 45),
+    easyMono: durationExercise("easy-monostructural", `easy-${mono}`, 45),
     gym,
     simpleGym,
     weakness: weaknessMove,
@@ -5793,12 +5195,12 @@ function monoAmrap(mono, goal) {
       goal === "endurance" ? 200 : 100,
     );
   }
-  if (mono === "shuttle run") {
-    return repsExercise("monostructural", "shuttle runs", 8);
+  if (mono === "shuttle-run") {
+    return repsExercise("monostructural", "shuttle-runs", 8);
   }
   return repsExercise(
     "monostructural",
-    "double unders",
+    "double-unders",
     goal === "endurance" ? 40 : 30,
   );
 }
@@ -5807,7 +5209,7 @@ function generatedChipper(goal, weaknessMove, mono, gym, weight) {
   return {
     buyIn: [withExerciseId(monoInterval(mono, goal), "chipper-opening")],
     exercises: combineConsecutiveDuplicateExercises([
-      repsExercise("chipper-air-squats", "air squats", 40),
+      repsExercise("chipper-air-squats", "air-squats", 40),
       withFixedExerciseTarget(gym, "chipper-gymnastics", 30),
       withFixedExerciseTarget(weight, "chipper-weighted", 20),
       withFixedExerciseTarget(weaknessMove, "chipper-weakness", 10),
@@ -5996,20 +5398,38 @@ function weaknessWodMovement(
 ) {
   const reps = week >= 5 ? 8 : 6;
   const movements = {
-    squat: repsExercise("weakness", "tempo goblet squats", reps),
+    squat: repsExercise("weakness", WEAKNESS_MOVEMENT_IDS.squat, reps),
     olympic:
       olympicFamily === "snatch"
-        ? repsExercise("weakness", "hang power snatches", reps, snatchLoad)
-        : repsExercise("weakness", "hang power cleans", reps, cleanLoad),
-    rowing: distanceExercise("weakness", "row", 250),
-    running: distanceExercise("weakness", "run", 200),
-    runningBodyweight: repsExercise("weakness", "burpees", reps),
-    pulling: repsExercise("weakness", "strict pull-ups", reps),
+        ? repsExercise(
+            "weakness",
+            WEAKNESS_MOVEMENT_IDS.olympic.snatch,
+            reps,
+            snatchLoad,
+          )
+        : repsExercise(
+            "weakness",
+            WEAKNESS_MOVEMENT_IDS.olympic.clean,
+            reps,
+            cleanLoad,
+          ),
+    rowing: distanceExercise("weakness", WEAKNESS_MOVEMENT_IDS.rowing, 250),
+    running: distanceExercise("weakness", WEAKNESS_MOVEMENT_IDS.running, 200),
+    runningBodyweight: repsExercise(
+      "weakness",
+      WEAKNESS_MOVEMENT_IDS.runningBodyweight,
+      reps,
+    ),
+    pulling: repsExercise("weakness", WEAKNESS_MOVEMENT_IDS.pulling, reps),
     muscleup:
       barMuscleUpLevel === "singles" && week >= 5
-        ? repsExercise("weakness", "bar muscle-ups", 2)
-        : repsExercise("weakness", "chest-to-bar pull-ups", reps),
-    t2b: repsExercise("weakness", "toes-to-bar", reps),
+        ? repsExercise("weakness", WEAKNESS_MOVEMENT_IDS.muscleup.advanced, 2)
+        : repsExercise(
+            "weakness",
+            WEAKNESS_MOVEMENT_IDS.muscleup.fallback,
+            reps,
+          ),
+    t2b: repsExercise("weakness", WEAKNESS_MOVEMENT_IDS.t2b, reps),
   };
   return movements[weakness];
 }
@@ -6044,9 +5464,9 @@ function monoInterval(mono, goal) {
       goal === "endurance" ? 400 : 250,
     );
   }
-  if (mono === "shuttle run")
-    return repsExercise("monostructural", "shuttle runs", 10);
-  return repsExercise("monostructural", "double unders", 50);
+  if (mono === "shuttle-run")
+    return repsExercise("monostructural", "shuttle-runs", 10);
+  return repsExercise("monostructural", "double-unders", 50);
 }
 
 function shortMono(mono) {
@@ -6054,9 +5474,9 @@ function shortMono(mono) {
   if (mono === "row") return distanceExercise("after-round", "row", 150);
   if (mono === "bike") return caloriesExercise("after-round", "bike", 8, 6);
   if (mono === "ski") return distanceExercise("after-round", "ski", 150);
-  if (mono === "shuttle run")
-    return repsExercise("after-round", "shuttle runs", 5);
-  return repsExercise("after-round", "double unders", 30);
+  if (mono === "shuttle-run")
+    return repsExercise("after-round", "shuttle-runs", 5);
+  return repsExercise("after-round", "double-unders", 30);
 }
 
 function lowerRepExercise(exercise) {
@@ -6071,31 +5491,42 @@ function lowerRepExercise(exercise) {
   };
 }
 
-function repsExercise(id, movement, value, load) {
-  return exerciseDefinition(id, movement, { type: "reps", value }, load);
+function repsExercise(id, movementId, value, load, displayOverride) {
+  return exerciseDefinition(
+    id,
+    movementId,
+    { type: "reps", value },
+    load,
+    displayOverride,
+  );
 }
 
-function distanceExercise(id, movement, value) {
-  return exerciseDefinition(id, movement, { type: "distance_m", value });
+function distanceExercise(id, movementId, value) {
+  return exerciseDefinition(id, movementId, { type: "distance_m", value });
 }
 
-function caloriesExercise(id, movement, value, alternate) {
-  return exerciseDefinition(id, movement, {
+function caloriesExercise(id, movementId, value, alternate) {
+  return exerciseDefinition(id, movementId, {
     type: "calories",
     value,
     ...(alternate ? { alternate } : {}),
   });
 }
 
-function durationExercise(id, movement, value) {
-  return exerciseDefinition(id, movement, { type: "duration_seconds", value });
+function durationExercise(id, movementId, value) {
+  return exerciseDefinition(id, movementId, {
+    type: "duration_seconds",
+    value,
+  });
 }
 
-function exerciseDefinition(id, movement, target, load) {
+function exerciseDefinition(id, movementId, target, load, displayOverride) {
+  const resolvedMovementId = canonicalMovementId(movementId);
+  const catalogMovement = getMovementDefinition(resolvedMovementId);
   return {
     id,
-    movementId: canonicalMovementId(movement),
-    movement,
+    movementId: resolvedMovementId,
+    movement: displayOverride || catalogMovement?.displayName || movementId,
     target,
     ...(load ? { load: { display: load } } : {}),
   };
@@ -6140,10 +5571,15 @@ function weaknessPrep(weakness, olympicFamily = "clean") {
 
 function weaknessAccessory(weakness, week, olympicFamily = "clean") {
   const reps = week >= 5 ? "4 sets" : "3 sets";
-  const olympicAccessory =
+  const olympicMovementIds =
     olympicFamily === "snatch"
-      ? `${reps}: 3 tall snatch pulls + 20-second overhead hold`
-      : `${reps}: 3 tall clean pulls + 20-second front-rack hold`;
+      ? ["tall-snatch-pulls", "overhead-hold"]
+      : ["tall-clean-pulls", "front-rack-hold"];
+  const [pull, hold] = olympicMovementIds.map(
+    (movementId) =>
+      getMovementDefinition(movementId)?.displayName || movementId,
+  );
+  const olympicAccessory = `${reps}: 3 ${pull} + 20-second ${hold}`;
   const accessories = {
     squat: `${reps}: 8 tempo goblet squats + 8 split squats per leg`,
     olympic: olympicAccessory,
@@ -6490,13 +5926,25 @@ function mastersRxMovementPool(day, week, profile, wallBallVolume) {
       primary: repsExercise("primary", "clean and jerks", 8, cleanLoad),
       secondary: repsExercise("secondary", "bar muscle-ups", 4),
       tertiary: repsExercise("tertiary", "strict HSPU", 8),
-      mono: repsExercise("monostructural", "double-unders", 40),
+      mono: repsExercise(
+        "monostructural",
+        "double-unders",
+        40,
+        undefined,
+        "double-unders",
+      ),
     },
     5: {
       primary: repsExercise("primary", "power cleans", 6, lightCleanLoad),
       secondary: repsExercise("secondary", "burpees over bar", 8),
       tertiary: repsExercise("tertiary", "wall balls", 12),
-      mono: repsExercise("monostructural", "double-unders", 30),
+      mono: repsExercise(
+        "monostructural",
+        "double-unders",
+        30,
+        undefined,
+        "double-unders",
+      ),
     },
   };
   return pools[day] || pools[1];
@@ -6593,64 +6041,13 @@ function mastersRxPattern(week, day, pool) {
 
 function varyStructuredMastersWorkout(definition, variation) {
   if (!variation) return definition;
-  const replacements = [
-    {
-      matches: /wall balls?/i,
-      movements: ["DB thrusters", "sandbag-to-shoulder"],
-    },
-    {
-      matches: /box (?:jump|step)-overs?/i,
-      movements: ["lateral burpees over a line", "DB step-overs"],
-    },
-    {
-      matches: /toes-to-bar/i,
-      movements: ["chest-to-bar pull-ups", "knee-to-elbow reps"],
-    },
-    {
-      matches: /overhead squats?/i,
-      movements: ["front squats", "single-arm DB overhead squats"],
-    },
-    {
-      matches: /shuttle runs?|\brun\b/i,
-      movements: [
-        {
-          movement: "bike",
-          target: { type: "calories", value: 10, alternate: 8 },
-        },
-        { movement: "ski", target: { type: "distance_m", value: 150 } },
-      ],
-    },
-    {
-      matches: /burpees?/i,
-      movements: ["box jump-overs", "alternating DB snatches"],
-    },
-    { matches: /chest-to-bar/i, movements: ["toes-to-bar", "strict pull-ups"] },
-    { matches: /\brow\b|\bbike\b|\bski\b/i, movements: ["bike", "row"] },
-    {
-      matches: /thrusters?/i,
-      movements: ["DB thrusters", "DB clean and push presses"],
-    },
-    {
-      matches: /bar muscle-ups?/i,
-      movements: ["ring muscle-ups", "chest-to-bar pull-ups"],
-    },
-    {
-      matches: /double-unders?/i,
-      movements: ["crossovers", "fast single-unders"],
-    },
-    {
-      matches: /clean and jerks?|power cleans?|power snatches?/i,
-      movements: ["alternating DB snatches", "sandbag cleans"],
-    },
-    {
-      matches: /strict HSPU|pike presses?/i,
-      movements: ["strict DB presses", "hand-release push-ups"],
-    },
-  ];
+  const replacements = MASTERS_MOVEMENT_VARIATIONS;
   const main = workoutMainExercises(definition);
   const candidates = main.flatMap((exercise, exerciseIndex) =>
     replacements
-      .filter((replacement) => replacement.matches.test(exercise.movement))
+      .filter((replacement) =>
+        replacement.sourceIds.includes(exercise.movementId),
+      )
       .map((replacement) => ({ exerciseIndex, replacement })),
   );
   if (!candidates.length) return definition;
@@ -6661,28 +6058,29 @@ function varyStructuredMastersWorkout(definition, variation) {
         candidates.length,
       )
     ];
-  const replacement =
-    candidate.replacement.movements[
+  const replacementId =
+    candidate.replacement.replacementIds[
       seededIndex(
         `${variation.seed}|${variation.collisionSalt}|replacement`,
-        candidate.replacement.movements.length,
+        candidate.replacement.replacementIds.length,
       )
     ];
+  const replacementMovement = getMovementDefinition(replacementId);
+  const target = candidate.replacement.sourceIds.includes("shuttle-runs")
+    ? replacementId === "bike"
+      ? { type: "calories", value: 10, alternate: 8 }
+      : { type: "distance_m", value: 150 }
+    : null;
   let currentIndex = 0;
   return mapMainWorkoutExercises(definition, (exercise) => {
     const next =
       currentIndex === candidate.exerciseIndex
-        ? typeof replacement === "string"
-          ? {
-              ...exercise,
-              movementId: canonicalMovementId(replacement),
-              movement: replacement,
-            }
-          : {
-              ...exercise,
-              ...replacement,
-              movementId: canonicalMovementId(replacement.movement),
-            }
+        ? {
+            ...exercise,
+            movementId: replacementId,
+            movement: replacementMovement?.displayName || replacementId,
+            ...(target ? { target } : {}),
+          }
         : exercise;
     currentIndex += 1;
     return next;
@@ -7807,6 +7205,7 @@ const FORGE_HOUR_API = {
   EQUIPMENT_OPTIONS,
   GOAL_LABELS,
   MASTERS_RX_TARGETS,
+  MOVEMENT_CATALOG,
   MOVEMENT_LIBRARY,
   PLAN_SCHEMA_VERSION,
   PR_METRICS,
