@@ -55,6 +55,7 @@
     selectActiveWeekSessions,
     timerDisplaySeconds,
     validateGeneratedWeek,
+    validateGeneratedSession,
     weeklyTrainingProgress,
     valueFromPath,
     workoutItemsForSession,
@@ -88,6 +89,7 @@
    * @property {string[]} mobility
    * @property {number} duration
    * @property {string=} intensity
+   * @property {"clean"|"snatch"=} olympicFamily
    * @property {"generated"|"manual"=} origin
    * @property {boolean=} generated
    * @property {boolean=} customized
@@ -1119,6 +1121,7 @@
         customized: false,
         generationSeed,
       }));
+      normalizedSessions.forEach(validateGeneratedSession);
       const planId =
         replaceActive && currentActivePlan?.kind === "generated"
           ? currentActivePlan.id

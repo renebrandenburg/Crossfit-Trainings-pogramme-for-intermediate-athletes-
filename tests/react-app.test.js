@@ -424,6 +424,21 @@ function sessionWod(session) {
   return workoutItemsForSession(session)[0];
 }
 
+function workoutExercises(definition) {
+  const main =
+    definition?.format?.type === "emom"
+      ? (definition.format.stations || []).flatMap(
+          (station) => station.exercises || [],
+        )
+      : definition?.exercises || [];
+  return [
+    ...(definition?.buyIn || []),
+    ...main,
+    ...(definition?.afterEachRound || []),
+    ...(definition?.cashOut || []),
+  ];
+}
+
 function canonicalPlanState({
   kind = "custom",
   customized = true,
@@ -777,6 +792,45 @@ test("React Testing Library creates a two-day plan and counts a box workout sepa
       assert.ok(ui.getByText("0/2"));
       assert.ok(ui.getByText("1/4"));
       assert.ok(ui.getByText("Box workout"));
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library persists exact Olympic prescriptions", async () => {
+  const { cleanup, fireEvent, readState, ui, waitFor } = mountApp();
+
+  try {
+    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    fireEvent.change(ui.getByLabelText("Biggest weakness"), {
+      target: { value: "olympic" },
+    });
+    fireEvent.click(
+      ui.getByRole("button", { name: "Generate 8-week programme" }),
+    );
+
+    await waitFor(() => {
+      const state = readState();
+      const plan = state.plans.find((item) => item.id === state.activePlanId);
+      assert.equal(plan.sessions.length, 32);
+      const serialized = JSON.stringify(plan.sessions);
+      assert.doesNotMatch(
+        serialized,
+        /tall clean\/snatch pulls|overhead or front rack holds|hang power clean drills/i,
+      );
+      assert.ok(
+        plan.sessions.some((session) =>
+          session.strength.some((item) => /tall clean pulls/.test(item)),
+        ),
+      );
+      assert.ok(
+        plan.sessions.every((session) =>
+          workoutExercises(session.workoutDefinition).every(
+            (exercise) => exercise.movementId,
+          ),
+        ),
+      );
     });
   } finally {
     cleanup();
@@ -2415,7 +2469,7 @@ test("React Testing Library isolates signed-in scores from legacy guest scores",
 
     const saved = readState();
     assert.equal(saved.schemaVersion, 4);
-    assert.equal(saved.planSchemaVersion, 4);
+    assert.equal(saved.planSchemaVersion, 5);
     assert.equal(Object.hasOwn(saved, "logs"), false);
     assert.equal(saved.scoreDataByOwner.guest.logs[0].id, "guest-log");
     assert.equal(saved.scoreDataByOwner["user-1"].logs[0].id, "remote-log");

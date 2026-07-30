@@ -26,6 +26,7 @@ const {
   formatPrValue,
   formatTimerResult,
   generatedWeekErrors,
+  generatedSessionErrors,
   getProgramDays,
   inferTimerFromText,
   inferWorkoutTimer,
@@ -155,7 +156,7 @@ test("built-in WODs vary by week and expose stimulus, score, and scaling", () =>
       assert.ok(segment, `${day.id} should include a WOD or engine segment`);
       assert.match(segment.items[1], /Stimulus:/);
       assert.match(segment.items[2], /Score:/);
-      assert.match(segment.items[2], /scale/i);
+      assert.match(segment.items[3], /Scaling:/i);
       return segment.items[0];
     });
 
@@ -1466,6 +1467,7 @@ function semanticWorkout(overrides = {}) {
     exercises: [
       {
         id: "squats",
+        movementId: "air-squats",
         movement: "air squats",
         target: { type: "reps", value: 12 },
       },
@@ -1495,6 +1497,7 @@ function dumbbellSnatchWorkout({
 } = {}) {
   const snatches = {
     id: "dumbbell-snatches",
+    movementId: "single-arm-dumbbell-snatches",
     movement: "single-arm dumbbell snatches",
     target: { type: "reps", value: reps },
   };
@@ -1523,6 +1526,7 @@ test("high-repetition conditioning lowers dumbbell snatches below 35 kg", () => 
     extraExercises: [
       {
         id: "pull-ups",
+        movementId: "pull-ups",
         movement: "pull-ups",
         target: { type: "reps", value: 12 },
       },
@@ -1596,12 +1600,14 @@ function progressiveCouplet(progression) {
     exercises: [
       {
         id: "cleans",
+        movementId: "power-cleans",
         movement: "power cleans",
         target: { type: "progressive_reps" },
         load: { display: "45 kg" },
       },
       {
         id: "burpees",
+        movementId: "burpees",
         movement: "burpees",
         target: { type: "progressive_reps" },
       },
@@ -1647,6 +1653,7 @@ test("semantic workout validator accepts every supported progression and format"
             exercises: [
               {
                 id: "row",
+                movementId: "row",
                 movement: "row",
                 target: { type: "calories", value: 12 },
               },
@@ -1663,6 +1670,7 @@ test("semantic workout validator accepts every supported progression and format"
       buyIn: [
         {
           id: "buy-in",
+          movementId: "row",
           movement: "row",
           target: { type: "distance_m", value: 500 },
         },
@@ -1670,6 +1678,7 @@ test("semantic workout validator accepts every supported progression and format"
       cashOut: [
         {
           id: "cash-out",
+          movementId: "run",
           movement: "run",
           target: { type: "distance_m", value: 400 },
         },
@@ -1684,6 +1693,7 @@ test("semantic workout validator accepts every supported progression and format"
       afterEachRound: [
         {
           id: "row",
+          movementId: "row",
           movement: "row",
           target: { type: "distance_m", value: 150 },
         },
@@ -1784,6 +1794,198 @@ test("semantic workout validator rejects contradictory and incomplete structures
   });
 });
 
+test("generated Olympic prescriptions resolve one coherent family", () => {
+  const cleanSessions = buildGeneratedProgramme(
+    { goal: "stronger", weakness: "olympic", daysPerWeek: 4, duration: 60 },
+    cloneDefaultProfile(),
+    (id) => id,
+    "clean-coherence-regression",
+  );
+  const snatchSessions = buildGeneratedProgramme(
+    { goal: "gymnastics", weakness: "olympic", daysPerWeek: 4, duration: 60 },
+    cloneDefaultProfile(),
+    (id) => id,
+    "snatch-coherence-regression",
+  );
+  const sessions = [...cleanSessions, ...snatchSessions];
+
+  assert.ok(
+    sessions.some((session) =>
+      session.strength.some((item) =>
+        /3 tall clean pulls \+ 20-second front-rack hold/.test(item),
+      ),
+    ),
+  );
+  assert.ok(
+    sessions.some((session) =>
+      session.strength.some((item) =>
+        /3 tall snatch pulls \+ 20-second overhead hold/.test(item),
+      ),
+    ),
+  );
+  sessions.forEach((session) => {
+    assert.deepEqual(generatedSessionErrors(session), []);
+    assert.doesNotMatch(
+      [...session.strength, ...workoutItemsForSession(session)].join(" "),
+      /tall clean\/snatch pulls|overhead or front rack holds/i,
+    );
+  });
+});
+
+test("movement semantics reject drills, alternatives, and accidental WOD duplicates", () => {
+  const drill = semanticWorkout({
+    format: { type: "for_time", durationSeconds: 10 * 60 },
+    exercises: [
+      {
+        id: "clean-drill",
+        movementId: "hang-power-clean-drill",
+        movement: "hang power clean drills",
+        target: { type: "reps", value: 10 },
+      },
+    ],
+  });
+  assert.match(
+    workoutDefinitionErrors(drill).join(" "),
+    /not valid for conditioning/,
+  );
+
+  const ambiguous = semanticWorkout({
+    exercises: [
+      {
+        id: "choice",
+        movementId: "row-or-bike",
+        movement: "row or bike",
+        target: { type: "calories", value: 10 },
+      },
+    ],
+  });
+  assert.match(
+    workoutDefinitionErrors(ambiguous).join(" "),
+    /unresolved movement alternative/,
+  );
+
+  const duplicate = semanticWorkout({
+    format: { type: "chipper", durationSeconds: 15 * 60 },
+    exercises: [
+      {
+        id: "squats-40",
+        movementId: "air-squats",
+        movement: "air squats",
+        target: { type: "reps", value: 40 },
+      },
+      {
+        id: "squats-30",
+        movementId: "air-squats",
+        movement: "air squats",
+        target: { type: "reps", value: 30 },
+      },
+    ],
+  });
+  assert.match(workoutDefinitionErrors(duplicate).join(" "), /duplicated/);
+
+  const scalingAlternative = semanticWorkout({
+    scaling: "Scaling: use ring rows or banded pull-ups.",
+  });
+  assert.deepEqual(workoutDefinitionErrors(scalingAlternative), []);
+
+  const mixedOlympicFamily = semanticWorkout({
+    olympicFamily: "clean",
+    exercises: [
+      {
+        id: "snatch-pulls",
+        movementId: "snatch-pulls",
+        movement: "snatch pulls",
+        target: { type: "reps", value: 5 },
+      },
+    ],
+  });
+  assert.match(
+    workoutDefinitionErrors(mixedOlympicFamily).join(" "),
+    /incompatible with the clean family/,
+  );
+
+  const intentionalStructuralRepeat = semanticWorkout({
+    format: { type: "chipper", durationSeconds: 15 * 60 },
+    buyIn: [
+      {
+        id: "buy-in-squats",
+        movementId: "air-squats",
+        movement: "air squats",
+        target: { type: "reps", value: 20 },
+      },
+    ],
+    exercises: [
+      {
+        id: "main-squats",
+        movementId: "air-squats",
+        movement: "air squats",
+        target: { type: "reps", value: 30 },
+      },
+    ],
+    cashOut: [
+      {
+        id: "cash-out-squats",
+        movementId: "air-squats",
+        movement: "air squats",
+        target: { type: "reps", value: 40 },
+      },
+    ],
+  });
+  assert.deepEqual(workoutDefinitionErrors(intentionalStructuralRepeat), []);
+});
+
+test("Olympic WOD weakness work is executable and loaded", () => {
+  const sessions = buildGeneratedProgramme(
+    { goal: "balanced", weakness: "olympic", daysPerWeek: 4, duration: 60 },
+    cloneDefaultProfile(),
+    (id) => id,
+    "olympic-wod-regression",
+  );
+  const olympicWeaknessExercises = sessions.flatMap((session) =>
+    definitionExercises(session.workoutDefinition).filter((exercise) =>
+      /hang power (?:cleans|snatches)/i.test(exercise.movement),
+    ),
+  );
+
+  assert.ok(olympicWeaknessExercises.length > 0);
+  olympicWeaknessExercises.forEach((exercise) => {
+    assert.equal(exercise.target.type, "reps");
+    assert.match(exercise.load.display, /^\d+(?:\.\d+)? kg$/);
+    assert.doesNotMatch(exercise.movement, /drill/i);
+  });
+});
+
+test("generated chippers combine consecutive duplicate air squats", () => {
+  const sessions = buildGeneratedProgramme(
+    { goal: "endurance", weakness: "squat", daysPerWeek: 4, duration: 60 },
+    cloneDefaultProfile(),
+    (id) => id,
+    "dup-0",
+  );
+  const combinedChipper = sessions
+    .filter((session) => session.workoutDefinition.format.type === "chipper")
+    .find((session) =>
+      session.workoutDefinition.exercises.some(
+        (exercise) =>
+          exercise.movementId === "air-squats" &&
+          exercise.target.type === "reps" &&
+          exercise.target.value === 70,
+      ),
+    );
+
+  assert.ok(combinedChipper);
+  assert.equal(
+    combinedChipper.workoutDefinition.exercises.filter(
+      (exercise) => exercise.movementId === "air-squats",
+    ).length,
+    1,
+  );
+  assert.doesNotMatch(
+    renderWorkoutDescription(combinedChipper.workoutDefinition),
+    /40 air squats.*30 air squats/i,
+  );
+});
+
 test("ladders render deterministically from explicit exercise assignments", () => {
   const definition = {
     ...progressiveCouplet({ type: "ascending_ladder", start: 2, increment: 2 }),
@@ -1791,6 +1993,7 @@ test("ladders render deterministically from explicit exercise assignments", () =
     afterEachRound: [
       {
         id: "row",
+        movementId: "row",
         movement: "row",
         target: { type: "distance_m", value: 150 },
       },

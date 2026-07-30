@@ -958,9 +958,18 @@ const MOVEMENT_LIBRARY = [
   },
 ];
 
-const WOD_SCHEMA_VERSION = 8;
-const PLAN_SCHEMA_VERSION = 4;
-const WORKOUT_DEFINITION_VERSION = 1;
+const WOD_SCHEMA_VERSION = 9;
+const PLAN_SCHEMA_VERSION = 5;
+const WORKOUT_DEFINITION_VERSION = 2;
+const OLYMPIC_FAMILIES = new Set(["clean", "snatch"]);
+const TECHNICAL_DRILL_MOVEMENT_IDS = new Set([
+  "bar-muscle-up-transition",
+  "hang-power-clean-drill",
+  "technique-row",
+]);
+const CONDITIONING_MOVEMENT_EXCLUSIONS = new Set([
+  ...TECHNICAL_DRILL_MOVEMENT_IDS,
+]);
 const TRAINING_STIMULI = [
   "squat",
   "hinge",
@@ -1869,6 +1878,22 @@ function renderMovementCard(movement) {
 }
 
 function customPlanSegments(plan) {
+  if (
+    plan &&
+    (plan.origin === "generated" || plan.generated) &&
+    !plan.customized &&
+    generatedSessionErrors(plan).length
+  ) {
+    return [
+      {
+        title: "Generated workout unavailable",
+        minutes: "0",
+        items: [
+          "This generated session is invalid. Regenerate the programme before training.",
+        ],
+      },
+    ];
+  }
   const minutes = plan.segmentMinutes || {};
   return [
     {
@@ -1978,6 +2003,59 @@ function statCard(value, label) {
   `;
 }
 
+function canonicalMovementId(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\bdb\b/g, "dumbbell")
+    .replace(/\bkb\b/g, "kettlebell")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const aliases = {
+    "hang-power-clean-drills": "hang-power-clean-drill",
+    "bar-muscle-up-transitions": "bar-muscle-up-transition",
+    "technique-row": "technique-row",
+  };
+  return aliases[normalized] || normalized;
+}
+
+function olympicFamilyForMovement(value) {
+  const movement = String(value || "").toLowerCase();
+  if (/snatch|overhead squat|overhead hold/.test(movement)) return "snatch";
+  if (/clean|front-rack|front rack/.test(movement)) return "clean";
+  return null;
+}
+
+function hasUnresolvedMovementAlternative(value) {
+  const movement = String(value || "").trim();
+  if (!movement) return false;
+  return /(?:\s+or\s+|[a-z0-9]\s*\/\s*[a-z0-9])/i.test(movement);
+}
+
+function hasUnresolvedGeneratedPrescriptionChoice(value) {
+  const prescription = String(value || "").trim();
+  if (!prescription) return false;
+  return /\b(?:clean|snatch|row|bike|ski|run|pull-?ups?|ring rows?|toes-to-bar|knee raises?|muscle-ups?|transitions?|HSPU|pike presses?|wall walks?)\s*(?:\/|\bor\b)|(?:\/|\bor\b)\s*(?:clean|snatch|row|bike|ski|run|pull-?ups?|ring rows?|toes-to-bar|knee raises?|muscle-ups?|transitions?|HSPU|pike presses?|wall walks?)/i.test(
+    prescription,
+  );
+}
+
+function movementIsConditioningEligible(exercise) {
+  const id = canonicalMovementId(exercise?.movementId || exercise?.movement);
+  return (
+    Boolean(id) &&
+    !CONDITIONING_MOVEMENT_EXCLUSIONS.has(id) &&
+    !/\b(?:drills?|practice|rehearsal)\b/i.test(exercise?.movement || "")
+  );
+}
+
+function sameMovement(left, right) {
+  return (
+    canonicalMovementId(left?.movementId || left?.movement) ===
+    canonicalMovementId(right?.movementId || right?.movement)
+  );
+}
+
 class WorkoutValidationError extends Error {
   constructor(errors) {
     super(`Invalid workout definition: ${errors.join("; ")}`);
@@ -2082,14 +2160,59 @@ function workoutDefinitionErrors(definition) {
     }
     const id = String(exercise.id || "").trim();
     const movement = String(exercise.movement || "").trim();
+    const movementId = String(exercise.movementId || "").trim();
     if (!id) errors.push(`exercise ${index + 1} requires an id`);
     if (id && ids.has(id)) errors.push(`exercise id ${id} is duplicated`);
     if (id) ids.add(id);
     if (!movement)
       errors.push(`exercise ${id || index + 1} requires a movement`);
+    if (definition.schemaVersion >= 2 && !movementId) {
+      errors.push(`exercise ${id || index + 1} requires a movement id`);
+    }
+    if (
+      movementId &&
+      canonicalMovementId(movementId) !== canonicalMovementId(movement)
+    ) {
+      errors.push(`exercise ${id || index + 1} movement id does not match`);
+    }
+    if (hasUnresolvedMovementAlternative(movement)) {
+      errors.push(
+        `exercise ${id || index + 1} contains an unresolved movement alternative`,
+      );
+    }
+    if (!movementIsConditioningEligible(exercise)) {
+      errors.push(`exercise ${id || index + 1} is not valid for conditioning`);
+    }
     validateExerciseTarget(exercise.target, id || String(index + 1), errors);
   });
   if (!mainExercises.length) errors.push("main workout requires exercises");
+
+  const olympicFamily = definition.olympicFamily;
+  if (olympicFamily != null && !OLYMPIC_FAMILIES.has(olympicFamily)) {
+    errors.push("Olympic family is invalid");
+  }
+  if (OLYMPIC_FAMILIES.has(olympicFamily)) {
+    allExercises.forEach((exercise) => {
+      const exerciseFamily = olympicFamilyForMovement(exercise?.movement);
+      if (exerciseFamily && exerciseFamily !== olympicFamily) {
+        errors.push(
+          `${exercise.movement} is incompatible with the ${olympicFamily} family`,
+        );
+      }
+    });
+  }
+
+  const mainMovementIds = new Set();
+  mainExercises.forEach((exercise) => {
+    const movementId = canonicalMovementId(
+      exercise?.movementId || exercise?.movement,
+    );
+    if (!movementId) return;
+    if (mainMovementIds.has(movementId)) {
+      errors.push(`${exercise.movement} is duplicated in the main workout`);
+    }
+    mainMovementIds.add(movementId);
+  });
 
   const progression = definition.progression || { type: "none" };
   const progressionTypes = new Set([
@@ -2270,6 +2393,40 @@ function validateWorkoutDefinition(definition) {
   return definition;
 }
 
+function generatedSessionErrors(session) {
+  const errors = workoutDefinitionErrors(session?.workoutDefinition);
+  if (!session || typeof session !== "object") return errors;
+  const family = session.olympicFamily;
+  if (family != null && !OLYMPIC_FAMILIES.has(family)) {
+    errors.push("session Olympic family is invalid");
+  }
+  const executableItems = [
+    ...arrayOrEmpty(session.warmup),
+    ...arrayOrEmpty(session.strength),
+    ...arrayOrEmpty(session.addOns),
+  ];
+  executableItems.forEach((item) => {
+    if (hasUnresolvedGeneratedPrescriptionChoice(item)) {
+      errors.push(`unresolved generated prescription: ${item}`);
+    }
+  });
+  if (OLYMPIC_FAMILIES.has(family)) {
+    arrayOrEmpty(session.strength).forEach((item) => {
+      const itemFamily = olympicFamilyForMovement(item);
+      if (itemFamily && itemFamily !== family) {
+        errors.push(`${item} is incompatible with the ${family} family`);
+      }
+    });
+  }
+  return [...new Set(errors)];
+}
+
+function validateGeneratedSession(session) {
+  const errors = generatedSessionErrors(session);
+  if (errors.length) throw new WorkoutValidationError(errors);
+  return session;
+}
+
 function generatedWeekErrors(sessions, requirements = {}) {
   const errors = [];
   if (!Array.isArray(sessions) || !sessions.length) {
@@ -2286,7 +2443,7 @@ function generatedWeekErrors(sessions, requirements = {}) {
   sessions.forEach((session, index) => {
     const label = `session ${index + 1}`;
     const definition = session?.workoutDefinition;
-    const definitionErrors = workoutDefinitionErrors(definition);
+    const definitionErrors = generatedSessionErrors(session);
     definitionErrors.forEach((error) => errors.push(`${label}: ${error}`));
     if (!definition || definitionErrors.length) return;
     represented.add(definition.timeDomain);
@@ -2556,7 +2713,8 @@ function renderWorkoutItems(definition) {
   return [
     renderWorkoutDescription(definition),
     `Stimulus: ${definition.stimulus}`,
-    `Score: ${definition.score}. ${definition.scaling}`,
+    `Score: ${definition.score}.`,
+    `Scaling: ${definition.scaling}`,
   ];
 }
 
@@ -3745,6 +3903,8 @@ function buildTwoDaySession(
   const phaseGoal =
     options.goal === "barMuscleUp" ? "gymnastics" : options.goal;
   const phase = getGeneratedWeekPhase(week, phaseGoal);
+  const olympicFamily =
+    day === 2 ? "clean" : selectOlympicFamily(phaseGoal, day);
   const timeDomain = day === 1 ? "short" : "long";
   const variation = generationVariation(generationContext, week, day, 0);
   const requestedWodMinutes = selectTimeDomainDuration(
@@ -3778,6 +3938,7 @@ function buildTwoDaySession(
             options.barMuscleUpLevel,
             timeDomain,
             options.athleteLevel,
+            options.weakness === "olympic" ? olympicFamily : null,
           ),
         generationContext,
       ),
@@ -3851,7 +4012,7 @@ function buildTwoDaySession(
       day === 1
         ? `${GOAL_LABELS[options.goal]} progression with ${WEAKNESS_LABELS[options.weakness].toLowerCase()} skill work and controlled short conditioning.`
         : `${GOAL_LABELS[options.secondaryGoal || options.goal]} support work, weakness progression, and sustainable engine development.`,
-    warmup: generatedWarmup(options.goal, options.weakness, day),
+    warmup: generatedWarmup(options.goal, options.weakness, day, olympicFamily),
     strength: [
       ...twoDayStrengthItems(options, profile, week, day, phase),
       ...(dropNote ? [dropNote] : []),
@@ -3871,6 +4032,7 @@ function buildTwoDaySession(
     sourceSecondaryGoal: options.secondaryGoal,
     sourceWeakness: options.weakness,
     sourceAthleteLevel: options.athleteLevel,
+    olympicFamily,
     preferredDay: options.preferredProgramDays[day - 1],
     availableEquipment: [...options.availableEquipment],
     barbellDropPolicy: options.barbellDropPolicy,
@@ -3885,11 +4047,13 @@ function buildTwoDaySession(
 }
 
 function twoDayStrengthItems(options, profile, week, day, phase) {
+  const olympicFamily =
+    day === 2 ? "clean" : selectOlympicFamily(options.goal, day);
   if (day === 1) {
     return [
       `Back squat ${phase.reps} at ${percent(phase.load)} (${kg(profile.maxes.backSquat, phase.load)})`,
       gymnasticsSkillBlock(options.weakness, week),
-      weaknessAccessory(options.weakness, week),
+      weaknessAccessory(options.weakness, week, olympicFamily),
     ];
   }
   const techniqueLoad = Math.min(0.82, Math.max(0.55, phase.oly));
@@ -3897,7 +4061,7 @@ function twoDayStrengthItems(options, profile, week, day, phase) {
   return [
     `Hang clean 6x2 at ${percent(techniqueLoad)} (${kg(profile.maxes.cleanJerk, techniqueLoad)}), reset each rep`,
     `Push press 4x6 at ${percent(pressLoad)} of strict press (${kg(profile.maxes.strictPress, pressLoad)})`,
-    weaknessAccessory(options.weakness, week),
+    weaknessAccessory(options.weakness, week, olympicFamily),
   ];
 }
 
@@ -3989,7 +4153,12 @@ function adaptWorkoutToEquipment(definition, availableEquipment) {
     if (/ring/i.test(replacement) && !equipment.has("rings")) {
       replacement = replacement.replace(/ring rows?/gi, "strict pull-ups");
     }
-    const adapted = { ...exercise, movement: replacement, target };
+    const adapted = {
+      ...exercise,
+      movementId: canonicalMovementId(replacement),
+      movement: replacement,
+      target,
+    };
     if (load === undefined) delete adapted.load;
     else adapted.load = load;
     return adapted;
@@ -4006,7 +4175,9 @@ function adaptWorkoutToEquipment(definition, availableEquipment) {
   } else {
     next.exercises = arrayOrEmpty(next.exercises).map(adapt);
   }
-  return next;
+  return ensureDistinctWorkoutMainExercises(
+    combineWorkoutConsecutiveDuplicates(next),
+  );
 }
 
 function bodyweightFallbackTarget(target) {
@@ -4046,6 +4217,7 @@ function adaptWorkoutToBarbellDropPolicy(definition, policy) {
         : "alternating reverse lunges";
     const adapted = {
       ...exercise,
+      movementId: canonicalMovementId(replacement),
       movement: replacement,
       target: bodyweightFallbackTarget(exercise.target),
     };
@@ -4064,7 +4236,9 @@ function adaptWorkoutToBarbellDropPolicy(definition, policy) {
   } else {
     next.exercises = arrayOrEmpty(next.exercises).map(adapt);
   }
-  return next;
+  return ensureDistinctWorkoutMainExercises(
+    combineWorkoutConsecutiveDuplicates(next),
+  );
 }
 
 function buildGeneratedSession(
@@ -4098,6 +4272,7 @@ function buildGeneratedSession(
 
   const phase = getGeneratedWeekPhase(week, options.goal);
   const title = generatedDayTitle(options.goal, day);
+  const olympicFamily = selectOlympicFamily(options.goal, day);
   const timeDomain = generatedTimeDomain(options, day);
   const baseVariation = generationVariation(generationContext, week, day, 0);
   const wodDuration = selectTimeDomainDuration(
@@ -4127,6 +4302,7 @@ function buildGeneratedSession(
         undefined,
         timeDomain,
         options.athleteLevel,
+        options.weakness === "olympic" ? olympicFamily : null,
       ),
     generationContext,
   );
@@ -4141,7 +4317,7 @@ function buildGeneratedSession(
     week,
     title: `W${week} D${day}: ${title}`,
     focus: `${GOAL_LABELS[options.goal]} with ${WEAKNESS_LABELS[options.weakness].toLowerCase()} priority. ${phase.note}`,
-    warmup: generatedWarmup(options.goal, options.weakness, day),
+    warmup: generatedWarmup(options.goal, options.weakness, day, olympicFamily),
     strength: generatedStrengthItems(
       options.goal,
       options.weakness,
@@ -4149,6 +4325,7 @@ function buildGeneratedSession(
       week,
       profile,
       phase,
+      olympicFamily,
     ),
     workoutDefinition,
     mobility: generatedMobility(options.weakness),
@@ -4160,6 +4337,7 @@ function buildGeneratedSession(
     sourceGoal: options.goal,
     sourceWeakness: options.weakness,
     sourceAthleteLevel: options.athleteLevel,
+    olympicFamily,
     createdAt: new Date().toISOString(),
   };
   if (generationContext && generationContext.seed) {
@@ -4286,7 +4464,7 @@ function barMuscleUpPhaseNote(week) {
 function barMuscleUpWarmup(day) {
   if (day > 3) {
     return [
-      "5 min easy bike, row, or jog with nasal breathing",
+      "5 min easy bike with nasal breathing",
       "Dynamic hips, ankles, T-spine, and shoulders",
       day === 4
         ? "Empty-bar Olympic-lifting rehearsal"
@@ -4315,7 +4493,7 @@ function barMuscleUpStrengthItems(level, week, day, profile, phase) {
   }
   if (day === 5) {
     return [
-      "Zone 2 engine: 4x4 min smooth row, bike, or run; 1 min easy between",
+      "Zone 2 engine: 4x4 min smooth row; 1 min easy between",
       "Shoulder support: 3 sets of 12 face pulls, 10 external rotations, and 30 sec side plank per side",
     ];
   }
@@ -4325,17 +4503,17 @@ function barMuscleUpStrengthItems(level, week, day, profile, phase) {
   const sets = deload ? 2 : week >= 5 ? 5 : 4;
   const levelWork = {
     highPull: {
-      1: `${sets} sets: 2-4 strict chest-to-bar or band-assisted high pulls + 3 explosive hip-to-bar pulls; rest 2:00`,
+      1: `${sets} sets: 2-4 strict chest-to-bar high pulls + 3 explosive hip-to-bar pulls; rest 2:00`,
       2: `${sets} sets: 3 low-bar foot-assisted turnovers + 3 deep straight-bar dips + 1 slow transition negative`,
       3: testWeek
         ? "Test: take up to 5 fully rested bar muscle-up attempts; after two misses, return to clean assisted turnovers"
         : week >= 6
           ? "Fresh skill transfer: 4-6 single attempts with 2:00-3:00 rest; stop after two misses, then complete 3 clean assisted turnovers"
-          : `${sets} rounds: 2 high pulls + 2 fast low-bar turnovers + 20 sec hollow/arch tension`,
+          : `${sets} rounds: 2 high pulls + 2 fast low-bar turnovers + 20 sec hollow and arch tension`,
     },
     assisted: {
       1: `${sets} sets: 3 strict chest-to-bar pulls + 3 hip-to-bar pulls using only the assistance needed; rest 2:00`,
-      2: `${sets} sets: 2-4 banded or jumping bar muscle-ups + 3 deep straight-bar dips; reduce assistance only when turnover speed stays sharp`,
+      2: `${sets} sets: 2-4 banded bar muscle-ups + 3 deep straight-bar dips; reduce assistance only when turnover speed stays sharp`,
       3: testWeek
         ? "Test: take up to 5 fully rested unassisted attempts, then record the lightest assistance that produces three clean reps"
         : week >= 5
@@ -4343,13 +4521,13 @@ function barMuscleUpStrengthItems(level, week, day, profile, phase) {
           : `${sets} rounds: 3 assisted full transitions + 1 slow negative + 20 sec hollow hold`,
     },
     singles: {
-      1: `${sets} sets: 1-3 unbroken bar muscle-ups or quality singles; rest 2:00 and keep one rep in reserve`,
+      1: `${sets} sets: 1-3 bar muscle-up singles; rest 2:00 and keep one rep in reserve`,
       2: `${sets} sets: 2 fast low-bar turnovers + 3 deep straight-bar dips + 1 controlled bar muscle-up negative`,
       3: testWeek
         ? "Test: 8 min to accumulate quality bar muscle-ups without misses; record total reps and best unbroken set"
         : week >= 5
           ? "Skill density: every 2:00 for 6 rounds, complete 1-3 bar muscle-ups; stop each set before form changes"
-          : `${sets} rounds: 1-2 bar muscle-ups + 3 chest-to-bar pull-ups + 20 sec hollow/arch tension`,
+          : `${sets} rounds: 1-2 bar muscle-ups + 3 chest-to-bar pull-ups + 20 sec hollow and arch tension`,
     },
   }[level];
   return [
@@ -4412,12 +4590,16 @@ function claimUniqueGeneratedWod(factory, generationContext) {
     return validateWorkoutDefinition(factory(0));
   }
 
+  let lastValidationError = null;
   for (let collisionSalt = 0; collisionSalt < 64; collisionSalt += 1) {
     let workoutDefinition;
     try {
       workoutDefinition = validateWorkoutDefinition(factory(collisionSalt));
     } catch (error) {
-      if (error instanceof WorkoutValidationError) continue;
+      if (error instanceof WorkoutValidationError) {
+        lastValidationError = error;
+        continue;
+      }
       throw error;
     }
     const signature = structuralWodSignature(workoutDefinition);
@@ -4427,7 +4609,7 @@ function claimUniqueGeneratedWod(factory, generationContext) {
   }
 
   throw new Error(
-    "Could not create a valid, unique workout for this programme.",
+    `Could not create a valid, unique workout for this programme.${lastValidationError ? ` ${lastValidationError.errors.join("; ")}` : ""}`,
   );
 }
 
@@ -4690,19 +4872,41 @@ function getGeneratedSegmentMinutes(duration, goal, requestedWodMinutes) {
   };
 }
 
-function generatedWarmup(goal, weakness, day) {
-  const bias = goal === "endurance" ? "bike, row, or easy run" : "row or bike";
+function generatedWarmup(goal, weakness, day, olympicFamily = null) {
+  const bias =
+    goal === "endurance"
+      ? ["bike", "row", "easy run"][day % 3]
+      : day % 2 === 0
+        ? "row"
+        : "bike";
   return [
     `Easy ${bias} with nasal breathing`,
     "Dynamic hips, ankles, T-spine, and shoulders",
-    `${WEAKNESS_LABELS[weakness]} prep: ${weaknessPrep(weakness)}`,
+    `${WEAKNESS_LABELS[weakness]} prep: ${weaknessPrep(weakness, olympicFamily)}`,
     day % 2 === 0
-      ? "Empty-bar or banded movement rehearsal"
+      ? "Empty-bar movement rehearsal"
       : "Core brace and kip rhythm primer",
   ];
 }
 
-function generatedStrengthItems(goal, weakness, day, week, profile, phase) {
+function selectOlympicFamily(goal, day) {
+  if (goal === "gymnastics" && day === 3) return "snatch";
+  if (["stronger", "balanced", "mastersRxOpen"].includes(goal)) {
+    if (day === 2) return "snatch";
+    if ([3, 4].includes(day)) return "clean";
+  }
+  return day % 2 === 0 ? "snatch" : "clean";
+}
+
+function generatedStrengthItems(
+  goal,
+  weakness,
+  day,
+  week,
+  profile,
+  phase,
+  olympicFamily = selectOlympicFamily(goal, day),
+) {
   const backSquat = `Back squat ${phase.reps} at ${percent(phase.load)} (${kg(profile.maxes.backSquat, phase.load)})`;
   const frontSquat = `Front squat ${phase.reps} at ${percent(phase.front)} (${kg(profile.maxes.frontSquat, phase.front)})`;
   const snatch = `Snatch technique 6x2 at ${percent(phase.oly)} (${kg(profile.maxes.snatch, phase.oly)})`;
@@ -4711,29 +4915,29 @@ function generatedStrengthItems(goal, weakness, day, week, profile, phase) {
 
   const templates = {
     stronger: [
-      [backSquat, weaknessAccessory(weakness, week)],
+      [backSquat, weaknessAccessory(weakness, week, olympicFamily)],
       [
         snatch,
-        `Clean pull 4x3 at ${kg(profile.maxes.cleanJerk, phase.oly + 0.2)}`,
+        `Snatch pull 4x3 at ${kg(profile.maxes.snatch, phase.oly + 0.15)}`,
       ],
       [cleanJerk, frontSquat],
-      ["Strict press or weighted dip 5x5", gymnastics],
-      [backSquat, weaknessAccessory(weakness, week)],
+      ["Strict press 5x5", gymnastics],
+      [backSquat, weaknessAccessory(weakness, week, olympicFamily)],
     ],
     endurance: [
       [
         `Back squat 4x3 at ${percent(phase.load)} (${kg(profile.maxes.backSquat, phase.load)})`,
-        "Then 6 min smooth sled, bike, or step-up flush",
+        "Then 6 min smooth bike flush",
       ],
       [
         `Row skill: 6x250 m at controlled stroke rate`,
-        weaknessAccessory(weakness, week),
+        weaknessAccessory(weakness, week, olympicFamily),
       ],
       [cleanJerk, "Tempo front rack lunges 3x8 per leg"],
       ["Mixed engine skill: transitions and breathing practice", gymnastics],
       [
         "Zone 2 strength circuit: 3 rounds easy KB deadlift, ring row, carry",
-        weaknessAccessory(weakness, week),
+        weaknessAccessory(weakness, week, olympicFamily),
       ],
     ],
     gymnastics: [
@@ -4741,13 +4945,13 @@ function generatedStrengthItems(goal, weakness, day, week, profile, phase) {
         `Back squat 4x4 at ${percent(phase.load)} (${kg(profile.maxes.backSquat, phase.load)})`,
         gymnastics,
       ],
-      [gymnastics, weaknessAccessory(weakness, week)],
-      [snatch, "Strict pull-up or ring row volume 5 submax sets"],
+      [gymnastics, weaknessAccessory(weakness, week, olympicFamily)],
+      [snatch, "Strict pull-up volume 5 submax sets"],
       [
-        "Handstand line, hollow/arch, and dip strength density block",
+        "Handstand line, hollow and arch, and dip strength density block",
         gymnastics,
       ],
-      [gymnastics, weaknessAccessory(weakness, week)],
+      [gymnastics, weaknessAccessory(weakness, week, olympicFamily)],
     ],
     balanced: [
       [backSquat, gymnasticsSkillBlock("t2b", week)],
@@ -4755,9 +4959,12 @@ function generatedStrengthItems(goal, weakness, day, week, profile, phase) {
       [cleanJerk, frontSquat],
       [
         gymnasticsSkillBlock("muscleup", week),
-        weaknessAccessory(weakness, week),
+        weaknessAccessory(weakness, week, olympicFamily),
       ],
-      [weaknessAccessory(weakness, week), "Easy loaded carry 4x40 m"],
+      [
+        weaknessAccessory(weakness, week, olympicFamily),
+        "Easy loaded carry 4x40 m",
+      ],
     ],
   };
 
@@ -4776,6 +4983,7 @@ function generatedWodItems(
   barMuscleUpLevel,
   timeDomain,
   athleteLevel = "intermediate",
+  olympicFamily = null,
 ) {
   const movement = generatedWodMovementPool(
     goal,
@@ -4786,6 +4994,7 @@ function generatedWodItems(
     phase,
     variation,
     barMuscleUpLevel,
+    olympicFamily,
   );
   const cap = clamp(Math.round(Number(wodMinutes) || 12), 6, 45);
   const resolvedTimeDomain =
@@ -4801,6 +5010,9 @@ function generatedWodItems(
     variation,
     phase,
   );
+  definition = ensureDistinctWorkoutMainExercises(
+    combineWorkoutConsecutiveDuplicates(definition),
+  );
   definition = applyTimeDomainDuration(definition, resolvedTimeDomain, cap);
   const loadingIntent =
     goal === "stronger" &&
@@ -4812,9 +5024,69 @@ function generatedWodItems(
       : "conditioning";
   return applyContextualDumbbellLoads({
     ...definition,
+    ...(OLYMPIC_FAMILIES.has(olympicFamily) ? { olympicFamily } : {}),
     athleteLevel,
     loadingIntent,
   });
+}
+
+function combineWorkoutConsecutiveDuplicates(definition) {
+  if (definition?.format?.type === "emom") {
+    return {
+      ...definition,
+      format: {
+        ...definition.format,
+        stations: arrayOrEmpty(definition.format.stations).map((station) =>
+          station?.type === "rest"
+            ? station
+            : {
+                ...station,
+                exercises: combineConsecutiveDuplicateExercises(
+                  station.exercises,
+                ),
+              },
+        ),
+      },
+    };
+  }
+  return {
+    ...definition,
+    exercises: combineConsecutiveDuplicateExercises(definition?.exercises),
+  };
+}
+
+function ensureDistinctWorkoutMainExercises(definition) {
+  const used = new Set();
+  const fallbacks = [
+    "burpees",
+    "sit-ups",
+    "walking lunges",
+    "push-ups",
+    "air squats",
+  ];
+  const makeDistinct = (exercise) => {
+    const movementId = canonicalMovementId(
+      exercise?.movementId || exercise?.movement,
+    );
+    if (movementId && !used.has(movementId)) {
+      used.add(movementId);
+      return exercise;
+    }
+    const movement =
+      fallbacks.find(
+        (candidate) => !used.has(canonicalMovementId(candidate)),
+      ) || `alternating ${exercise.movement}`;
+    used.add(canonicalMovementId(movement));
+    const replacement = {
+      ...exercise,
+      movementId: canonicalMovementId(movement),
+      movement,
+      target: bodyweightFallbackTarget(exercise.target),
+    };
+    delete replacement.load;
+    return replacement;
+  };
+  return mapMainWorkoutExercises(definition, makeDistinct);
 }
 
 function timeDomainForMinutes(minutes) {
@@ -4917,8 +5189,10 @@ function buildWodPattern(week, goal, day, cap, movement, variation, phase) {
     ),
     7: createWorkoutDefinition(
       { type: "chipper", durationSeconds: cap * 60 },
-      movement.chipper,
+      movement.chipper.exercises,
       {
+        buyIn: movement.chipper.buyIn,
+        cashOut: movement.chipper.cashOut,
         stimulus:
           "longer mixed chipper; controlled opening pace, strong finish",
         score: "finish time or reps completed",
@@ -5178,6 +5452,7 @@ function generatedWodMovementPool(
   _phase,
   variation,
   barMuscleUpLevel,
+  olympicFamily,
 ) {
   const cleanLoad = kg(
     profile.maxes.cleanJerk,
@@ -5225,7 +5500,7 @@ function generatedWodMovementPool(
     gymnastics: [
       repsExercise("gymnastics", "pull-ups", 8),
       repsExercise("gymnastics", "toes-to-bar", 10),
-      repsExercise("gymnastics", "bar muscle-up transitions", 4),
+      repsExercise("gymnastics", "chest-to-bar pull-ups", 6),
       repsExercise("gymnastics", "wall walk", 1),
       durationExercise("gymnastics", "handstand hold", 30),
     ],
@@ -5274,7 +5549,13 @@ function generatedWodMovementPool(
   };
 
   const selectedGymOptions = gymOptions[goal] || gymOptions.balanced;
-  const selectedWeightOptions = weightOptions[goal] || weightOptions.balanced;
+  const baseWeightOptions = weightOptions[goal] || weightOptions.balanced;
+  const selectedWeightOptions = OLYMPIC_FAMILIES.has(olympicFamily)
+    ? baseWeightOptions.filter((exercise) => {
+        const family = olympicFamilyForMovement(exercise.movement);
+        return family == null || family === olympicFamily;
+      })
+    : baseWeightOptions;
   const simpleGymOptions = [
     repsExercise("simple-gym", "burpees", 8),
     repsExercise("simple-gym", "sit-ups", 10),
@@ -5300,7 +5581,14 @@ function generatedWodMovementPool(
       day * 3 +
       variationOffset(variation, "simple-gym", simpleGymOptions.length),
   );
-  const weaknessMove = weaknessWodMovement(weakness, week, barMuscleUpLevel);
+  const weaknessMove = weaknessWodMovement(
+    weakness,
+    week,
+    barMuscleUpLevel,
+    olympicFamily,
+    lightCleanLoad,
+    snatchLoad,
+  );
 
   return {
     mono,
@@ -5516,14 +5804,43 @@ function monoAmrap(mono, goal) {
 }
 
 function generatedChipper(goal, weaknessMove, mono, gym, weight) {
-  return [
-    withExerciseId(monoInterval(mono, goal), "chipper-opening"),
-    repsExercise("chipper-air-squats", "air squats", 40),
-    withFixedExerciseTarget(gym, "chipper-gymnastics", 30),
-    withFixedExerciseTarget(weight, "chipper-weighted", 20),
-    withFixedExerciseTarget(weaknessMove, "chipper-weakness", 10),
-    withExerciseId(shortMono(mono), "chipper-closing"),
-  ];
+  return {
+    buyIn: [withExerciseId(monoInterval(mono, goal), "chipper-opening")],
+    exercises: combineConsecutiveDuplicateExercises([
+      repsExercise("chipper-air-squats", "air squats", 40),
+      withFixedExerciseTarget(gym, "chipper-gymnastics", 30),
+      withFixedExerciseTarget(weight, "chipper-weighted", 20),
+      withFixedExerciseTarget(weaknessMove, "chipper-weakness", 10),
+    ]),
+    cashOut: [withExerciseId(shortMono(mono), "chipper-closing")],
+  };
+}
+
+function combineConsecutiveDuplicateExercises(exercises) {
+  return arrayOrEmpty(exercises).reduce((combined, exercise) => {
+    const previous = combined.at(-1);
+    if (
+      previous &&
+      sameMovement(previous, exercise) &&
+      previous.target?.type === "reps" &&
+      exercise.target?.type === "reps" &&
+      String(previous.load?.display || "") ===
+        String(exercise.load?.display || "")
+    ) {
+      combined[combined.length - 1] = {
+        ...previous,
+        target: {
+          type: "reps",
+          value:
+            Number(previous.target.value || 0) +
+            Number(exercise.target.value || 0),
+        },
+      };
+      return combined;
+    }
+    combined.push(exercise);
+    return combined;
+  }, []);
 }
 
 function generatedBenchmark(goal, day, mono, gym, weight, weaknessMove) {
@@ -5669,24 +5986,30 @@ function generatedBenchmarkName(goal, day) {
   return pick(names[goal] || names.balanced, day - 1);
 }
 
-function weaknessWodMovement(weakness, week, barMuscleUpLevel) {
+function weaknessWodMovement(
+  weakness,
+  week,
+  barMuscleUpLevel,
+  olympicFamily = "clean",
+  cleanLoad,
+  snatchLoad,
+) {
   const reps = week >= 5 ? 8 : 6;
   const movements = {
     squat: repsExercise("weakness", "tempo goblet squats", reps),
-    olympic: repsExercise("weakness", "hang power clean drills", reps),
-    rowing: distanceExercise("weakness", "technique row", 250),
-    running: distanceExercise("weakness", "relaxed run", 200),
+    olympic:
+      olympicFamily === "snatch"
+        ? repsExercise("weakness", "hang power snatches", reps, snatchLoad)
+        : repsExercise("weakness", "hang power cleans", reps, cleanLoad),
+    rowing: distanceExercise("weakness", "row", 250),
+    running: distanceExercise("weakness", "run", 200),
     runningBodyweight: repsExercise("weakness", "burpees", reps),
-    pulling: repsExercise("weakness", "strict pull-ups or ring rows", reps),
+    pulling: repsExercise("weakness", "strict pull-ups", reps),
     muscleup:
       barMuscleUpLevel === "singles" && week >= 5
         ? repsExercise("weakness", "bar muscle-ups", 2)
-        : repsExercise(
-            "weakness",
-            "bar muscle-up transitions",
-            Math.max(3, reps - 3),
-          ),
-    t2b: repsExercise("weakness", "toes-to-bar or hanging knee raises", reps),
+        : repsExercise("weakness", "chest-to-bar pull-ups", reps),
+    t2b: repsExercise("weakness", "toes-to-bar", reps),
   };
   return movements[weakness];
 }
@@ -5771,6 +6094,7 @@ function durationExercise(id, movement, value) {
 function exerciseDefinition(id, movement, target, load) {
   return {
     id,
+    movementId: canonicalMovementId(movement),
     movement,
     target,
     ...(load ? { load: { display: load } } : {}),
@@ -5796,28 +6120,35 @@ function generatedMobility(weakness) {
   ];
 }
 
-function weaknessPrep(weakness) {
+function weaknessPrep(weakness, olympicFamily = "clean") {
   const prep = {
     squat: "tempo air squats and ankle rocks",
-    olympic: "PVC high pulls, muscle snatch, and front rack",
+    olympic:
+      olympicFamily === "snatch"
+        ? "PVC snatch high pulls, muscle snatches, and overhead position"
+        : "PVC clean high pulls, muscle cleans, and front-rack position",
     rowing: "pause row drill and stroke-rate control",
     running: "ankle hops, calf raises, and relaxed strides",
     runningBodyweight:
       "ankle hops, relaxed strides, push-ups, and controlled air squats",
     pulling: "scap pull-ups and active hangs",
-    muscleup: "false grip or low-bar transition rehearsal",
-    t2b: "hollow/arch swings and hanging knee raises",
+    muscleup: "low-bar transition rehearsal",
+    t2b: "hollow and arch swings and hanging knee raises",
   };
   return prep[weakness];
 }
 
-function weaknessAccessory(weakness, week) {
+function weaknessAccessory(weakness, week, olympicFamily = "clean") {
   const reps = week >= 5 ? "4 sets" : "3 sets";
+  const olympicAccessory =
+    olympicFamily === "snatch"
+      ? `${reps}: 3 tall snatch pulls + 20-second overhead hold`
+      : `${reps}: 3 tall clean pulls + 20-second front-rack hold`;
   const accessories = {
     squat: `${reps}: 8 tempo goblet squats + 8 split squats per leg`,
-    olympic: `${reps}: tall clean/snatch pulls + overhead or front rack holds`,
+    olympic: olympicAccessory,
     rowing: `${reps}: 90 sec row at perfect technique, easy rest`,
-    running: `${reps}: 200 m relaxed strides or incline treadmill walk`,
+    running: `${reps}: 200 m relaxed strides`,
     runningBodyweight: `${reps}: 200 m relaxed run + 8 push-ups + 12 air squats`,
     pulling: `${reps}: strict pull-up negatives, ring rows, and active hang`,
     muscleup: `${reps}: low-bar transitions, deep dips, and slow negatives`,
@@ -5829,7 +6160,7 @@ function weaknessAccessory(weakness, week) {
 function gymnasticsSkillBlock(weakness, week) {
   if (weakness === "muscleup")
     return week >= 6
-      ? "Muscle-up practice: 6-10 quality singles or banded transitions, full rest"
+      ? "Muscle-up practice: 6-10 quality singles, full rest"
       : "Muscle-up base: transition drill, dip strength, slow negative";
   if (weakness === "t2b")
     return week >= 6
@@ -5837,13 +6168,13 @@ function gymnasticsSkillBlock(weakness, week) {
       : "Toes-to-bar base: kip swings, knee raises, hollow rocks";
   if (weakness === "pulling")
     return week >= 6
-      ? "Pulling density: 8 min submax pull-up or chest-to-bar sets"
+      ? "Pulling density: 8 min submax pull-up sets"
       : "Pulling base: strict pulls, ring rows, active hangs";
   if (weakness === "runningBodyweight")
     return week >= 6
       ? "Bodyweight density: 8 min of submax push-up, pull-up, and air-squat sets"
       : "Bodyweight base: strict push-ups, ring rows, air squats, and hollow holds";
-  return "Gymnastics skill: hollow/arch control, strict pulling, and midline strength";
+  return "Gymnastics skill: hollow and arch control, strict pulling, and midline strength";
 }
 
 function weaknessMobility(weakness) {
@@ -5893,12 +6224,19 @@ function buildMastersRxOpenSession(
         ...template,
         warmup: [
           template.warmup[0],
-          `${WEAKNESS_LABELS[options.weakness]} prep: ${weaknessPrep(options.weakness)}`,
+          `${WEAKNESS_LABELS[options.weakness]} prep: ${weaknessPrep(
+            options.weakness,
+            selectOlympicFamily("mastersRxOpen", day),
+          )}`,
           ...template.warmup.slice(2),
         ],
         strength: [
           ...template.strength.slice(0, -1),
-          weaknessAccessory(options.weakness, week),
+          weaknessAccessory(
+            options.weakness,
+            week,
+            selectOlympicFamily("mastersRxOpen", day),
+          ),
         ],
         mobility: [
           weaknessMobility(options.weakness),
@@ -5972,13 +6310,13 @@ function mastersRxSessionTemplates(profile, week, phase) {
   const c2b = { 1: 5, 2: 6, 3: 7, 4: 4, 5: 6, 6: 8, 7: 10, 8: 6 }[week];
   const bmu = {
     1: "transition practice",
-    2: "singles or low-bar transitions",
+    2: "low-bar transitions",
     3: "2-4 quality singles",
     4: "low-volume transitions",
     5: "3-6 singles",
     6: "EMOM 8: 1-2 reps",
     7: "test 8 min quality reps",
-    8: "benchmark set or transition max",
+    8: "benchmark transition set",
   }[week];
   const wallBallVolume = wallBallVolumeForWeek(week);
 
@@ -6002,7 +6340,7 @@ function mastersRxSessionTemplates(profile, week, phase) {
     },
     2: {
       warmup: [
-        "Easy bike or row",
+        "Easy bike",
         "Shoulder and overhead squat prep",
         "PVC snatch balance and tall snatch",
       ],
@@ -6038,12 +6376,12 @@ function mastersRxSessionTemplates(profile, week, phase) {
     4: {
       warmup: [
         "Easy bike",
-        "Wrist, shoulder, and hollow/arch prep",
+        "Wrist, shoulder, and hollow and arch prep",
         "Wall walk line drills",
       ],
       strength: [
         `Muscle-up skill: ${bmu}`,
-        `Strict HSPU or deficit pike press 5 submax sets`,
+        `Strict HSPU 5 submax sets`,
         `Clean pull 4x3 at ${percent(Math.min(1.15, phase.oly + 0.25))} of clean and jerk (${kg(profile.maxes.cleanJerk, Math.min(1.15, phase.oly + 0.25))})`,
       ],
       wod: mastersRxWod(week, 4, profile, wallBallVolume),
@@ -6107,9 +6445,13 @@ function mastersRxWorkoutDefinition(
     profile,
     wallBallVolume,
   );
-  const definition = varyStructuredMastersWorkout(
-    mastersRxPattern(variedWeek, variedDay, pool),
-    variation,
+  const definition = ensureDistinctWorkoutMainExercises(
+    combineWorkoutConsecutiveDuplicates(
+      varyStructuredMastersWorkout(
+        mastersRxPattern(variedWeek, variedDay, pool),
+        variation,
+      ),
+    ),
   );
   return applyContextualDumbbellLoads({
     ...applyTimeDomainDuration(definition, timeDomain, wodMinutes),
@@ -6141,13 +6483,13 @@ function mastersRxMovementPool(day, week, profile, wallBallVolume) {
     3: {
       primary: repsExercise("primary", "thrusters", 8, thrusterLoad),
       secondary: repsExercise("secondary", "chest-to-bar pull-ups", 8),
-      tertiary: repsExercise("tertiary", "bar muscle-ups or transitions", 4),
+      tertiary: repsExercise("tertiary", "bar muscle-ups", 4),
       mono: distanceExercise("monostructural", "row", 150),
     },
     4: {
       primary: repsExercise("primary", "clean and jerks", 8, cleanLoad),
-      secondary: repsExercise("secondary", "bar muscle-ups or transitions", 4),
-      tertiary: repsExercise("tertiary", "strict HSPU or pike presses", 8),
+      secondary: repsExercise("secondary", "bar muscle-ups", 4),
+      tertiary: repsExercise("tertiary", "strict HSPU", 8),
       mono: repsExercise("monostructural", "double-unders", 40),
     },
     5: {
@@ -6290,7 +6632,7 @@ function varyStructuredMastersWorkout(definition, variation) {
     },
     {
       matches: /bar muscle-ups?/i,
-      movements: ["ring muscle-ups", "chest-to-bar pull-ups plus box dips"],
+      movements: ["ring muscle-ups", "chest-to-bar pull-ups"],
     },
     {
       matches: /double-unders?/i,
@@ -6331,8 +6673,16 @@ function varyStructuredMastersWorkout(definition, variation) {
     const next =
       currentIndex === candidate.exerciseIndex
         ? typeof replacement === "string"
-          ? { ...exercise, movement: replacement }
-          : { ...exercise, ...replacement }
+          ? {
+              ...exercise,
+              movementId: canonicalMovementId(replacement),
+              movement: replacement,
+            }
+          : {
+              ...exercise,
+              ...replacement,
+              movementId: canonicalMovementId(replacement.movement),
+            }
         : exercise;
     currentIndex += 1;
     return next;
@@ -6630,16 +6980,16 @@ function varyMastersRxWodStructure(wod, variation) {
 
 function mastersRxAddOns(week, day) {
   const engine = [
-    "Engine add-on: 20 min Zone 2 row/bike/run, conversational pace.",
+    "Engine add-on: 20 min Zone 2 row, conversational pace.",
     "Engine add-on: 6x2:00 machine hard, 2:00 easy; hold repeatable output.",
-    "Engine add-on: 10x100 m relaxed run strides or 8x30 sec bike sprint, full recovery.",
+    "Engine add-on: 10x100 m relaxed run strides, full recovery.",
     "Engine add-on: 30 min easy Zone 2 if readiness is green.",
   ];
   const skill = [
     "Skill add-on: 8 min double-under practice, stop before calf fatigue.",
-    "Skill add-on: EMOM 10 alternating strict HSPU/pike press and hollow hold.",
-    "Skill add-on: 10 min bar muscle-up transition or low-ring turnover practice.",
-    "Skill add-on: 6 sets submax TTB or C2B, perfect rhythm only.",
+    "Skill add-on: EMOM 10 alternating strict HSPU and hollow hold.",
+    "Skill add-on: 10 min low-bar muscle-up transition practice.",
+    "Skill add-on: 6 sets submax TTB, perfect rhythm only.",
   ];
   if (week === 4 || week === 8) {
     return [
@@ -7510,10 +7860,12 @@ const FORGE_HOUR_API = {
   trimNumber,
   valueFromPath,
   validateWorkoutDefinition,
+  validateGeneratedSession,
   validateGeneratedWeek,
   validateWeeklyPlan,
   weeklyTrainingProgress,
   generatedWeekErrors,
+  generatedSessionErrors,
   selectDumbbellSnatchLoad,
   workoutExpectedDurationSeconds,
   TIME_DOMAINS,

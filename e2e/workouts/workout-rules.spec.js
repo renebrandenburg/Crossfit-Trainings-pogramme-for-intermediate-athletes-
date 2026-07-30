@@ -123,3 +123,62 @@ test("@critical every generated workout is structurally valid and ladders are ex
     ).toBe(true);
   }
 });
+
+test("@critical Olympic prescriptions are exact, executable, and duplicate-safe", async ({
+  page,
+}) => {
+  const app = new AppShell(page);
+  const builder = new PlanBuilderPage(page);
+  await app.open();
+  await builder.open();
+  await builder.generate({
+    goal: "gymnastics",
+    days: "4",
+    weakness: "olympic",
+    athleteLevel: "intermediate",
+    duration: "60",
+  });
+
+  let plan = await readActivePlan(page);
+  const assertMovementSafety = (sessions) => {
+    const serialized = JSON.stringify(sessions);
+    expect(serialized).not.toMatch(
+      /tall clean\/snatch pulls|overhead or front rack holds|hang power clean drills/i,
+    );
+    expect(
+      sessions.some((session) =>
+        session.strength.some((item) => /tall snatch pulls/.test(item)),
+      ),
+    ).toBe(true);
+    for (const session of sessions) {
+      for (const item of session.strength) {
+        if (/tall clean pulls/.test(item)) {
+          expect(session.olympicFamily).toBe("clean");
+          expect(item).toMatch(/front-rack hold/);
+        }
+        if (/tall snatch pulls/.test(item)) {
+          expect(session.olympicFamily).toBe("snatch");
+          expect(item).toMatch(/overhead hold/);
+        }
+      }
+      const exercises = workoutExercises(session.workoutDefinition);
+      expect(exercises.every((exercise) => exercise.movementId)).toBe(true);
+      const main =
+        session.workoutDefinition.format.type === "emom"
+          ? session.workoutDefinition.format.stations.flatMap(
+              (station) => station.exercises || [],
+            )
+          : session.workoutDefinition.exercises;
+      expect(new Set(main.map((exercise) => exercise.movementId)).size).toBe(
+        main.length,
+      );
+    }
+  };
+
+  assertMovementSafety(plan.sessions);
+  await builder.waitForSync();
+  await page.reload();
+  await app.open();
+  plan = await readActivePlan(page);
+  assertMovementSafety(plan.sessions);
+});

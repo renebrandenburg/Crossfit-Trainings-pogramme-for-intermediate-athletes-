@@ -154,7 +154,7 @@ class PlanBuilderPage {
       .click();
     await this.page
       .getByText(
-        /Generated \d+ sessions\.|Updated to \d+ app sessions per week\./,
+        /(?:Generated|Regenerated) \d+ sessions\.|Updated to \d+ app sessions per week\./,
       )
       .waitFor();
   }

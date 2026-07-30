@@ -89,6 +89,13 @@ as a second prose copy. Existing manual and customized text workouts remain
 loadable as legacy free-form sessions; uncustomized generated sessions migrate
 to the structured format on load.
 
+Generated conditioning exercises also persist canonical movement identifiers.
+Validation rejects unresolved movement choices, technical drills in scored
+workouts, incompatible clean/snatch combinations, and accidental duplicate
+stations before a plan can be saved or displayed. Scaling alternatives remain
+separate, explicitly labelled guidance. Manual and customized sessions keep
+their free-form text unchanged.
+
 Local account data in `forge-hour-state-v1` is partitioned by authenticated user
 ID. Legacy profile, programme, and score data is migrated into a separate
 `guest` bucket and is never shown in a signed-in account unless the athlete
