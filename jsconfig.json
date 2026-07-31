@@ -14,6 +14,7 @@
     "maxNodeModuleJsDepth": 0
   },
   "include": [
+    "local-state-store.js",
     "movement-catalog.js",
     "react-app.js",
     "supabase-sync.js",

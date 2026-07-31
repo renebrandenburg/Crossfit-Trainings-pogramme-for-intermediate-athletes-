@@ -15,7 +15,7 @@ test("@critical a failed plan save reports local-only persistence", async ({
   const app = new AppShell(page);
   const builder = new PlanBuilderPage(page);
   await app.open();
-  await builder.waitForSync();
+  await builder.waitForHydration();
   await builder.open();
   await builder.createCustomPlan(data);
   await builder.waitForSync();

@@ -1,4 +1,14 @@
 interface Window {
+  ForgeHourLocalState?: {
+    createLocalStateStore: (
+      storage: Storage,
+      options?: { legacySnapshotDelay?: number },
+    ) => {
+      clear: () => void;
+      load: () => any;
+      save: (state: any, previousState?: any) => boolean;
+    };
+  };
   ForgeHour: any;
   ForgeHourSync: any;
   ForgeHourSupabaseConfig?: {

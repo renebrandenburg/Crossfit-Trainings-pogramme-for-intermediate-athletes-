@@ -102,13 +102,15 @@ membership live in `movement-catalog.js`. The generator keeps progression,
 targets, loading, and workout-structure decisions in `app.js` and resolves
 movement prescriptions through the catalog without changing persisted IDs.
 
-Local account data in `forge-hour-state-v1` is partitioned by authenticated user
-ID. Legacy profile, programme, and score data is migrated into a separate
-`guest` bucket and is never shown in a signed-in account unless the athlete
-explicitly confirms **Import guest data**. Import replaces the account profile
-and programmes, merges guest scores, and keeps the guest copy available. A
-remote failure does not discard a local change; it remains in the account's
-device bucket and can be retried from the Account panel.
+Local account data is stored in owner-scoped athlete, score, and sync slices so
+an isolated score change does not rewrite every saved programme. The legacy
+`forge-hour-state-v1` document remains readable and is refreshed as a delayed
+compatibility snapshot. Legacy profile, programme, and score data is migrated
+into a separate `guest` bucket and is never shown in a signed-in account unless
+the athlete explicitly confirms **Import guest data**. Import replaces the
+account profile and programmes, merges guest scores, and keeps the guest copy
+available. A remote failure does not discard a local change; it remains in the
+account's device bucket and can be retried from the Account panel.
 
 1. Create a Supabase project.
 2. Apply the files in `supabase/migrations` with the Supabase CLI. For a fresh

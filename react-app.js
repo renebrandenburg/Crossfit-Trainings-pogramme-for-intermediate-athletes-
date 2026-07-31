@@ -4,12 +4,13 @@
   const rootElement = document.querySelector("#root");
   const api = window.ForgeHour;
   const syncApi = window.ForgeHourSync;
+  const localStateApi = window.ForgeHourLocalState;
   const ReactRuntime = window.React;
   const ReactDOMRuntime = window.ReactDOM;
 
   if (!rootElement) return;
 
-  if (!api || !syncApi || !ReactRuntime || !ReactDOMRuntime) {
+  if (!api || !syncApi || !localStateApi || !ReactRuntime || !ReactDOMRuntime) {
     rootElement.innerHTML =
       '<div class="app-shell"><section class="panel"><h1>CrossFit Training Programme</h1><p class="muted-copy">React could not load. Check your connection and reload the app.</p></section></div>';
     return;
@@ -62,8 +63,8 @@
   } = api;
 
   const { createSupabaseStore, mergeById, mergePrs } = syncApi;
+  const { createLocalStateStore } = localStateApi;
 
-  const STORAGE_KEY = "forge-hour-state-v1";
   const GUEST_SCORE_OWNER = "guest";
   const BASELINE_UPDATED_AT = "1970-01-01T00:00:00.000Z";
   const SUPABASE_CONFIG = {
@@ -75,6 +76,7 @@
     dark: "#070907",
   };
   const h = ReactRuntime.createElement;
+  const localStateStore = createLocalStateStore(window.localStorage);
 
   /**
    * @typedef {Object} WorkoutSession
@@ -157,10 +159,8 @@
     const fallback = fallbackState();
 
     try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (!raw) return seedState(fallback);
-
-      const parsed = JSON.parse(raw);
+      const parsed = localStateStore.load();
+      if (!parsed) return seedState(fallback);
       return seedState({
         ...fallback,
         ...parsed,
@@ -189,11 +189,10 @@
     return next;
   }
 
-  /** @param {AppState} state @returns {boolean} */
-  function saveState(state) {
+  /** @param {AppState} state @param {AppState|null=} previous @returns {boolean} */
+  function saveState(state, previous = null) {
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      return true;
+      return localStateStore.save(state, previous);
     } catch (error) {
       console.warn("Could not save state.", error);
       return false;
@@ -264,14 +263,26 @@
     state,
     updatedAt = new Date().toISOString(),
   ) {
-    return normalizeAthleteState({
+    return {
       profile: state.profile,
       plans: state.plans,
       activePlanId: state.activePlanId,
       selectedWeek: state.selectedWeek,
-      planSchemaVersion: state.planSchemaVersion,
+      planSchemaVersion: PLAN_SCHEMA_VERSION,
       updatedAt,
-    });
+    };
+  }
+
+  function athleteStateChanged(previous, next) {
+    return (
+      previous.profile !== next.profile ||
+      previous.plans !== next.plans ||
+      previous.activePlanId !== next.activePlanId ||
+      previous.selectedWeek !== next.selectedWeek ||
+      previous.planSchemaVersion !== next.planSchemaVersion ||
+      previous.updatedAt !== next.updatedAt ||
+      previous.activeScoreOwner !== next.activeScoreOwner
+    );
   }
 
   function withActiveAthleteState(state, updatedAt) {
@@ -689,6 +700,9 @@
     const appStateRef = ReactRuntime.useRef(appState);
     appStateRef.current = appState;
     const [activeView, setActiveView] = ReactRuntime.useState("dashboardView");
+    const [visitedViews, setVisitedViews] = ReactRuntime.useState(
+      () => new Set(["dashboardView"]),
+    );
     const [toast, setToast] = ReactRuntime.useState("");
     const [systemTheme, setSystemTheme] = ReactRuntime.useState(getSystemTheme);
     const [remoteStore] = ReactRuntime.useState(createRemoteStore);
@@ -710,6 +724,7 @@
     const loadingOwnerRef = ReactRuntime.useRef(null);
     const loadedOwnerRef = ReactRuntime.useRef(null);
     const hydratedAthleteOwnerRef = ReactRuntime.useRef(null);
+    const skipAthleteSaveRef = ReactRuntime.useRef(null);
     const athleteSaveTimerRef = ReactRuntime.useRef(null);
     const authEpochRef = ReactRuntime.useRef(0);
     const themePreference = normalizeThemePreference(appState.themePreference);
@@ -721,9 +736,11 @@
       const current = appStateRef.current;
       const candidate =
         typeof updater === "function" ? updater(current) : updater;
-      const next = withActiveAthleteState(candidate);
+      const next = athleteStateChanged(current, candidate)
+        ? withActiveAthleteState(candidate)
+        : candidate;
       appStateRef.current = next;
-      const saved = saveState(next);
+      const saved = saveState(next, current);
       setAppState(next);
       window.setTimeout(
         () =>
@@ -821,13 +838,14 @@
             );
           }
           if (!isCurrentAuth(ownerId, authEpoch)) return;
+          skipAthleteSaveRef.current = authToken;
+          hydratedAthleteOwnerRef.current = ownerId;
           updateAppState((current) =>
             seedPrs(
               activateAthleteOwner(current, ownerId, athleteState),
               ownerId,
             ),
           );
-          hydratedAthleteOwnerRef.current = ownerId;
           const hydrated = await hydrateRemoteScores(ownerId, authEpoch);
           if (!hydrated || !isCurrentAuth(ownerId, authEpoch)) return;
           loadedOwnerRef.current = authToken;
@@ -861,6 +879,7 @@
         loadingOwnerRef.current = null;
         loadedOwnerRef.current = null;
         hydratedAthleteOwnerRef.current = null;
+        skipAthleteSaveRef.current = null;
         window.clearTimeout(athleteSaveTimerRef.current);
         setRemoteUser(null);
         updateAppState((current) =>
@@ -878,6 +897,10 @@
     }, []);
 
     const activateView = ReactRuntime.useCallback((viewId) => {
+      setVisitedViews((current) => {
+        if (current.has(viewId)) return current;
+        return new Set([...current, viewId]);
+      });
       setActiveView(viewId);
       window.requestAnimationFrame(() =>
         window.scrollTo({ top: 0, behavior: "smooth" }),
@@ -967,6 +990,7 @@
           authenticatedOwnerRef.current = ownerId;
           loadingOwnerRef.current = null;
           loadedOwnerRef.current = null;
+          skipAthleteSaveRef.current = null;
         }
         setRemoteUser(session.user);
         loadRemoteScores(session, authEpochRef.current);
@@ -1010,6 +1034,13 @@
         appState.activeScoreOwner !== ownerId ||
         !isCurrentAuth(ownerId, authEpoch)
       ) {
+        return undefined;
+      }
+      if (
+        skipAthleteSaveRef.current?.ownerId === ownerId &&
+        skipAthleteSaveRef.current?.authEpoch === authEpoch
+      ) {
+        skipAthleteSaveRef.current = null;
         return undefined;
       }
 
@@ -1388,7 +1419,11 @@
       null,
       h(
         "div",
-        { className: "app-shell" },
+        {
+          className: "app-shell",
+          "data-sync-state": syncStatus.state,
+          "data-sync-message": syncStatus.message,
+        },
         h(
           "header",
           { className: "topbar" },
@@ -1423,7 +1458,7 @@
         h(
           "main",
           null,
-          h(DashboardView, {
+          h(MemoDashboardView, {
             appState: viewState,
             activeView,
             onWeekChange: setSelectedWeek,
@@ -1443,7 +1478,7 @@
                 )
               )
                 return;
-              window.localStorage.removeItem(STORAGE_KEY);
+              localStateStore.clear();
               let next = loadState();
               const ownerId = String(remoteUser?.id || "");
               if (ownerId) {
@@ -1670,263 +1705,281 @@
               },
             }),
           }),
-          h(ProgramView, {
-            appState: viewState,
-            activeView,
-            onWeekChange: setSelectedWeek,
-            onLogSession: jumpToLog,
-            onTimerFinish: finishTimerToLog,
-          }),
-          h(BuilderView, {
-            appState: viewState,
-            activeView,
-            onNotify: notify,
-            onGenerate: handleGenerateProgramme,
-            onSaveSession: handleSaveCustomSession,
-            onSelectPlan: handleSelectPlan,
-            onRenamePlan: handleRenamePlan,
-            onDeletePlan: handleDeletePlan,
-            onDeleteSession: handleDeleteSession,
-            onLogSession: jumpToLog,
-            onTimerFinish: finishTimerToLog,
-          }),
-          h(LearnView, { activeView }),
-          h(ProofView, {
-            appState: viewState,
-            activeView,
-            onFinish: finishTimerToLog,
-          }),
-          h(LogView, {
-            appState: viewState,
-            activeView,
-            logSelection,
-            pendingTimerResult,
-            onLogSelectionChange: setLogSelection,
-            onWeekChange: setSelectedWeek,
-            onNotify: notify,
-            onSaveLog: (log) => {
-              const localOwnerId = appState.activeScoreOwner;
-              const ownerId = remoteUser ? String(remoteUser.id || "") : "";
-              const authEpoch = authEpochRef.current;
-              const syncRemotely = Boolean(
-                remoteStore &&
-                ownerId &&
-                localOwnerId === ownerId &&
-                isCurrentAuth(ownerId, authEpoch),
-              );
-              const clearMatchingTimer = () => {
-                if (
-                  pendingTimerResult &&
-                  pendingTimerResult.dayId === log.dayId &&
-                  pendingTimerResult.week === log.week
-                ) {
-                  setPendingTimerResult(null);
-                }
-              };
-              updateAppState((current) =>
-                updateScoreData(
-                  current,
-                  (scores) => ({
-                    ...scores,
-                    logs: mergeById(scores.logs, [log]),
-                  }),
-                  localOwnerId,
-                ),
-              );
-              clearMatchingTimer();
-              notify(
-                syncRemotely
-                  ? "Workout saved locally. Syncing..."
-                  : "Workout log saved.",
-              );
-              if (syncRemotely) {
-                remoteStore
-                  .saveLog(log, ownerId)
-                  .then((syncResult) => {
-                    if (!isCurrentAuth(ownerId, authEpoch)) return;
-                    const optionalMetadataPending =
-                      syncResult?.competitionProofSynced === false ||
-                      syncResult?.timerResultSynced === false ||
-                      syncResult?.workoutMetadataSynced === false;
-                    setSyncStatus({
-                      state: "signed-in",
-                      message: optionalMetadataPending
-                        ? "Workout saved. Some workout metadata remains local until the Supabase schema is updated."
-                        : "Scores are syncing with Supabase.",
-                    });
-                    notify(
-                      optionalMetadataPending
-                        ? "Workout saved. Some workout metadata stays local until the Supabase schema is updated."
-                        : "Workout log saved.",
-                    );
-                  })
-                  .catch((error) => {
-                    console.warn(
-                      "Could not save workout log to Supabase.",
-                      error,
-                    );
-                    if (!isCurrentAuth(ownerId, authEpoch)) return;
-                    setSyncStatus({
-                      state: "error",
-                      message:
-                        "Workout is saved locally. Remote sync is pending; retry from Account.",
-                    });
-                    notify("Workout saved locally. Remote sync is pending.");
-                  });
-              }
-              return Promise.resolve();
-            },
-            onClearLogs: () => {
-              if (!scoreData.logs.length) return;
-              if (!window.confirm("Clear all workout logs on this device?"))
-                return;
-              const localOwnerId = appState.activeScoreOwner;
-              const ownerId = remoteUser ? String(remoteUser.id || "") : "";
-              const authEpoch = authEpochRef.current;
-              const syncRemotely = Boolean(
-                remoteStore &&
-                ownerId &&
-                localOwnerId === ownerId &&
-                isCurrentAuth(ownerId, authEpoch),
-              );
-              const clearLocalLogs = (showNotice = true) => {
-                updateAppState((current) =>
-                  updateScoreData(
-                    current,
-                    (scores) => ({
-                      ...scores,
-                      logs: [],
-                    }),
-                    localOwnerId,
-                  ),
-                );
-                if (showNotice) notify("Workout logs cleared.");
-              };
-              if (syncRemotely) {
-                remoteStore
-                  .clearLogs()
-                  .then(() => {
-                    const isCurrent = isCurrentAuth(ownerId, authEpoch);
-                    clearLocalLogs(isCurrent);
-                    if (!isCurrent) return;
-                  })
-                  .catch((error) => {
-                    console.warn(
-                      "Could not clear Supabase workout logs.",
-                      error,
-                    );
-                    if (!isCurrentAuth(ownerId, authEpoch)) return;
-                    notify("Could not clear Supabase workout logs.");
-                  });
-                return;
-              }
-              clearLocalLogs();
-            },
-          }),
-          h(PrView, {
-            appState: viewState,
-            activeView,
-            onNotify: notify,
-            onSaveAttempt: (attempt) => {
-              const localOwnerId = appState.activeScoreOwner;
-              const ownerScores = selectScoreData(
-                appStateRef.current,
-                localOwnerId,
-              );
-              const prs = { ...ownerScores.prs };
-              if (attempt.isPr) {
-                prs[attempt.metricId] = {
-                  metricId: attempt.metricId,
-                  value: attempt.value,
-                  display: attempt.display,
-                  date: attempt.date,
-                  notes: attempt.notes,
-                  updatedAt: attempt.createdAt,
-                };
-              }
-
-              const ownerId = remoteUser ? String(remoteUser.id || "") : "";
-              const authEpoch = authEpochRef.current;
-              const syncRemotely = Boolean(
-                remoteStore &&
-                ownerId &&
-                localOwnerId === ownerId &&
-                isCurrentAuth(ownerId, authEpoch),
-              );
-
-              const saveLocalAttempt = () => {
-                updateAppState((current) =>
-                  updateScoreData(
-                    current,
-                    (scores) => ({
-                      ...scores,
-                      prs: attempt.isPr
-                        ? {
-                            ...scores.prs,
-                            [attempt.metricId]: prs[attempt.metricId],
-                          }
-                        : scores.prs,
-                      prAttempts: mergeById(scores.prAttempts, [attempt]),
-                    }),
-                    localOwnerId,
-                  ),
-                );
-                notify(
-                  syncRemotely
-                    ? `${attempt.isPr ? "New PR" : "Attempt"} saved locally. Syncing...`
-                    : attempt.isPr
-                      ? "New PR saved."
-                      : "Attempt saved.",
-                );
-              };
-
-              saveLocalAttempt();
-              if (syncRemotely) {
-                remoteStore
-                  .savePrAttempt(attempt, prs, ownerId)
-                  .then((canonicalRecord) => {
-                    if (!isCurrentAuth(ownerId, authEpoch)) return;
-                    if (canonicalRecord) {
-                      updateAppState((current) =>
-                        updateScoreData(
-                          current,
-                          (scores) => ({
-                            ...scores,
-                            prs: mergeBestPrs(
-                              scores.prs,
-                              {
-                                [canonicalRecord.metricId]: canonicalRecord,
-                              },
-                              true,
-                            ),
-                          }),
-                          localOwnerId,
-                        ),
-                      );
+          visitedViews.has("programView")
+            ? h(MemoProgramView, {
+                appState: viewState,
+                activeView,
+                onWeekChange: setSelectedWeek,
+                onLogSession: jumpToLog,
+                onTimerFinish: finishTimerToLog,
+              })
+            : null,
+          visitedViews.has("builderView")
+            ? h(MemoBuilderView, {
+                appState: viewState,
+                activeView,
+                onNotify: notify,
+                onGenerate: handleGenerateProgramme,
+                onSaveSession: handleSaveCustomSession,
+                onSelectPlan: handleSelectPlan,
+                onRenamePlan: handleRenamePlan,
+                onDeletePlan: handleDeletePlan,
+                onDeleteSession: handleDeleteSession,
+                onLogSession: jumpToLog,
+                onTimerFinish: finishTimerToLog,
+              })
+            : null,
+          visitedViews.has("learnView")
+            ? h(MemoLearnView, { activeView })
+            : null,
+          visitedViews.has("proofView")
+            ? h(MemoProofView, {
+                appState: viewState,
+                activeView,
+                onFinish: finishTimerToLog,
+              })
+            : null,
+          visitedViews.has("logView")
+            ? h(MemoLogView, {
+                appState: viewState,
+                activeView,
+                logSelection,
+                pendingTimerResult,
+                onLogSelectionChange: setLogSelection,
+                onWeekChange: setSelectedWeek,
+                onNotify: notify,
+                onSaveLog: (log) => {
+                  const localOwnerId = appState.activeScoreOwner;
+                  const ownerId = remoteUser ? String(remoteUser.id || "") : "";
+                  const authEpoch = authEpochRef.current;
+                  const syncRemotely = Boolean(
+                    remoteStore &&
+                    ownerId &&
+                    localOwnerId === ownerId &&
+                    isCurrentAuth(ownerId, authEpoch),
+                  );
+                  const clearMatchingTimer = () => {
+                    if (
+                      pendingTimerResult &&
+                      pendingTimerResult.dayId === log.dayId &&
+                      pendingTimerResult.week === log.week
+                    ) {
+                      setPendingTimerResult(null);
                     }
-                    setSyncStatus({
-                      state: "signed-in",
-                      message: "Scores are syncing with Supabase.",
-                    });
-                    notify(attempt.isPr ? "New PR synced." : "Attempt synced.");
-                  })
-                  .catch((error) => {
-                    console.warn(
-                      "Could not save PR attempt to Supabase.",
-                      error,
+                  };
+                  updateAppState((current) =>
+                    updateScoreData(
+                      current,
+                      (scores) => ({
+                        ...scores,
+                        logs: mergeById(scores.logs, [log]),
+                      }),
+                      localOwnerId,
+                    ),
+                  );
+                  clearMatchingTimer();
+                  notify(
+                    syncRemotely
+                      ? "Workout saved locally. Syncing..."
+                      : "Workout log saved.",
+                  );
+                  if (syncRemotely) {
+                    remoteStore
+                      .saveLog(log, ownerId)
+                      .then((syncResult) => {
+                        if (!isCurrentAuth(ownerId, authEpoch)) return;
+                        const optionalMetadataPending =
+                          syncResult?.competitionProofSynced === false ||
+                          syncResult?.timerResultSynced === false ||
+                          syncResult?.workoutMetadataSynced === false;
+                        setSyncStatus({
+                          state: "signed-in",
+                          message: optionalMetadataPending
+                            ? "Workout saved. Some workout metadata remains local until the Supabase schema is updated."
+                            : "Scores are syncing with Supabase.",
+                        });
+                        notify(
+                          optionalMetadataPending
+                            ? "Workout saved. Some workout metadata stays local until the Supabase schema is updated."
+                            : "Workout log saved.",
+                        );
+                      })
+                      .catch((error) => {
+                        console.warn(
+                          "Could not save workout log to Supabase.",
+                          error,
+                        );
+                        if (!isCurrentAuth(ownerId, authEpoch)) return;
+                        setSyncStatus({
+                          state: "error",
+                          message:
+                            "Workout is saved locally. Remote sync is pending; retry from Account.",
+                        });
+                        notify(
+                          "Workout saved locally. Remote sync is pending.",
+                        );
+                      });
+                  }
+                  return Promise.resolve();
+                },
+                onClearLogs: () => {
+                  if (!scoreData.logs.length) return;
+                  if (!window.confirm("Clear all workout logs on this device?"))
+                    return;
+                  const localOwnerId = appState.activeScoreOwner;
+                  const ownerId = remoteUser ? String(remoteUser.id || "") : "";
+                  const authEpoch = authEpochRef.current;
+                  const syncRemotely = Boolean(
+                    remoteStore &&
+                    ownerId &&
+                    localOwnerId === ownerId &&
+                    isCurrentAuth(ownerId, authEpoch),
+                  );
+                  const clearLocalLogs = (showNotice = true) => {
+                    updateAppState((current) =>
+                      updateScoreData(
+                        current,
+                        (scores) => ({
+                          ...scores,
+                          logs: [],
+                        }),
+                        localOwnerId,
+                      ),
                     );
-                    if (!isCurrentAuth(ownerId, authEpoch)) return;
-                    setSyncStatus({
-                      state: "error",
-                      message:
-                        "PR attempt is saved locally. Remote sync is pending; retry from Account.",
-                    });
-                    notify("PR attempt saved locally. Remote sync is pending.");
-                  });
-              }
-              return Promise.resolve();
-            },
-          }),
+                    if (showNotice) notify("Workout logs cleared.");
+                  };
+                  if (syncRemotely) {
+                    remoteStore
+                      .clearLogs()
+                      .then(() => {
+                        const isCurrent = isCurrentAuth(ownerId, authEpoch);
+                        clearLocalLogs(isCurrent);
+                        if (!isCurrent) return;
+                      })
+                      .catch((error) => {
+                        console.warn(
+                          "Could not clear Supabase workout logs.",
+                          error,
+                        );
+                        if (!isCurrentAuth(ownerId, authEpoch)) return;
+                        notify("Could not clear Supabase workout logs.");
+                      });
+                    return;
+                  }
+                  clearLocalLogs();
+                },
+              })
+            : null,
+          visitedViews.has("prView")
+            ? h(MemoPrView, {
+                appState: viewState,
+                activeView,
+                onNotify: notify,
+                onSaveAttempt: (attempt) => {
+                  const localOwnerId = appState.activeScoreOwner;
+                  const ownerScores = selectScoreData(
+                    appStateRef.current,
+                    localOwnerId,
+                  );
+                  const prs = { ...ownerScores.prs };
+                  if (attempt.isPr) {
+                    prs[attempt.metricId] = {
+                      metricId: attempt.metricId,
+                      value: attempt.value,
+                      display: attempt.display,
+                      date: attempt.date,
+                      notes: attempt.notes,
+                      updatedAt: attempt.createdAt,
+                    };
+                  }
+
+                  const ownerId = remoteUser ? String(remoteUser.id || "") : "";
+                  const authEpoch = authEpochRef.current;
+                  const syncRemotely = Boolean(
+                    remoteStore &&
+                    ownerId &&
+                    localOwnerId === ownerId &&
+                    isCurrentAuth(ownerId, authEpoch),
+                  );
+
+                  const saveLocalAttempt = () => {
+                    updateAppState((current) =>
+                      updateScoreData(
+                        current,
+                        (scores) => ({
+                          ...scores,
+                          prs: attempt.isPr
+                            ? {
+                                ...scores.prs,
+                                [attempt.metricId]: prs[attempt.metricId],
+                              }
+                            : scores.prs,
+                          prAttempts: mergeById(scores.prAttempts, [attempt]),
+                        }),
+                        localOwnerId,
+                      ),
+                    );
+                    notify(
+                      syncRemotely
+                        ? `${attempt.isPr ? "New PR" : "Attempt"} saved locally. Syncing...`
+                        : attempt.isPr
+                          ? "New PR saved."
+                          : "Attempt saved.",
+                    );
+                  };
+
+                  saveLocalAttempt();
+                  if (syncRemotely) {
+                    remoteStore
+                      .savePrAttempt(attempt, prs, ownerId)
+                      .then((canonicalRecord) => {
+                        if (!isCurrentAuth(ownerId, authEpoch)) return;
+                        if (canonicalRecord) {
+                          updateAppState((current) =>
+                            updateScoreData(
+                              current,
+                              (scores) => ({
+                                ...scores,
+                                prs: mergeBestPrs(
+                                  scores.prs,
+                                  {
+                                    [canonicalRecord.metricId]: canonicalRecord,
+                                  },
+                                  true,
+                                ),
+                              }),
+                              localOwnerId,
+                            ),
+                          );
+                        }
+                        setSyncStatus({
+                          state: "signed-in",
+                          message: "Scores are syncing with Supabase.",
+                        });
+                        notify(
+                          attempt.isPr ? "New PR synced." : "Attempt synced.",
+                        );
+                      })
+                      .catch((error) => {
+                        console.warn(
+                          "Could not save PR attempt to Supabase.",
+                          error,
+                        );
+                        if (!isCurrentAuth(ownerId, authEpoch)) return;
+                        setSyncStatus({
+                          state: "error",
+                          message:
+                            "PR attempt is saved locally. Remote sync is pending; retry from Account.",
+                        });
+                        notify(
+                          "PR attempt saved locally. Remote sync is pending.",
+                        );
+                      });
+                  }
+                  return Promise.resolve();
+                },
+              })
+            : null,
         ),
         h(BottomNav, { activeView, onActivate: activateView }),
       ),
@@ -6674,6 +6727,24 @@
       );
     }
   }
+
+  function memoizeInactiveView(Component, viewId) {
+    return /** @type {any} */ (
+      ReactRuntime.memo(
+        Component,
+        (previous, next) =>
+          previous.activeView !== viewId && next.activeView !== viewId,
+      )
+    );
+  }
+
+  const MemoDashboardView = memoizeInactiveView(DashboardView, "dashboardView");
+  const MemoProgramView = memoizeInactiveView(ProgramView, "programView");
+  const MemoBuilderView = memoizeInactiveView(BuilderView, "builderView");
+  const MemoLearnView = memoizeInactiveView(LearnView, "learnView");
+  const MemoProofView = memoizeInactiveView(ProofView, "proofView");
+  const MemoLogView = memoizeInactiveView(LogView, "logView");
+  const MemoPrView = memoizeInactiveView(PrView, "prView");
 
   const root = ReactDOMRuntime.createRoot(rootElement);
   root.render(h(AppErrorBoundary, null, h(App)));

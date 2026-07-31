@@ -12,6 +12,23 @@ function read(file) {
   return fs.readFileSync(path.join(ROOT, file), "utf8");
 }
 
+function deployedAssetNames(workflow) {
+  const copyCommand = workflow.match(/cp ([^\n]+) dist\//);
+  assert.ok(
+    copyCommand,
+    "Pages workflow should copy the static site into dist",
+  );
+  return new Set(copyCommand[1].trim().split(/\s+/));
+}
+
+function localHtmlAssetNames(html) {
+  return new Set(
+    [...html.matchAll(/(?:src|href)="\.\/([^"?#]+)[^"]*"/g)].map(
+      (match) => match[1],
+    ),
+  );
+}
+
 function runServiceWorker({ fetchImpl, matchImpl, cacheKeys = [] } = {}) {
   const listeners = {};
   const calls = {
@@ -105,6 +122,10 @@ test("HTML mounts the React app and references the required assets", () => {
   );
   assert.equal((html.match(/integrity="sha384-/g) || []).length, 4);
   assert.match(html, /<script src="\.\/supabase-config\.js" defer><\/script>/);
+  assert.match(
+    html,
+    /<script src="\.\/local-state-store\.js" defer><\/script>/,
+  );
   assert.match(html, /<script src="\.\/movement-catalog\.js" defer><\/script>/);
   assert.match(html, /<script src="\.\/app\.js" defer><\/script>/);
   assert.ok(
@@ -192,6 +213,7 @@ test("service worker precaches the app and only the primary CDN runtimes", async
   const assets = [
     "index.html",
     "styles.css",
+    "local-state-store.js",
     "movement-catalog.js",
     "app.js",
     "supabase-config.js",
@@ -315,6 +337,8 @@ test("project documentation describes the current feature set", () => {
 
 test("GitHub Pages workflow checks and publishes the static app", () => {
   const workflow = read(".github/workflows/pages.yml");
+  const deployedAssets = deployedAssetNames(workflow);
+  const htmlAssets = localHtmlAssetNames(read("index.html"));
 
   assert.match(workflow, /Deploy to GitHub Pages/);
   assert.match(workflow, /pull_request:/);
@@ -349,10 +373,18 @@ test("GitHub Pages workflow checks and publishes the static app", () => {
     /diff -u -B types\/database\.types\.ts \/tmp\/database\.types\.ts/,
   );
   assert.match(workflow, /deploy:[\s\S]*needs: \[checks, database\]/);
-  assert.match(
-    workflow,
-    /cp index\.html styles\.css app\.js supabase-config\.js supabase-sync\.js react-app\.js manifest\.webmanifest sw\.js icon\.svg dist\//,
-  );
+  for (const asset of htmlAssets) {
+    assert.ok(
+      deployedAssets.has(asset),
+      `Pages artifact should include local HTML asset ${asset}`,
+    );
+  }
+  for (const asset of ["index.html", "sw.js", "icon.svg"]) {
+    assert.ok(
+      deployedAssets.has(asset),
+      `Pages artifact should include ${asset}`,
+    );
+  }
 });
 
 test("Supabase schema scopes policies to authenticated owners", () => {

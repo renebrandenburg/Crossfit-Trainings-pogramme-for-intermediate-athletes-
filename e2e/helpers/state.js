@@ -2,9 +2,13 @@
 
 async function readAppState(page) {
   return page.evaluate(() => {
-    const raw = window.localStorage.getItem("forge-hour-state-v1");
-    if (!raw) throw new Error("Application state is missing.");
-    return JSON.parse(raw);
+    const localStateApi = window.ForgeHourLocalState;
+    if (!localStateApi) throw new Error("Local state API is missing.");
+    const state = localStateApi
+      .createLocalStateStore(window.localStorage)
+      .load();
+    if (!state) throw new Error("Application state is missing.");
+    return state;
   });
 }
 

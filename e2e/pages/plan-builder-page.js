@@ -89,11 +89,17 @@ class PlanBuilderPage {
   }
 
   async waitForSync() {
-    await expect(
-      this.page.getByText("Profile and programme changes synced.", {
-        exact: true,
-      }),
-    ).toHaveCount(1);
+    await expect(this.page.locator(".app-shell")).toHaveAttribute(
+      "data-sync-message",
+      "Profile and programme changes synced.",
+    );
+  }
+
+  async waitForHydration() {
+    await expect(this.page.locator(".app-shell")).toHaveAttribute(
+      "data-sync-message",
+      "Profile, programmes, logs, and PRs are syncing.",
+    );
   }
 
   /**

@@ -273,7 +273,15 @@ function mountApp({
     );
   }
   dom.window.React = require("react");
-  dom.window.ReactDOM = require("react-dom/client");
+  const reactDomClient = require("react-dom/client");
+  let appRoot = null;
+  dom.window.ReactDOM = {
+    ...reactDomClient,
+    createRoot(container) {
+      appRoot = reactDomClient.createRoot(container);
+      return appRoot;
+    },
+  };
   if (supabaseMock) {
     dom.window.supabase = supabaseMock.supabase;
     if (supabaseConfig)
@@ -283,6 +291,12 @@ function mountApp({
       };
   }
 
+  const localStateApi = freshRequire("../local-state-store.js");
+  dom.window.ForgeHourLocalState = {
+    ...localStateApi,
+    createLocalStateStore: (storage) =>
+      localStateApi.createLocalStateStore(storage, { legacySnapshotDelay: 0 }),
+  };
   freshRequire("../app.js");
   freshRequire("../supabase-sync.js");
   dom.window.ForgeHour = global.ForgeHour;
@@ -291,6 +305,7 @@ function mountApp({
   freshRequire("../react-app.js");
 
   const testingLibrary = require("@testing-library/react");
+  testingLibrary.configure({ asyncUtilTimeout: 5000 });
   const ui = testingLibrary.within(dom.window.document.body);
 
   return {
@@ -306,6 +321,7 @@ function mountApp({
       return testingLibrary.within(dom.window.document.querySelector(`#${id}`));
     },
     cleanup() {
+      if (appRoot) testingLibrary.act(() => appRoot.unmount());
       testingLibrary.cleanup();
       dom.window.close();
       delete global.window;
@@ -593,6 +609,9 @@ test("React Testing Library renders the dashboard and bottom navigation", async 
     assert.ok(ui.getByRole("button", { name: "Proof" }));
     assert.ok(ui.getByRole("button", { name: "Log" }));
     assert.ok(ui.getByRole("button", { name: "PRs" }));
+    assert.equal(document.querySelector("#builderView"), null);
+    assert.equal(document.querySelector("#learnView"), null);
+    assert.equal(document.querySelector("#logView"), null);
     assert.equal(
       Array.from(
         document.querySelectorAll("#nextSession .timer-panel button"),
@@ -601,6 +620,33 @@ test("React Testing Library renders the dashboard and bottom navigation", async 
     );
   } finally {
     cleanup();
+  }
+});
+
+test("React Testing Library lazy-mounts views and preserves unfinished drafts", async () => {
+  const mounted = mountApp();
+
+  try {
+    assert.ok(
+      await mounted.ui.findByRole("heading", { name: "Training dashboard" }),
+    );
+    assert.equal(document.querySelector("#builderView"), null);
+
+    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "Build" }));
+    const builder = mounted.view("builderView");
+    const title = builder.getByLabelText("Day or title");
+    mounted.fireEvent.change(title, { target: { value: "Unfinished Friday" } });
+
+    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "Home" }));
+    assert.ok(document.querySelector("#builderView"));
+    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "Build" }));
+
+    assert.equal(
+      mounted.view("builderView").getByLabelText("Day or title").value,
+      "Unfinished Friday",
+    );
+  } finally {
+    mounted.cleanup();
   }
 });
 
@@ -2967,7 +3013,7 @@ test("React Testing Library keeps failed remote workout saves locally for retry"
 
     assert.ok(await ui.findByText(/Offline squat survives/));
     await waitFor(() => {
-      assert.ok(ui.getByText(/Remote sync is pending; retry from Account/));
+      assert.ok(ui.getByText("Workout saved locally. Remote sync is pending."));
     });
     const saved = readState();
     assert.equal(saved.activeScoreOwner, "user-1");
@@ -2983,6 +3029,7 @@ test("React Testing Library keeps failed remote workout saves locally for retry"
     );
 
     fireEvent.click(ui.getByRole("button", { name: "Home" }));
+    assert.ok(ui.getByText(/Remote sync is pending; retry from Account/));
     fireEvent.click(ui.getByRole("button", { name: "Retry account sync" }));
     assert.ok(
       await ui.findByText("Private athlete account synced to Supabase."),
