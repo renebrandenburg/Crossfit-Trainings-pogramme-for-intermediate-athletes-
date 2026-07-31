@@ -8,6 +8,7 @@ const {
   applyReadinessVariant,
   DEFAULT_PROFILE,
   DIVISION_LABELS,
+  MOVEMENT_CATALOG,
   MOVEMENT_LIBRARY,
   PR_METRICS,
   RX_CATEGORY_WEIGHTS,
@@ -16,6 +17,7 @@ const {
   WOD_SCHEMA_VERSION,
   WORKOUT_DEFINITION_VERSION,
   buildGeneratedProgramme,
+  buildOlympicFamilySchedule,
   buildRxReadiness,
   buildSession,
   claimUniqueGeneratedWod,
@@ -25,6 +27,8 @@ const {
   filterMovementLibrary,
   formatPrValue,
   formatTimerResult,
+  generatedProgrammeErrors,
+  generatedProgrammeWarnings,
   generatedWeekErrors,
   generatedSessionErrors,
   getProgramDays,
@@ -338,6 +342,154 @@ test("two-day generator creates intentional progression weeks without truncation
       [],
     );
   }
+});
+
+test("Olympic family schedules use focused two-week microcycles", () => {
+  const first = buildOlympicFamilySchedule("family-seed-a");
+  const repeat = buildOlympicFamilySchedule("family-seed-a");
+  const restricted = buildOlympicFamilySchedule("family-seed-a", 8, ["clean"]);
+
+  assert.deepEqual(first, repeat);
+  assert.equal(first.length, 8);
+  assert.deepEqual(new Set(first), new Set(["clean", "snatch"]));
+  for (let index = 0; index < first.length; index += 2) {
+    assert.equal(first[index], first[index + 1]);
+    if (index >= 2) assert.notEqual(first[index], first[index - 1]);
+  }
+  assert.deepEqual(restricted, Array(8).fill("clean"));
+});
+
+test("two-day Olympic weakness balances clean and snatch across the full block", () => {
+  const options = {
+    primaryGoal: "balanced",
+    secondaryGoal: "endurance",
+    programDaysPerWeek: 2,
+    usesBoxProgramming: true,
+    expectedBoxDays: 2,
+    weakness: "olympic",
+    sessionDuration: 60,
+    athleteLevel: "intermediate",
+    barbellDropPolicy: "allowed",
+  };
+  const familyByMovementId = new Map(
+    MOVEMENT_CATALOG.map((movement) => [movement.id, movement.olympicFamily]),
+  );
+
+  for (const seed of [
+    "olympic-balance-a",
+    "olympic-balance-b",
+    "olympic-balance-c",
+  ]) {
+    const sessions = buildGeneratedProgramme(
+      options,
+      cloneDefaultProfile(),
+      (id) => id,
+      seed,
+    );
+    const weeklyFamilies = Array.from({ length: 8 }, (_value, index) => {
+      const families = new Set(
+        sessions
+          .filter((session) => session.week === index + 1)
+          .flatMap((session) => session.olympicExposureMovementIds)
+          .map((movementId) => familyByMovementId.get(movementId)),
+      );
+      assert.equal(families.size, 1);
+      return [...families][0];
+    });
+
+    assert.deepEqual(new Set(weeklyFamilies), new Set(["clean", "snatch"]));
+    assert.deepEqual(generatedProgrammeErrors(sessions, options), []);
+    assert.deepEqual(generatedProgrammeWarnings(sessions, options), []);
+    assert.ok(
+      sessions.some((session) =>
+        session.strength.some((item) => /Hang clean 6x2/.test(item)),
+      ),
+    );
+    assert.ok(
+      sessions.some((session) =>
+        session.strength.some((item) => /Hang snatch 6x2/.test(item)),
+      ),
+    );
+    const olympicWodMovements = sessions
+      .flatMap((session) => definitionExercises(session.workoutDefinition))
+      .filter((exercise) =>
+        /hang power (?:cleans|snatches)/i.test(exercise.movement),
+      );
+    assert.ok(
+      olympicWodMovements.some(
+        (exercise) => exercise.movementId === "hang-power-cleans",
+      ),
+    );
+    assert.ok(
+      olympicWodMovements.some(
+        (exercise) => exercise.movementId === "hang-power-snatches",
+      ),
+    );
+    olympicWodMovements.forEach((exercise) => {
+      assert.match(exercise.load?.display || "", /^\d+(?:\.\d+)? kg$/);
+      assert.doesNotMatch(exercise.movement, /drills?/i);
+    });
+    assert.doesNotMatch(
+      JSON.stringify(sessions),
+      /clean pulls or snatch pulls|tall clean\/snatch pulls|overhead or front rack holds|hang power clean drills/i,
+    );
+    sessions.forEach((session) => {
+      assert.equal(session.duration, 60);
+      assert.deepEqual(generatedSessionErrors(session), []);
+    });
+  }
+});
+
+test("Olympic block validation detects missing families and honors eligibility restrictions", () => {
+  const options = {
+    goal: "balanced",
+    weakness: "olympic",
+    daysPerWeek: 2,
+    duration: 60,
+  };
+  const sessions = buildGeneratedProgramme(
+    options,
+    cloneDefaultProfile(),
+    (id) => id,
+    "olympic-validator",
+  );
+  const cleanOnly = sessions.map((session) =>
+    session.olympicFamily === "snatch"
+      ? { ...session, olympicExposureMovementIds: [] }
+      : session,
+  );
+
+  assert.match(
+    generatedProgrammeErrors(cleanOnly, options).join(" "),
+    /missing snatch-family exposure/,
+  );
+  const longGap = Array.from({ length: 8 }, (_value, index) => ({
+    week: index + 1,
+    olympicFamily: index === 3 ? "clean" : "snatch",
+    olympicExposureMovementIds: [
+      index === 3 ? "tall-clean-pulls" : "tall-snatch-pulls",
+    ],
+  }));
+  assert.match(
+    generatedProgrammeErrors(longGap, options).join(" "),
+    /clean-family exposure is absent for 4 consecutive weeks/,
+  );
+  assert.deepEqual(
+    generatedProgrammeErrors(cleanOnly, options, {
+      eligibleOlympicFamilies: ["clean"],
+    }),
+    [],
+  );
+  assert.match(
+    generatedProgrammeWarnings(cleanOnly, options, {
+      eligibleOlympicFamilies: ["clean"],
+    }).join(" "),
+    /intentionally relaxed/,
+  );
+  assert.deepEqual(
+    generatedProgrammeErrors(cleanOnly, { ...options, weakness: "rowing" }),
+    [],
+  );
 });
 
 test("two-day readiness and frequency changes preserve canonical history", () => {

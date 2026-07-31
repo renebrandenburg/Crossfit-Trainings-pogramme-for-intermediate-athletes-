@@ -132,8 +132,11 @@ test("@critical Olympic prescriptions are exact, executable, and duplicate-safe"
   await app.open();
   await builder.open();
   await builder.generate({
-    goal: "gymnastics",
-    days: "4",
+    goal: "balanced",
+    secondaryGoal: "endurance",
+    days: "2",
+    totalDays: "4",
+    boxDays: "2",
     weakness: "olympic",
     athleteLevel: "intermediate",
     duration: "60",
@@ -141,15 +144,41 @@ test("@critical Olympic prescriptions are exact, executable, and duplicate-safe"
 
   let plan = await readActivePlan(page);
   const assertMovementSafety = (sessions) => {
+    expect(sessions).toHaveLength(16);
     const serialized = JSON.stringify(sessions);
     expect(serialized).not.toMatch(
-      /tall clean\/snatch pulls|overhead or front rack holds|hang power clean drills/i,
+      /clean pulls or snatch pulls|tall clean\/snatch pulls|overhead or front rack holds|hang power clean drills/i,
     );
+    expect(
+      sessions.some((session) =>
+        session.strength.some((item) => /tall clean pulls/.test(item)),
+      ),
+    ).toBe(true);
     expect(
       sessions.some((session) =>
         session.strength.some((item) => /tall snatch pulls/.test(item)),
       ),
     ).toBe(true);
+    const weeklyFamilies = [];
+    for (let week = 1; week <= 8; week += 1) {
+      const families = new Set(
+        sessions
+          .filter((session) => session.week === week)
+          .map((session) => session.olympicFamily),
+      );
+      expect(families.size).toBe(1);
+      weeklyFamilies.push([...families][0]);
+    }
+    expect(new Set(weeklyFamilies)).toEqual(new Set(["clean", "snatch"]));
+    for (const family of ["clean", "snatch"]) {
+      let missing = 0;
+      let longestMissing = 0;
+      for (const weeklyFamily of weeklyFamilies) {
+        missing = weeklyFamily === family ? 0 : missing + 1;
+        longestMissing = Math.max(longestMissing, missing);
+      }
+      expect(longestMissing).toBeLessThanOrEqual(2);
+    }
     for (const session of sessions) {
       for (const item of session.strength) {
         if (/tall clean pulls/.test(item)) {
@@ -163,6 +192,10 @@ test("@critical Olympic prescriptions are exact, executable, and duplicate-safe"
       }
       const exercises = workoutExercises(session.workoutDefinition);
       expect(exercises.every((exercise) => exercise.movementId)).toBe(true);
+      expect(
+        exercises.every((exercise) => !/drills?/i.test(exercise.movement)),
+      ).toBe(true);
+      expect(session.duration).toBe(60);
       const main =
         session.workoutDefinition.format.type === "emom"
           ? session.workoutDefinition.format.stations.flatMap(
@@ -175,6 +208,8 @@ test("@critical Olympic prescriptions are exact, executable, and duplicate-safe"
     }
   };
 
+  expect(plan.generatorOptions.secondaryGoal).toBe("endurance");
+  expect(plan.generatorOptions.totalTrainingDays).toBe(4);
   assertMovementSafety(plan.sessions);
   await builder.waitForSync();
   await page.reload();

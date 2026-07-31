@@ -44,6 +44,52 @@ test("movement aliases and semantic metadata preserve current behavior", () => {
   );
 });
 
+test("Olympic movement metadata classifies families and meaningful exposure", () => {
+  const cleanIds = [
+    "clean",
+    "power-clean",
+    "hang-clean",
+    "hang-power-cleans",
+    "clean-pulls",
+    "tall-clean-pulls",
+    "clean-and-jerk",
+  ];
+  const snatchIds = [
+    "snatch",
+    "power-snatch",
+    "hang-snatch",
+    "hang-power-snatches",
+    "snatch-pulls",
+    "tall-snatch-pulls",
+  ];
+
+  cleanIds.forEach((movementId) => {
+    assert.equal(catalog.getOlympicFamily(movementId), "clean");
+    assert.equal(catalog.isMeaningfulOlympicExposure(movementId), true);
+  });
+  snatchIds.forEach((movementId) => {
+    assert.equal(catalog.getOlympicFamily(movementId), "snatch");
+    assert.equal(catalog.isMeaningfulOlympicExposure(movementId), true);
+  });
+  assert.equal(catalog.getOlympicVariationType("hang-clean"), "hang");
+  assert.equal(catalog.getOlympicVariationType("snatch-pulls"), "pull");
+  assert.equal(catalog.getOlympicFamily("hang-power-clean-drill"), "clean");
+  assert.equal(
+    catalog.getOlympicVariationType("hang-power-clean-drill"),
+    "technique",
+  );
+  [
+    "front-squats",
+    "front-rack-hold",
+    "overhead-squats",
+    "overhead-hold",
+  ].forEach((movementId) => {
+    assert.equal(catalog.getOlympicVariationType(movementId), "position");
+    assert.equal(catalog.isMeaningfulOlympicExposure(movementId), false);
+  });
+  assert.equal(catalog.isConditioningEligible("hang-power-snatches"), true);
+});
+
 test("equipment and barbell substitutions resolve to registered IDs", () => {
   assert.deepEqual(
     catalog.getEquipmentSubstitution(

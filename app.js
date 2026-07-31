@@ -67,7 +67,7 @@ const WEEK_META = [
   {
     week: 7,
     title: "Week 7 - peak exposure",
-    note: "Highest intensity week. Chase clean reps, controlled misses, and repeatable metcon pacing.",
+    note: "Highest intensity week. Chase quality barbell reps, controlled misses, and repeatable metcon pacing.",
   },
   {
     week: 8,
@@ -435,6 +435,7 @@ const {
   getOlympicFamily,
   getOrderedMovementPool,
   isConditioningEligible,
+  isMeaningfulOlympicExposure,
   isRegisteredMovement,
   resolveMovementId,
   sameMovement,
@@ -2099,6 +2100,121 @@ function validateGeneratedWeek(sessions, requirements) {
   return sessions;
 }
 
+function generatedProgrammeErrors(sessions, options, requirements = {}) {
+  if (!Array.isArray(sessions) || !sessions.length) {
+    return ["generated programme requires sessions"];
+  }
+  const normalized = normalizeGeneratorOptions(options);
+  if (normalized.weakness !== "olympic") return [];
+
+  const eligibleFamilies = [
+    ...new Set(
+      arrayOrEmpty(requirements.eligibleOlympicFamilies || ["clean", "snatch"]),
+    ),
+  ].filter((family) => OLYMPIC_FAMILIES.has(family));
+  if (!eligibleFamilies.length) {
+    return ["Olympic-lifting weakness requires an eligible lift family"];
+  }
+
+  const errors = [];
+  const exposureByWeek = new Map();
+  sessions.forEach((session, index) => {
+    const week = Number(session?.week);
+    if (!Number.isInteger(week) || week < 1) return;
+    if (!exposureByWeek.has(week)) exposureByWeek.set(week, new Set());
+    const exposureIds = arrayOrEmpty(session?.olympicExposureMovementIds);
+    exposureIds.forEach((movementId) => {
+      const definition = getMovementDefinition(movementId);
+      if (!definition) {
+        errors.push(
+          `session ${index + 1}: Olympic exposure is not registered: ${movementId}`,
+        );
+        return;
+      }
+      if (!isMeaningfulOlympicExposure(movementId)) {
+        errors.push(
+          `session ${index + 1}: ${definition.displayName} is not a meaningful Olympic exposure`,
+        );
+        return;
+      }
+      if (
+        OLYMPIC_FAMILIES.has(session?.olympicFamily) &&
+        definition.olympicFamily !== session.olympicFamily
+      ) {
+        errors.push(
+          `session ${index + 1}: ${definition.displayName} is incompatible with the ${session.olympicFamily} family`,
+        );
+        return;
+      }
+      exposureByWeek.get(week).add(definition.olympicFamily);
+    });
+  });
+
+  const weeks = [...exposureByWeek.keys()].sort((left, right) => left - right);
+  eligibleFamilies.forEach((family) => {
+    if (!weeks.some((week) => exposureByWeek.get(week)?.has(family))) {
+      errors.push(`generated programme is missing ${family}-family exposure`);
+      return;
+    }
+    let consecutiveMissingWeeks = 0;
+    let longestMissingRun = 0;
+    weeks.forEach((week) => {
+      if (exposureByWeek.get(week)?.has(family)) {
+        consecutiveMissingWeeks = 0;
+      } else {
+        consecutiveMissingWeeks += 1;
+        longestMissingRun = Math.max(
+          longestMissingRun,
+          consecutiveMissingWeeks,
+        );
+      }
+    });
+    if (longestMissingRun > 2) {
+      errors.push(
+        `${family}-family exposure is absent for ${longestMissingRun} consecutive weeks`,
+      );
+    }
+  });
+  return [...new Set(errors)];
+}
+
+function generatedProgrammeWarnings(sessions, options, requirements = {}) {
+  const normalized = normalizeGeneratorOptions(options);
+  if (normalized.weakness !== "olympic") return [];
+  const eligibleFamilies = [
+    ...new Set(
+      arrayOrEmpty(requirements.eligibleOlympicFamilies || ["clean", "snatch"]),
+    ),
+  ].filter((family) => OLYMPIC_FAMILIES.has(family));
+  if (eligibleFamilies.length === 1) {
+    return [
+      `Only the ${eligibleFamilies[0]} family is eligible; block balance was intentionally relaxed.`,
+    ];
+  }
+  const counts = { clean: 0, snatch: 0 };
+  arrayOrEmpty(sessions).forEach((session) => {
+    const represented = new Set(
+      arrayOrEmpty(session?.olympicExposureMovementIds)
+        .filter(isMeaningfulOlympicExposure)
+        .map(getOlympicFamily),
+    );
+    represented.forEach((family) => {
+      if (family in counts) counts[family] += 1;
+    });
+  });
+  const minimum = Math.min(counts.clean, counts.snatch);
+  const maximum = Math.max(counts.clean, counts.snatch);
+  return minimum > 0 && maximum > minimum * 2
+    ? ["Olympic-lifting exposure is heavily skewed across the block."]
+    : [];
+}
+
+function validateGeneratedProgramme(sessions, options, requirements) {
+  const errors = generatedProgrammeErrors(sessions, options, requirements);
+  if (errors.length) throw new WorkoutValidationError(errors);
+  return sessions;
+}
+
 function requirePositiveFinite(value, label, errors) {
   if (!Number.isFinite(Number(value)) || Number(value) <= 0) {
     errors.push(`${label} must be positive and finite`);
@@ -2454,6 +2570,10 @@ function buildGeneratedProgramme(
     seed,
     variationEnabled: hasExplicitSeed,
     usedWodSignatures: new Set(),
+    olympicFamilySchedule:
+      normalized.weakness === "olympic" && normalized.daysPerWeek === 2
+        ? buildOlympicFamilySchedule(seed)
+        : null,
   };
 
   for (let week = 1; week <= 8; week += 1) {
@@ -2504,6 +2624,7 @@ function buildGeneratedProgramme(
     sessions.push(...validWeek);
   }
 
+  validateGeneratedProgramme(sessions, normalized);
   return sessions;
 }
 
@@ -3351,8 +3472,15 @@ function buildTwoDaySession(
   const phaseGoal =
     options.goal === "barMuscleUp" ? "gymnastics" : options.goal;
   const phase = getGeneratedWeekPhase(week, phaseGoal);
+  const scheduledOlympicFamily =
+    generationContext?.olympicFamilySchedule?.[week - 1];
   const olympicFamily =
-    day === 2 ? "clean" : selectOlympicFamily(phaseGoal, day);
+    options.weakness === "olympic" &&
+    OLYMPIC_FAMILIES.has(scheduledOlympicFamily)
+      ? scheduledOlympicFamily
+      : day === 2
+        ? "clean"
+        : selectOlympicFamily(phaseGoal, day);
   const timeDomain = day === 1 ? "short" : "long";
   const variation = generationVariation(generationContext, week, day, 0);
   const requestedWodMinutes = selectTimeDomainDuration(
@@ -3449,6 +3577,33 @@ function buildTwoDaySession(
       : options.barbellDropPolicy === "drop_pads_only"
         ? "Use drop pads for every dropped barbell repetition."
         : null;
+  const strength = twoDayStrengthItems(
+    options,
+    profile,
+    week,
+    day,
+    phase,
+    olympicFamily,
+  );
+  const olympicExposureMovementIds =
+    day === 1
+      ? options.weakness === "olympic"
+        ? [
+            olympicFamily === "snatch"
+              ? "tall-snatch-pulls"
+              : "tall-clean-pulls",
+          ]
+        : []
+      : [
+          olympicFamily === "snatch" ? "hang-snatch" : "hang-clean",
+          ...(options.weakness === "olympic"
+            ? [
+                olympicFamily === "snatch"
+                  ? "tall-snatch-pulls"
+                  : "tall-clean-pulls",
+              ]
+            : []),
+        ];
   const session = {
     id: idFactory(`generated-${options.goal}-two-day-w${week}-d${day}`),
     week,
@@ -3461,10 +3616,8 @@ function buildTwoDaySession(
         ? `${GOAL_LABELS[options.goal]} progression with ${WEAKNESS_LABELS[options.weakness].toLowerCase()} skill work and controlled short conditioning.`
         : `${GOAL_LABELS[options.secondaryGoal || options.goal]} support work, weakness progression, and sustainable engine development.`,
     warmup: generatedWarmup(options.goal, options.weakness, day, olympicFamily),
-    strength: [
-      ...twoDayStrengthItems(options, profile, week, day, phase),
-      ...(dropNote ? [dropNote] : []),
-    ],
+    strength: [...strength, ...(dropNote ? [dropNote] : [])],
+    olympicExposureMovementIds,
     workoutDefinition,
     mobility: generatedMobility(options.weakness),
     duration: options.duration,
@@ -3494,9 +3647,14 @@ function buildTwoDaySession(
   return session;
 }
 
-function twoDayStrengthItems(options, profile, week, day, phase) {
-  const olympicFamily =
-    day === 2 ? "clean" : selectOlympicFamily(options.goal, day);
+function twoDayStrengthItems(
+  options,
+  profile,
+  week,
+  day,
+  phase,
+  olympicFamily,
+) {
   if (day === 1) {
     return [
       `Back squat ${phase.reps} at ${percent(phase.load)} (${kg(profile.maxes.backSquat, phase.load)})`,
@@ -3506,8 +3664,12 @@ function twoDayStrengthItems(options, profile, week, day, phase) {
   }
   const techniqueLoad = Math.min(0.82, Math.max(0.55, phase.oly));
   const pressLoad = week === 4 ? 0.55 : week >= 7 ? 0.75 : 0.65 + week * 0.01;
+  const olympicStrength =
+    olympicFamily === "snatch"
+      ? `Hang snatch 6x2 at ${percent(techniqueLoad)} (${kg(profile.maxes.snatch, techniqueLoad)}), reset each rep`
+      : `Hang clean 6x2 at ${percent(techniqueLoad)} (${kg(profile.maxes.cleanJerk, techniqueLoad)}), reset each rep`;
   return [
-    `Hang clean 6x2 at ${percent(techniqueLoad)} (${kg(profile.maxes.cleanJerk, techniqueLoad)}), reset each rep`,
+    olympicStrength,
     `Push press 4x6 at ${percent(pressLoad)} of strict press (${kg(profile.maxes.strictPress, pressLoad)})`,
     weaknessAccessory(options.weakness, week, olympicFamily),
   ];
@@ -3702,6 +3864,15 @@ function buildGeneratedSession(
     options.goal,
     workoutExpectedDurationSeconds(workoutDefinition) / 60,
   );
+  const strength = generatedStrengthItems(
+    options.goal,
+    options.weakness,
+    day,
+    week,
+    profile,
+    phase,
+    olympicFamily,
+  );
 
   const session = {
     id: idFactory(`generated-${options.goal}-w${week}-d${day}`),
@@ -3709,15 +3880,8 @@ function buildGeneratedSession(
     title: `W${week} D${day}: ${title}`,
     focus: `${GOAL_LABELS[options.goal]} with ${WEAKNESS_LABELS[options.weakness].toLowerCase()} priority. ${phase.note}`,
     warmup: generatedWarmup(options.goal, options.weakness, day, olympicFamily),
-    strength: generatedStrengthItems(
-      options.goal,
-      options.weakness,
-      day,
-      week,
-      profile,
-      phase,
-      olympicFamily,
-    ),
+    strength,
+    olympicExposureMovementIds: olympicExposureMovementIdsForStrength(strength),
     workoutDefinition,
     mobility: generatedMobility(options.weakness),
     duration: options.duration,
@@ -4280,6 +4444,54 @@ function generatedWarmup(goal, weakness, day, olympicFamily = null) {
   ];
 }
 
+function buildOlympicFamilySchedule(
+  generationSeed,
+  weekCount = 8,
+  eligibleFamilies = ["clean", "snatch"],
+) {
+  const families = [...new Set(arrayOrEmpty(eligibleFamilies))].filter(
+    (family) => OLYMPIC_FAMILIES.has(family),
+  );
+  if (!families.length) return [];
+  if (families.length === 1) {
+    return Array.from({ length: weekCount }, () => families[0]);
+  }
+  const firstFamily =
+    families[
+      seededIndex(
+        `${normalizeGenerationSeed(generationSeed)}|olympic-family`,
+        2,
+      )
+    ];
+  const secondFamily = families.find((family) => family !== firstFamily);
+  return Array.from({ length: weekCount }, (_value, index) =>
+    Math.floor(index / 2) % 2 === 0 ? firstFamily : secondFamily,
+  );
+}
+
+function olympicExposureMovementIdsForStrength(items) {
+  const movementIds = [];
+  arrayOrEmpty(items).forEach((item) => {
+    const text = String(item || "");
+    if (/tall clean pulls?/i.test(text)) movementIds.push("tall-clean-pulls");
+    else if (/tall snatch pulls?/i.test(text))
+      movementIds.push("tall-snatch-pulls");
+    else if (/hang clean/i.test(text)) movementIds.push("hang-clean");
+    else if (/hang snatch/i.test(text)) movementIds.push("hang-snatch");
+    else if (/clean and jerk/i.test(text)) movementIds.push("clean-and-jerk");
+    else if (/snatch (?:technique|complex)/i.test(text))
+      movementIds.push("snatch");
+
+    if (/\bsnatch pull/i.test(text) && !/tall snatch pull/i.test(text)) {
+      movementIds.push("snatch-pulls");
+    }
+    if (/\bclean pull/i.test(text) && !/tall clean pull/i.test(text)) {
+      movementIds.push("clean-pulls");
+    }
+  });
+  return [...new Set(movementIds)].filter(isMeaningfulOlympicExposure);
+}
+
 function selectOlympicFamily(goal, day) {
   if (goal === "gymnastics" && day === 3) return "snatch";
   if (["stronger", "balanced", "mastersRxOpen"].includes(goal)) {
@@ -4334,7 +4546,9 @@ function generatedStrengthItems(
     gymnastics: [
       [
         `Back squat 4x4 at ${percent(phase.load)} (${kg(profile.maxes.backSquat, phase.load)})`,
-        gymnastics,
+        weakness === "olympic"
+          ? weaknessAccessory(weakness, week, olympicFamily)
+          : gymnastics,
       ],
       [gymnastics, weaknessAccessory(weakness, week, olympicFamily)],
       [snatch, "Strict pull-up volume 5 submax sets"],
@@ -5707,6 +5921,9 @@ function buildMastersRxOpenSession(
     focus: `Men Masters 35-39 RX prep with ${WEAKNESS_LABELS[options.weakness].toLowerCase()} priority. ${phase.note} Build Open standards without failed skill reps.`,
     warmup: selected.warmup,
     strength: selected.strength,
+    olympicExposureMovementIds: olympicExposureMovementIdsForStrength(
+      selected.strength,
+    ),
     workoutDefinition,
     mobility: selected.mobility,
     addOns: mastersRxAddOns(week, day),
@@ -7219,6 +7436,7 @@ const FORGE_HOUR_API = {
   TRAINING_STIMULI,
   applyReadinessVariant,
   buildGeneratedProgramme,
+  buildOlympicFamilySchedule,
   buildRxReadiness,
   buildSession,
   clamp,
@@ -7259,10 +7477,13 @@ const FORGE_HOUR_API = {
   trimNumber,
   valueFromPath,
   validateWorkoutDefinition,
+  validateGeneratedProgramme,
   validateGeneratedSession,
   validateGeneratedWeek,
   validateWeeklyPlan,
   weeklyTrainingProgress,
+  generatedProgrammeErrors,
+  generatedProgrammeWarnings,
   generatedWeekErrors,
   generatedSessionErrors,
   selectDumbbellSnatchLoad,

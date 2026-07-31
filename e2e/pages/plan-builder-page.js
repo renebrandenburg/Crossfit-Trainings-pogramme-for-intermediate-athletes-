@@ -107,6 +107,7 @@ class PlanBuilderPage {
    *   goal: string,
    *   days?: string,
    *   totalDays?: string,
+   *   secondaryGoal?: string,
    *   weakness?: string,
    *   athleteLevel?: string,
    *   duration?: string,
@@ -118,6 +119,7 @@ class PlanBuilderPage {
     goal,
     days = "4",
     totalDays = "4",
+    secondaryGoal,
     weakness,
     athleteLevel = "intermediate",
     duration = "60",
@@ -125,6 +127,11 @@ class PlanBuilderPage {
     boxDays,
   }) {
     await this.generatorForm.getByLabel("Main goal").selectOption(goal);
+    if (secondaryGoal) {
+      await this.generatorForm
+        .getByLabel("Secondary goal (optional)")
+        .selectOption(secondaryGoal);
+    }
     await this.generatorForm
       .getByLabel("Total weekly training")
       .selectOption(totalDays);

@@ -849,6 +849,21 @@ test("React Testing Library persists exact Olympic prescriptions", async () => {
 
   try {
     fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    fireEvent.change(ui.getByLabelText("Main goal"), {
+      target: { value: "balanced" },
+    });
+    fireEvent.change(ui.getByLabelText("Secondary goal (optional)"), {
+      target: { value: "endurance" },
+    });
+    fireEvent.change(ui.getByLabelText("App-programmed sessions"), {
+      target: { value: "2" },
+    });
+    fireEvent.change(ui.getByLabelText("Max session length"), {
+      target: { value: "60" },
+    });
+    fireEvent.click(
+      ui.getByLabelText("I also follow workouts at a CrossFit box"),
+    );
     fireEvent.change(ui.getByLabelText("Biggest weakness"), {
       target: { value: "olympic" },
     });
@@ -859,7 +874,12 @@ test("React Testing Library persists exact Olympic prescriptions", async () => {
     await waitFor(() => {
       const state = readState();
       const plan = state.plans.find((item) => item.id === state.activePlanId);
-      assert.equal(plan.sessions.length, 32);
+      assert.equal(plan.sessions.length, 16);
+      assert.equal(plan.generatorOptions.primaryGoal, "balanced");
+      assert.equal(plan.generatorOptions.secondaryGoal, "endurance");
+      assert.equal(plan.generatorOptions.programDaysPerWeek, 2);
+      assert.equal(plan.generatorOptions.totalTrainingDays, 4);
+      assert.equal(plan.generatorOptions.sessionDuration, 60);
       const serialized = JSON.stringify(plan.sessions);
       assert.doesNotMatch(
         serialized,
@@ -869,6 +889,15 @@ test("React Testing Library persists exact Olympic prescriptions", async () => {
         plan.sessions.some((session) =>
           session.strength.some((item) => /tall clean pulls/.test(item)),
         ),
+      );
+      assert.ok(
+        plan.sessions.some((session) =>
+          session.strength.some((item) => /tall snatch pulls/.test(item)),
+        ),
+      );
+      assert.deepEqual(
+        new Set(plan.sessions.map((session) => session.olympicFamily)),
+        new Set(["clean", "snatch"]),
       );
       assert.ok(
         plan.sessions.every((session) =>

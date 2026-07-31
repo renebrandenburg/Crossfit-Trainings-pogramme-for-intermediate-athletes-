@@ -55,6 +55,7 @@
     selectActivePlan,
     selectActiveWeekSessions,
     timerDisplaySeconds,
+    validateGeneratedProgramme,
     validateGeneratedWeek,
     validateGeneratedSession,
     weeklyTrainingProgress,
@@ -92,6 +93,7 @@
    * @property {number} duration
    * @property {string=} intensity
    * @property {"clean"|"snatch"=} olympicFamily
+   * @property {string[]=} olympicExposureMovementIds
    * @property {"generated"|"manual"=} origin
    * @property {boolean=} generated
    * @property {boolean=} customized
@@ -1153,6 +1155,7 @@
         generationSeed,
       }));
       normalizedSessions.forEach(validateGeneratedSession);
+      validateGeneratedProgramme(normalizedSessions, normalizedOptions);
       const planId =
         replaceActive && currentActivePlan?.kind === "generated"
           ? currentActivePlan.id

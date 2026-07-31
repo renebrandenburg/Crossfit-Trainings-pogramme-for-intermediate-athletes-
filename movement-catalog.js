@@ -581,6 +581,7 @@
     "clean-pulls",
     "front-rack-hold",
     "front-squats",
+    "hang-power-clean-drill",
   ]);
   const SNATCH_FAMILY_IDS = new Set([
     "snatch",
@@ -596,6 +597,35 @@
     "snatch-pulls",
     "overhead-hold",
   ]);
+  const OLYMPIC_VARIATION_TYPES = Object.freeze({
+    clean: "full_lift",
+    "clean-and-jerk": "complex",
+    "clean-and-jerks": "complex",
+    "power-clean": "power",
+    "power-cleans": "power",
+    "hang-clean": "hang",
+    "hang-power-cleans": "hang",
+    "dumbbell-clean-and-push-presses": "complex",
+    "medicine-ball-cleans": "power",
+    "sandbag-cleans": "power",
+    "tall-clean-pulls": "pull",
+    "clean-pulls": "pull",
+    "front-rack-hold": "position",
+    "front-squats": "position",
+    "hang-power-clean-drill": "technique",
+    snatch: "full_lift",
+    "power-snatch": "power",
+    "power-snatches": "power",
+    "hang-snatch": "hang",
+    "hang-power-snatches": "hang",
+    "dumbbell-snatches": "power",
+    "alternating-dumbbell-snatches": "power",
+    "tall-snatch-pulls": "pull",
+    "snatch-pulls": "pull",
+    "overhead-squats": "position",
+    "single-arm-dumbbell-overhead-squats": "position",
+    "overhead-hold": "position",
+  });
 
   const GENERATED_MOVEMENT_SPECS = [
     ["air-squats", "air squats", "bodyweight"],
@@ -941,6 +971,7 @@
         : SNATCH_FAMILY_IDS.has(id)
           ? "snatch"
           : null,
+      olympicVariationType: OLYMPIC_VARIATION_TYPES[id] || null,
       conditioningEligible,
       equipment: Object.freeze(options.equipment || equipmentForMovement(id)),
       supportedTargetTypes: Object.freeze(
@@ -1023,6 +1054,19 @@
     if (/snatch|overhead squat|overhead hold/.test(movement)) return "snatch";
     if (/clean|front-rack|front rack/.test(movement)) return "clean";
     return null;
+  }
+
+  function getOlympicVariationType(value) {
+    return getMovementDefinition(value)?.olympicVariationType || null;
+  }
+
+  function isMeaningfulOlympicExposure(value) {
+    const definition = getMovementDefinition(value);
+    return Boolean(
+      definition?.olympicFamily &&
+      definition.olympicVariationType &&
+      definition.olympicVariationType !== "position",
+    );
   }
 
   function sameMovement(left, right) {
@@ -1137,8 +1181,10 @@
     getBarbellDropSubstitution,
     getEquipmentSubstitution,
     getOlympicFamily,
+    getOlympicVariationType,
     getOrderedMovementPool,
     isConditioningEligible,
+    isMeaningfulOlympicExposure,
     isRegisteredMovement,
     resolveMovementId,
     sameMovement,
