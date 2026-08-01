@@ -17,9 +17,12 @@ const {
   WOD_SCHEMA_VERSION,
   WORKOUT_DEFINITION_VERSION,
   buildGeneratedProgramme,
+  buildCycleProgressionResult,
+  buildDailyRecommendation,
   buildOlympicFamilySchedule,
   buildRxReadiness,
   buildSession,
+  buildTrainingSchedule,
   claimUniqueGeneratedWod,
   clamp,
   cloneDefaultProfile,
@@ -41,6 +44,7 @@ const {
   regeneratePlanFrequency,
   normalizeGeneratorOptions,
   normalizePrValue,
+  parseBoxWorkout,
   parseTimeToSeconds,
   percent,
   roundToNearest,
@@ -216,6 +220,11 @@ test("timer helpers infer CrossFit workout formats and format results", () => {
     inferTimerFromText("5 sets, rest 1:00 between sets").plannedSeconds,
     300,
   );
+  assert.equal(
+    inferTimerFromText("18 min ascending ladder: thrusters and pull-ups")
+      .plannedSeconds,
+    1080,
+  );
   assert.equal(timerDisplaySeconds("amrap", 900, 900), 0);
   assert.equal(timerDisplaySeconds("amrap", 900, 960), 0);
   assert.equal(timerDisplaySeconds("forTime", 900, 960), 960);
@@ -223,6 +232,139 @@ test("timer helpers infer CrossFit workout formats and format results", () => {
     formatTimerResult({ mode: "amrap", elapsedSeconds: 724, splits: [{}, {}] }),
     "AMRAP 12:04, 2 splits",
   );
+});
+
+test("box WOD parsing recognizes aliases and retains unknown movement text", () => {
+  const parsed = parseBoxWorkout(
+    "AMRAP 15 min\n10 thrusters\n10 C2B pull-ups\n200 m run\n12 mystery crab crawls",
+  );
+
+  assert.deepEqual(
+    new Set(parsed.movementIds),
+    new Set(["pull-ups", "run", "thrusters"]),
+  );
+  assert.ok(parsed.stimuli.includes("vertical_pull"));
+  assert.ok(parsed.stimuli.includes("medium_conditioning"));
+  assert.equal(parsed.durationMinutes, 15);
+  assert.deepEqual(parsed.unmatchedLines, ["12 mystery crab crawls"]);
+  assert.match(parsed.rawText, /mystery crab crawls/);
+});
+
+test("daily recommendations swap conflicts before scaling and reserve rest for unsafe readiness", () => {
+  const squatSession = {
+    id: "squat",
+    title: "Back squat",
+    duration: 60,
+    stimuli: ["squat"],
+  };
+  const engineSession = {
+    id: "engine",
+    title: "Bike intervals",
+    duration: 45,
+    stimuli: ["aerobic", "medium_conditioning"],
+  };
+  const boxWorkout = { rawText: "Heavy front squats", stimuli: ["squat"] };
+
+  const swapped = buildDailyRecommendation({
+    checkin: { energy: 4, soreness: "none", availableMinutes: 60 },
+    boxWorkout,
+    session: squatSession,
+    alternatives: [engineSession],
+  });
+  assert.equal(swapped.action, "swap");
+  assert.equal(swapped.recommendedSessionId, "engine");
+
+  const scaled = buildDailyRecommendation({
+    checkin: { energy: 4, soreness: "none", availableMinutes: 60 },
+    boxWorkout,
+    session: squatSession,
+  });
+  assert.equal(scaled.action, "scale");
+  assert.equal(scaled.modifications.volumeMultiplier, 0.75);
+  assert.equal(scaled.modifications.preserveStrengthSets, true);
+
+  const rested = buildDailyRecommendation({
+    checkin: { energy: 5, soreness: "none", pain: true, availableMinutes: 90 },
+    session: squatSession,
+  });
+  assert.equal(rested.action, "rest");
+  assert.match(rested.reasons[0], /Pain was reported/);
+});
+
+test("calendar scheduling anchors completed sessions and never duplicates skipped work", () => {
+  const sessions = [
+    {
+      id: "cycle-1-day1",
+      logDayId: "day1",
+      week: 1,
+      weekday: "Monday",
+      shortTitle: "Back squat",
+    },
+    {
+      id: "cycle-1-day2",
+      logDayId: "day2",
+      week: 1,
+      weekday: "Tuesday",
+      shortTitle: "Intervals",
+    },
+  ];
+  const schedule = buildTrainingSchedule({
+    sessions,
+    cycleStartDate: "2026-07-27",
+    trainingEvents: [
+      {
+        id: "override-completed",
+        sessionId: "cycle-1-day1",
+        date: "2026-08-04",
+        kind: "app",
+        status: "planned",
+      },
+      {
+        id: "override-skipped",
+        sessionId: "cycle-1-day2",
+        date: "2026-07-30",
+        kind: "app",
+        status: "skipped",
+      },
+    ],
+    logs: [{ dayId: "day1", week: 1, date: "2026-07-28" }],
+  });
+
+  assert.equal(schedule.length, 2);
+  const completed = schedule.find(
+    (event) => event.sessionId === "cycle-1-day1",
+  );
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.date, "2026-07-28");
+  assert.equal(
+    schedule.filter((event) => event.sessionId === "cycle-1-day2").length,
+    1,
+  );
+  assert.equal(
+    schedule.find((event) => event.sessionId === "cycle-1-day2").status,
+    "skipped",
+  );
+});
+
+test("cycle progression increases, holds, or reduces training max recommendations", () => {
+  const profile = cloneDefaultProfile();
+  const logs = (count, rpe) =>
+    Array.from({ length: count }, (_, index) => ({
+      id: `log-${index}`,
+      workoutSource: "app",
+      rpe,
+    }));
+
+  const increased = buildCycleProgressionResult(profile, logs(4, 7.5), 4);
+  const held = buildCycleProgressionResult(profile, logs(3, 8), 4);
+  const reduced = buildCycleProgressionResult(profile, logs(1, 9.5), 4);
+
+  assert.equal(increased.action, "increase");
+  assert.ok(increased.suggestedMaxes.backSquat > profile.maxes.backSquat);
+  assert.equal(held.action, "hold");
+  assert.equal(held.suggestedMaxes.backSquat, profile.maxes.backSquat);
+  assert.equal(reduced.action, "reduce");
+  assert.ok(reduced.suggestedMaxes.backSquat < profile.maxes.backSquat);
 });
 
 test("load helpers round and format percentages for programmed weights", () => {

@@ -1,30 +1,37 @@
 # CrossFit Training Programme
 
-A phone-first CrossFit training programme and PR tracker for intermediate athletes.
+A phone-first, box-aware CrossFit coach and progression tracker for intermediate athletes.
 
 ## What is included
 
 - Configurable two-, three-, or four-day app programming, with intentional two-day progression sessions designed to complement CrossFit box workouts.
 - Eight-week progression cycle with recalculated loads from the athlete's 1RMs.
+- A **Today** coach that combines a ten-second readiness check, pasted box WOD parsing, conflict detection, and an explained Train, Scale, Swap, or Rest decision.
+- A real dated **Calendar** with move, swap, skip, resume, box-workout, and rest-day actions while completed work stays anchored to its log date.
 - Needs-based programme generator for strength, endurance, gymnastics, running and bodyweight capacity, or all-round goals.
 - Dedicated eight-week bar muscle-up programme with level-aware first-rep or consistency progressions, three focused skill exposures per week, and supporting Olympic-lifting and engine sessions.
 - Masters 35-39 RX/Open prep generator with readiness targets, assessment fields, and optional engine or skill add-ons.
 - WOD variation across time domains and formats: AMRAP, intervals, for-time, EMOM, ladder, repeat sets, chipper, and benchmark.
 - Manual training programme builder for adding your own sessions.
 - Movement library for gymnastics and weightlifting skills with cues, progressions, scaling, and video guide links.
-- Separate app and box workout logging, with readiness, difficulty, movement-pattern, duration, RPE, result, notes, and mobility data where applicable.
+- Separate app and box workout logging, with structured time, rounds/reps, load, distance/calorie, split, substitution, strength-set, Rx/scaled, readiness, RPE, notes, and mobility data. Legacy free-form scores remain supported.
 - Frequency-aware dashboard totals that distinguish app progression completion from total weekly training.
 - iPhone Competition Proof recording with a synchronized timer overlay, local video preview, and save/share controls.
-- PR tracker for major lifts, rowing, Murph, and gymnastics benchmarks.
-- RX readiness dashboard for strength, Olympic lifting, engine, gymnastics, Open skills, and recovery focus areas.
+- A combined **Progress** view for PRs, benchmark history, strength, gymnastics, engine, adherence, mobility, readiness/RPE, planned-versus-completed work, and end-of-cycle increase/hold/reduce recommendations.
+- User-created benchmarks plus a compact common CrossFit benchmark catalog.
 - React-powered phone-first UI mounted into a static app shell.
 - Light, dark, and system theme setting saved locally.
 - Optional private Supabase account sync for profiles, programmes, workout logs, and PR records.
-- Local-first storage in the browser with a simple PWA manifest and offline cache.
+- Local-first storage in the browser with JSON backup/restore, workout-log and PR-history CSV exports, a PWA manifest, and an offline cache.
+
+The primary navigation is **Today**, **Calendar**, **Log**, **Progress**, and
+**More**. Programme building, the movement library, Competition Proof, profile,
+theme, data ownership, and account synchronization live under More so the daily
+decision stays first.
 
 ## Competition Proof recording
 
-Open the **Proof** tab, choose a programmed or saved session or enter a custom
+Open **More → Competition proof**, choose a programmed or saved session or enter a custom
 competition workout, then configure the timer mode, duration or time cap,
 interval length, and countdown. Opening the camera requests the rear camera and
 microphone and starts the configured timer and video together. On supported
@@ -70,9 +77,10 @@ staging variables, and destructive-cleanup safeguards.
 
 ## Supabase database sync
 
-Profiles, the canonical saved-programme catalog, the active plan, selected
-week, workout logs, PR attempts, and current PRs sync privately to Supabase
-Postgres after email-link sign-in. Plan, Build, Proof, and Log continue to
+Profiles, the canonical saved-programme catalog, cycle dates, the active plan,
+selected week, training events, readiness checks, workout logs, PR attempts,
+and current PRs sync privately to Supabase Postgres after email-link sign-in.
+Calendar, Build, Proof, and Log continue to
 resolve workouts from the same active-plan record. Theme preferences and
 Competition Proof videos stay on the device and are never uploaded.
 
@@ -132,9 +140,10 @@ account's device bucket and can be retried from the Account panel.
    link. Confirm **Import guest data** only when that device's guest profile,
    programmes, and scores should become the account state.
 
-The migrations add the private `athlete_states` document; structured workout
-source, box-workout metadata, and nullable `timer_result` and
-`competition_proof` JSON metadata without creating video storage. They also add
+The migrations add the private `athlete_states` document plus owner-scoped
+`training_events` and `readiness_checks`; structured workout scores,
+recommendation links, workout source, box-workout metadata, and nullable
+`timer_result` and `competition_proof` JSON metadata without creating video storage. They also add
 document-shape, size, non-empty, finite-value, source, difficulty, duration, and
 training-stimulus constraints plus owner/recency indexes. Generated
 public-schema types are committed at `types/database.types.ts`.

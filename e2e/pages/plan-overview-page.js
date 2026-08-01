@@ -6,7 +6,9 @@ class PlanOverviewPage {
   }
 
   async open() {
-    await this.page.getByRole("button", { name: "Plan", exact: true }).click();
+    await this.page
+      .getByRole("button", { name: "Calendar", exact: true })
+      .click();
   }
 
   heading(name) {

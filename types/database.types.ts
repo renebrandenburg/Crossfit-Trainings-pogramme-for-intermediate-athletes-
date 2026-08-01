@@ -99,6 +99,87 @@ export type Database = {
         }
         Relationships: []
       }
+      readiness_checks: {
+        Row: {
+          available_minutes: number
+          created_at: string
+          date: string
+          energy: number
+          id: string
+          pain: boolean
+          soreness: string
+          user_id: string
+        }
+        Insert: {
+          available_minutes: number
+          created_at?: string
+          date: string
+          energy: number
+          id: string
+          pain?: boolean
+          soreness: string
+          user_id: string
+        }
+        Update: {
+          available_minutes?: number
+          created_at?: string
+          date?: string
+          energy?: number
+          id?: string
+          pain?: boolean
+          soreness?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      training_events: {
+        Row: {
+          created_at: string
+          date: string
+          id: string
+          kind: string
+          movement_ids: string[]
+          raw_box_text: string | null
+          recommendation: Json | null
+          session_id: string | null
+          status: string
+          stimuli: string[]
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          date: string
+          id: string
+          kind: string
+          movement_ids?: string[]
+          raw_box_text?: string | null
+          recommendation?: Json | null
+          session_id?: string | null
+          status?: string
+          stimuli?: string[]
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          date?: string
+          id?: string
+          kind?: string
+          movement_ids?: string[]
+          raw_box_text?: string | null
+          recommendation?: Json | null
+          session_id?: string | null
+          status?: string
+          stimuli?: string[]
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       workout_logs: {
         Row: {
           competition_proof: Json | null
@@ -113,9 +194,14 @@ export type Database = {
           movement_patterns: string[]
           notes: string | null
           readiness: string | null
+          readiness_check_id: string | null
+          recommendation_snapshot: Json | null
           rpe: string | null
+          rx_status: string | null
           strength_result: string | null
+          structured_score: Json | null
           timer_result: Json | null
+          training_event_id: string | null
           user_id: string
           week: number
           wod_score: string | null
@@ -134,9 +220,14 @@ export type Database = {
           movement_patterns?: string[]
           notes?: string | null
           readiness?: string | null
+          readiness_check_id?: string | null
+          recommendation_snapshot?: Json | null
           rpe?: string | null
+          rx_status?: string | null
           strength_result?: string | null
+          structured_score?: Json | null
           timer_result?: Json | null
+          training_event_id?: string | null
           user_id: string
           week: number
           wod_score?: string | null
@@ -155,9 +246,14 @@ export type Database = {
           movement_patterns?: string[]
           notes?: string | null
           readiness?: string | null
+          readiness_check_id?: string | null
+          recommendation_snapshot?: Json | null
           rpe?: string | null
+          rx_status?: string | null
           strength_result?: string | null
+          structured_score?: Json | null
           timer_result?: Json | null
+          training_event_id?: string | null
           user_id?: string
           week?: number
           wod_score?: string | null

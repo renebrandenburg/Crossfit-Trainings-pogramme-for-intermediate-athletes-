@@ -10,7 +10,10 @@ class PlanBuilderPage {
   }
 
   async open() {
-    await this.page.getByRole("button", { name: "Build", exact: true }).click();
+    await this.page.getByRole("button", { name: "More", exact: true }).click();
+    await this.page
+      .getByRole("button", { name: "Build programme", exact: true })
+      .click();
     await this.page
       .getByRole("heading", { name: "Programme builder" })
       .waitFor();

@@ -16,7 +16,15 @@ class AppShell {
   }
 
   async navigate(name) {
-    await this.page.getByRole("button", { name, exact: true }).click();
+    const destination =
+      {
+        Home: "Today",
+        Plan: "Calendar",
+        PRs: "Progress",
+      }[name] || name;
+    await this.page
+      .getByRole("button", { name: destination, exact: true })
+      .click();
   }
 }
 

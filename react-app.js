@@ -23,17 +23,23 @@
     DIVISION_LABELS,
     EQUIPMENT_OPTIONS,
     GOAL_LABELS,
+    MOVEMENT_LIBRARY,
     PLAN_SCHEMA_VERSION,
     PR_METRICS,
     READINESS_LABELS,
     WEEK_META,
     WEAKNESS_LABELS,
     applyReadinessVariant,
+    buildCycleProgressionResult,
+    buildDailyRecommendation,
     buildGeneratedProgramme,
     buildRxReadiness,
     buildSession,
+    buildTrainingSchedule,
     clamp,
     cloneDefaultProfile,
+    coachDateValue,
+    addCoachDays,
     createGenerationSeed,
     createId,
     customPlanSegments,
@@ -48,10 +54,13 @@
     migratePlanState,
     normalizeGeneratorOptions,
     normalizePrValue,
+    parseBoxWorkout,
     positiveNumber,
     regeneratePlanFrequency,
     registerServiceWorker,
     splitLines,
+    startOfCoachWeek,
+    trimNumber,
     selectActivePlan,
     selectActiveWeekSessions,
     timerDisplaySeconds,
@@ -118,6 +127,8 @@
    * @property {any[]} logs
    * @property {Object<string, any>} prs
    * @property {any[]} prAttempts
+   * @property {any[]} trainingEvents
+   * @property {any[]} readinessChecks
    */
 
   /**
@@ -131,6 +142,7 @@
    * @property {Object<string, ScoreData>} scoreDataByOwner
    * @property {string} activeScoreOwner
    * @property {number} selectedWeek
+   * @property {string} cycleStartDate
    * @property {string} themePreference
    * @property {any[]=} logs
    * @property {any[]=} prAttempts
@@ -141,7 +153,7 @@
   function fallbackState() {
     const guestAthleteState = defaultAthleteState();
     return {
-      schemaVersion: 4,
+      schemaVersion: 5,
       planSchemaVersion: PLAN_SCHEMA_VERSION,
       ...guestAthleteState,
       athleteStateByOwner: {
@@ -203,7 +215,13 @@
 
   /** @returns {ScoreData} */
   function emptyScoreData() {
-    return { logs: [], prs: {}, prAttempts: [] };
+    return {
+      logs: [],
+      prs: {},
+      prAttempts: [],
+      trainingEvents: [],
+      readinessChecks: [],
+    };
   }
 
   function defaultAthleteState() {
@@ -212,6 +230,7 @@
       plans: [],
       activePlanId: null,
       selectedWeek: 1,
+      cycleStartDate: startOfCoachWeek(),
       planSchemaVersion: PLAN_SCHEMA_VERSION,
       updatedAt: new Date().toISOString(),
     };
@@ -240,6 +259,9 @@
       activePlanId:
         typeof source.activePlanId === "string" ? source.activePlanId : null,
       selectedWeek: clamp(Number(source.selectedWeek) || 1, 1, 8),
+      cycleStartDate: coachDateValue(
+        source.cycleStartDate || fallback.cycleStartDate,
+      ),
       planSchemaVersion:
         Number(source.planSchemaVersion) || PLAN_SCHEMA_VERSION,
     });
@@ -253,6 +275,7 @@
       plans: normalized.plans,
       activePlanId: normalized.activePlanId,
       selectedWeek: selection.selectedWeek,
+      cycleStartDate: normalized.cycleStartDate,
       planSchemaVersion: PLAN_SCHEMA_VERSION,
       updatedAt:
         typeof source.updatedAt === "string"
@@ -270,6 +293,9 @@
       plans: state.plans,
       activePlanId: state.activePlanId,
       selectedWeek: state.selectedWeek,
+      cycleStartDate: coachDateValue(
+        state.cycleStartDate || startOfCoachWeek(),
+      ),
       planSchemaVersion: PLAN_SCHEMA_VERSION,
       updatedAt,
     };
@@ -281,6 +307,7 @@
       previous.plans !== next.plans ||
       previous.activePlanId !== next.activePlanId ||
       previous.selectedWeek !== next.selectedWeek ||
+      previous.cycleStartDate !== next.cycleStartDate ||
       previous.planSchemaVersion !== next.planSchemaVersion ||
       previous.updatedAt !== next.updatedAt ||
       previous.activeScoreOwner !== next.activeScoreOwner
@@ -295,7 +322,7 @@
     );
     return {
       ...state,
-      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 4),
+      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 5),
       athleteStateByOwner: {
         ...(state.athleteStateByOwner || {}),
         [ownerId]: athleteState,
@@ -344,7 +371,7 @@
     }
     return {
       ...state,
-      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 4),
+      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 5),
       athleteStateByOwner,
     };
   }
@@ -366,6 +393,18 @@
             record && typeof record === "object" && String(record.id || ""),
         )
       : [];
+    const trainingEvents = Array.isArray(source.trainingEvents)
+      ? source.trainingEvents.filter(
+          (record) =>
+            record && typeof record === "object" && String(record.id || ""),
+        )
+      : [];
+    const readinessChecks = Array.isArray(source.readinessChecks)
+      ? source.readinessChecks.filter(
+          (record) =>
+            record && typeof record === "object" && String(record.id || ""),
+        )
+      : [];
     const prs =
       source.prs && typeof source.prs === "object" && !Array.isArray(source.prs)
         ? Object.fromEntries(
@@ -375,7 +414,7 @@
             ),
           )
         : {};
-    return { logs, prs, prAttempts };
+    return { logs, prs, prAttempts, trainingEvents, readinessChecks };
   }
 
   /** @param {AppState|any} state @returns {AppState} */
@@ -396,12 +435,22 @@
       logs: state.logs,
       prs: state.prs,
       prAttempts: state.prAttempts,
+      trainingEvents: state.trainingEvents,
+      readinessChecks: state.readinessChecks,
     });
     const guestScores = normalizeScoreData(scoreDataByOwner[GUEST_SCORE_OWNER]);
     scoreDataByOwner[GUEST_SCORE_OWNER] = {
       logs: mergeById(legacyScores.logs, guestScores.logs),
       prs: mergePrs(legacyScores.prs, guestScores.prs),
       prAttempts: mergeById(legacyScores.prAttempts, guestScores.prAttempts),
+      trainingEvents: mergeById(
+        legacyScores.trainingEvents,
+        guestScores.trainingEvents,
+      ),
+      readinessChecks: mergeById(
+        legacyScores.readinessChecks,
+        guestScores.readinessChecks,
+      ),
     };
 
     const activeScoreOwner =
@@ -414,13 +463,15 @@
 
     const next = {
       ...state,
-      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 3),
+      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 5),
       scoreDataByOwner,
       activeScoreOwner,
     };
     delete next.logs;
     delete next.prs;
     delete next.prAttempts;
+    delete next.trainingEvents;
+    delete next.readinessChecks;
     return next;
   }
 
@@ -631,6 +682,14 @@
         competitionProof: log.competitionProof || null,
       })),
       prAttempts: normalized.prAttempts.map((attempt) => ({ id: attempt.id })),
+      trainingEvents: normalized.trainingEvents.map((event) => ({
+        id: event.id,
+        updatedAt: event.updatedAt || event.createdAt || BASELINE_UPDATED_AT,
+      })),
+      readinessChecks: normalized.readinessChecks.map((checkin) => ({
+        id: checkin.id,
+        createdAt: checkin.createdAt || BASELINE_UPDATED_AT,
+      })),
       prs: Object.fromEntries(
         Object.entries(normalized.prs).map(([metricId, record]) => [
           metricId,
@@ -693,6 +752,14 @@
     return {
       logs: mergeById(localScores.logs, remoteScores.logs),
       prAttempts: mergeById(localScores.prAttempts, remoteScores.prAttempts),
+      trainingEvents: mergeById(
+        localScores.trainingEvents,
+        remoteScores.trainingEvents,
+      ),
+      readinessChecks: mergeById(
+        localScores.readinessChecks,
+        remoteScores.readinessChecks,
+      ),
       prs: mergeBestPrs(localScores.prs, remoteScores.prs, true),
     };
   }
@@ -718,8 +785,8 @@
     }));
     const [pendingTimerResult, setPendingTimerResult] =
       ReactRuntime.useState(null);
-    const [logSelection, setLogSelection] = ReactRuntime.useState(() =>
-      defaultSessionSelection(appState),
+    const [logSelection, setLogSelection] = ReactRuntime.useState(
+      /** @type {any} */ (defaultSessionSelection(appState)),
     );
     const toastTimer = ReactRuntime.useRef(null);
     const authenticatedOwnerRef = ReactRuntime.useRef(null);
@@ -918,9 +985,13 @@
     );
 
     const jumpToLog = ReactRuntime.useCallback(
-      (dayId, weekNumber) => {
+      (dayId, weekNumber, context = {}) => {
         const week = clamp(Number(weekNumber) || appState.selectedWeek, 1, 8);
-        setLogSelection({ dayId });
+        setLogSelection({
+          dayId,
+          workoutSource: context.workoutSource || "app",
+          ...context,
+        });
         updateAppState((current) => ({ ...current, selectedWeek: week }));
         activateView("logView");
       },
@@ -1084,6 +1155,7 @@
       appState.plans,
       appState.profile,
       appState.selectedWeek,
+      appState.cycleStartDate,
       isCurrentAuth,
       remoteStore,
       updateAppState,
@@ -1375,7 +1447,7 @@
       ) {
         setPendingTimerResult(null);
       }
-      activateView("programView");
+      activateView("calendarView");
       notify("Custom plan deleted.");
     }
 
@@ -1417,6 +1489,184 @@
       notify("Custom session deleted.");
     }
 
+    function coachSyncContext() {
+      const localOwnerId = appStateRef.current.activeScoreOwner;
+      const ownerId = remoteUser ? String(remoteUser.id || "") : "";
+      const authEpoch = authEpochRef.current;
+      return {
+        localOwnerId,
+        ownerId,
+        authEpoch,
+        syncRemotely: Boolean(
+          remoteStore &&
+          ownerId &&
+          localOwnerId === ownerId &&
+          isCurrentAuth(ownerId, authEpoch),
+        ),
+      };
+    }
+
+    function handleSaveTrainingEvent(event) {
+      const context = coachSyncContext();
+      updateAppState((current) =>
+        updateScoreData(
+          current,
+          (scores) => ({
+            ...scores,
+            trainingEvents: mergeById(scores.trainingEvents, [event]),
+          }),
+          context.localOwnerId,
+        ),
+      );
+      if (!context.syncRemotely) return Promise.resolve(event);
+      return remoteStore
+        .saveTrainingEvent(event, context.ownerId)
+        .then((saved) => {
+          if (!isCurrentAuth(context.ownerId, context.authEpoch)) return saved;
+          updateAppState((current) =>
+            updateScoreData(
+              current,
+              (scores) => ({
+                ...scores,
+                trainingEvents: mergeById(scores.trainingEvents, [saved]),
+              }),
+              context.localOwnerId,
+            ),
+          );
+          return saved;
+        })
+        .catch((error) => {
+          console.warn("Could not sync training event.", error);
+          if (isCurrentAuth(context.ownerId, context.authEpoch)) {
+            setSyncStatus({
+              state: "error",
+              message:
+                "Calendar change is saved locally and needs a sync retry.",
+            });
+          }
+          return event;
+        });
+    }
+
+    function handleDeleteTrainingEvent(eventId) {
+      const context = coachSyncContext();
+      updateAppState((current) =>
+        updateScoreData(
+          current,
+          (scores) => ({
+            ...scores,
+            trainingEvents: scores.trainingEvents.filter(
+              (event) => event.id !== eventId,
+            ),
+          }),
+          context.localOwnerId,
+        ),
+      );
+      if (context.syncRemotely) {
+        remoteStore
+          .deleteTrainingEvent(eventId, context.ownerId)
+          .catch((error) => {
+            console.warn("Could not delete remote training event.", error);
+            if (isCurrentAuth(context.ownerId, context.authEpoch)) {
+              setSyncStatus({
+                state: "error",
+                message:
+                  "Calendar deletion is local; remote cleanup is pending.",
+              });
+            }
+          });
+      }
+    }
+
+    function handleSaveReadinessCheck(checkin) {
+      const context = coachSyncContext();
+      updateAppState((current) =>
+        updateScoreData(
+          current,
+          (scores) => ({
+            ...scores,
+            readinessChecks: mergeById(scores.readinessChecks, [checkin]),
+          }),
+          context.localOwnerId,
+        ),
+      );
+      if (!context.syncRemotely) return Promise.resolve(checkin);
+      return remoteStore
+        .saveReadinessCheck(checkin, context.ownerId)
+        .then((saved) => {
+          if (!isCurrentAuth(context.ownerId, context.authEpoch)) return saved;
+          updateAppState((current) =>
+            updateScoreData(
+              current,
+              (scores) => ({
+                ...scores,
+                readinessChecks: mergeById(scores.readinessChecks, [saved]),
+              }),
+              context.localOwnerId,
+            ),
+          );
+          return saved;
+        })
+        .catch((error) => {
+          console.warn("Could not sync readiness check.", error);
+          if (isCurrentAuth(context.ownerId, context.authEpoch)) {
+            setSyncStatus({
+              state: "error",
+              message:
+                "Readiness check is saved locally and needs a sync retry.",
+            });
+          }
+          return checkin;
+        });
+    }
+
+    function handleDeleteLog(logId) {
+      const context = coachSyncContext();
+      updateAppState((current) =>
+        updateScoreData(
+          current,
+          (scores) => ({
+            ...scores,
+            logs: scores.logs.filter((log) => log.id !== logId),
+          }),
+          context.localOwnerId,
+        ),
+      );
+      notify("Workout log deleted.");
+      if (!context.syncRemotely) return;
+      remoteStore.deleteLog(logId, context.ownerId).catch((error) => {
+        console.warn("Could not delete remote workout log.", error);
+        if (isCurrentAuth(context.ownerId, context.authEpoch)) {
+          setSyncStatus({
+            state: "error",
+            message: "Log deletion is local; remote cleanup is pending.",
+          });
+        }
+      });
+    }
+
+    function handleRestoreBackup(payload) {
+      if (!payload || typeof payload !== "object") {
+        throw new Error("Backup is invalid.");
+      }
+      const athleteState = normalizeAthleteState(payload.athleteState);
+      const scores = normalizeScoreData(payload.scoreData);
+      const ownerId = appStateRef.current.activeScoreOwner || GUEST_SCORE_OWNER;
+      updateAppState((current) => ({
+        ...current,
+        ...athleteState,
+        athleteStateByOwner: {
+          ...current.athleteStateByOwner,
+          [ownerId]: athleteState,
+        },
+        scoreDataByOwner: {
+          ...current.scoreDataByOwner,
+          [ownerId]: seedScorePrs(scores, athleteState.profile),
+        },
+      }));
+      notify("Backup restored on this device.");
+    }
+
     return h(
       ReactRuntime.Fragment,
       null,
@@ -1447,27 +1697,22 @@
               },
               localSaveError ? "Local save failed" : "Saved locally",
             ),
-            h(ThemeControl, {
-              value: themePreference,
-              onChange: (nextPreference) => {
-                updateAppState((current) => ({
-                  ...current,
-                  themePreference: normalizeThemePreference(nextPreference),
-                }));
-              },
-            }),
           ),
         ),
         h(
           "main",
           null,
-          h(MemoDashboardView, {
+          h(DashboardView, {
             appState: viewState,
             activeView,
             onWeekChange: setSelectedWeek,
             onJumpLog: jumpToLog,
             onTimerFinish: finishTimerToLog,
-            onViewPlan: () => activateView("programView"),
+            onViewPlan: () => activateView("calendarView"),
+            onActivate: activateView,
+            onSaveTrainingEvent: handleSaveTrainingEvent,
+            onSaveReadinessCheck: handleSaveReadinessCheck,
+            onRestoreBackup: handleRestoreBackup,
             onSaveProfile: (profile) => {
               updateAppState((current) =>
                 syncBaselinePrsFromProfile({ ...current, profile }),
@@ -1650,6 +1895,14 @@
                           accountScores.prAttempts,
                           guestScores.prAttempts,
                         ),
+                        trainingEvents: mergeById(
+                          accountScores.trainingEvents,
+                          guestScores.trainingEvents,
+                        ),
+                        readinessChecks: mergeById(
+                          accountScores.readinessChecks,
+                          guestScores.readinessChecks,
+                        ),
                         prs: mergeBestPrs(accountScores.prs, guestScores.prs),
                       };
                     },
@@ -1694,7 +1947,7 @@
                   notify(
                     optionalMetadataPending
                       ? `Imported guest data; ${optionalMetadataPending} optional metadata item${optionalMetadataPending === 1 ? "" : "s"} still need the Supabase schema update.`
-                      : `Imported guest profile, programmes, and ${uploaded.logs + uploaded.prAttempts + uploaded.prs} score records.`,
+                      : `Imported guest profile, programmes, and ${uploaded.logs + uploaded.prAttempts + uploaded.prs + (uploaded.trainingEvents || 0) + (uploaded.readinessChecks || 0)} training records.`,
                   );
                 } catch (error) {
                   console.warn("Could not import guest data.", error);
@@ -1707,14 +1960,30 @@
                 }
               },
             }),
+            themeControl: h(ThemeControl, {
+              value: themePreference,
+              onChange: (nextPreference) => {
+                updateAppState((current) => ({
+                  ...current,
+                  themePreference: normalizeThemePreference(nextPreference),
+                }));
+              },
+            }),
           }),
-          visitedViews.has("programView")
+          visitedViews.has("calendarView")
             ? h(MemoProgramView, {
                 appState: viewState,
                 activeView,
                 onWeekChange: setSelectedWeek,
                 onLogSession: jumpToLog,
                 onTimerFinish: finishTimerToLog,
+                onCycleStartChange: (cycleStartDate) =>
+                  updateAppState((current) => ({
+                    ...current,
+                    cycleStartDate: coachDateValue(cycleStartDate),
+                  })),
+                onSaveTrainingEvent: handleSaveTrainingEvent,
+                onDeleteTrainingEvent: handleDeleteTrainingEvent,
               })
             : null,
           visitedViews.has("builderView")
@@ -1770,12 +2039,27 @@
                       setPendingTimerResult(null);
                     }
                   };
+                  const linkedEvent = log.trainingEventId
+                    ? scoreData.trainingEvents.find(
+                        (event) => event.id === log.trainingEventId,
+                      )
+                    : null;
+                  const completedEvent = linkedEvent
+                    ? {
+                        ...linkedEvent,
+                        status: "completed",
+                        updatedAt: new Date().toISOString(),
+                      }
+                    : null;
                   updateAppState((current) =>
                     updateScoreData(
                       current,
                       (scores) => ({
                         ...scores,
                         logs: mergeById(scores.logs, [log]),
+                        trainingEvents: completedEvent
+                          ? mergeById(scores.trainingEvents, [completedEvent])
+                          : scores.trainingEvents,
                       }),
                       localOwnerId,
                     ),
@@ -1787,6 +2071,16 @@
                       : "Workout log saved.",
                   );
                   if (syncRemotely) {
+                    if (completedEvent) {
+                      remoteStore
+                        .saveTrainingEvent(completedEvent, ownerId)
+                        .catch((error) =>
+                          console.warn(
+                            "Could not mark the linked training event complete.",
+                            error,
+                          ),
+                        );
+                    }
                     remoteStore
                       .saveLog(log, ownerId)
                       .then((syncResult) => {
@@ -1871,9 +2165,10 @@
                   }
                   clearLocalLogs();
                 },
+                onDeleteLog: handleDeleteLog,
               })
             : null,
-          visitedViews.has("prView")
+          visitedViews.has("progressView")
             ? h(MemoPrView, {
                 appState: viewState,
                 activeView,
@@ -2168,6 +2463,166 @@
     );
   }
 
+  function csvCell(value) {
+    const text = String(value ?? "");
+    return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  }
+
+  function downloadTextFile(filename, contents, mimeType) {
+    const blob = new Blob([contents], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  function workoutLogsCsv(logs) {
+    const headers = [
+      "date",
+      "week",
+      "source",
+      "workout",
+      "readiness",
+      "rpe",
+      "rx_status",
+      "score_type",
+      "score_value",
+      "wod_score",
+      "strength_result",
+      "notes",
+    ];
+    return [
+      headers.join(","),
+      ...logs.map((log) =>
+        [
+          log.date,
+          log.week,
+          log.workoutSource || "app",
+          log.dayTitle,
+          log.readiness || "",
+          log.rpe || "",
+          log.rxStatus || "",
+          log.structuredScore?.scoreType || "",
+          log.structuredScore?.primaryValue || "",
+          log.wodScore || "",
+          log.strengthResult || "",
+          log.notes || "",
+        ]
+          .map(csvCell)
+          .join(","),
+      ),
+    ].join("\n");
+  }
+
+  function prHistoryCsv(attempts) {
+    const headers = ["date", "metric", "value", "display", "is_pr", "notes"];
+    return [
+      headers.join(","),
+      ...attempts.map((attempt) =>
+        [
+          attempt.date,
+          attempt.metricName || attempt.metricId,
+          attempt.value,
+          attempt.display,
+          attempt.isPr ? "yes" : "no",
+          attempt.notes || "",
+        ]
+          .map(csvCell)
+          .join(","),
+      ),
+    ].join("\n");
+  }
+
+  function builtInCycleSessions(profile) {
+    return WEEK_META.flatMap((week) =>
+      getProgramDays().map((day) => ({
+        ...buildSession(day.id, week.week, profile),
+        id: `cycle-${week.week}-${day.id}`,
+        logDayId: day.id,
+        week: week.week,
+        preferredDay: day.weekday,
+      })),
+    );
+  }
+
+  function sessionMovementGuides(session) {
+    if (!session) return [];
+    const exerciseIds = new Set();
+    const definition = session.workoutDefinition;
+    if (definition) {
+      [
+        ...(definition.buyIn || []),
+        ...(definition.exercises || []),
+        ...(definition.format?.stations || []).flatMap(
+          (station) => station.exercises || [],
+        ),
+        ...(definition.afterEachRound || []),
+        ...(definition.cashOut || []),
+      ].forEach((exercise) => {
+        if (exercise?.movementId) exerciseIds.add(exercise.movementId);
+      });
+    }
+    const normalizedText = [
+      session.title,
+      session.shortTitle,
+      session.focus,
+      ...(session.segments || []).flatMap((segment) => segment.items || []),
+      ...(session.warmup || []),
+      ...(session.strength || []),
+      ...workoutItemsForSession(session),
+      ...(session.mobility || []),
+    ]
+      .join(" ")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ");
+    return MOVEMENT_LIBRARY.filter((movement) => {
+      if (exerciseIds.has(movement.id)) return true;
+      const tokens = movement.id.split("-").filter((token) => token.length > 2);
+      return (
+        tokens.length && tokens.every((token) => normalizedText.includes(token))
+      );
+    }).slice(0, 3);
+  }
+
+  function MovementGuides({ session }) {
+    const guides = sessionMovementGuides(session);
+    if (!guides.length) return null;
+    return h(
+      "details",
+      { className: "movement-guides" },
+      h("summary", null, `Movement coaching (${guides.length})`),
+      h(
+        "div",
+        { className: "movement-guide-grid" },
+        guides.map((guide) =>
+          h(
+            "article",
+            { className: "movement-guide", key: guide.id },
+            h("h4", null, guide.name),
+            h("p", null, guide.focus),
+            h(
+              "ul",
+              null,
+              guide.cues.slice(0, 3).map((cue) => h("li", { key: cue }, cue)),
+            ),
+            h("p", { className: "muted-copy" }, `Scale: ${guide.scale}`),
+            h(
+              "a",
+              {
+                href: guide.videoUrl,
+                target: "_blank",
+                rel: "noreferrer",
+              },
+              "Watch movement guide",
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   function DashboardView({
     appState,
     activeView,
@@ -2175,29 +2630,35 @@
     onJumpLog,
     onTimerFinish,
     onViewPlan,
+    onActivate,
+    onSaveTrainingEvent,
+    onSaveReadinessCheck,
+    onRestoreBackup,
     onSaveProfile,
     onReset,
     accountSyncPanel,
+    themeControl,
   }) {
+    const activePlan = selectActivePlan(appState);
+    const allSessions = activePlan
+      ? activePlan.sessions.map(customPlanToSession)
+      : builtInCycleSessions(appState.profile);
+    const weekSessions = allSessions.filter(
+      (session) => Number(session.week) === Number(appState.selectedWeek),
+    );
     const logsThisWeek = appState.logs.filter(
       (log) => log.week === appState.selectedWeek,
     );
-    const activePlan = selectActivePlan(appState);
-    const weekSessions = activePlan
-      ? selectActiveWeekSessions(appState, appState.selectedWeek).map(
-          customPlanToSession,
-        )
-      : getProgramDays().map((day) =>
-          buildSession(day.id, appState.selectedWeek, appState.profile),
-        );
-    const mainDayIds = weekSessions.map((session) => session.id);
+    const mainDayIds = weekSessions.map(
+      (session) => session.logDayId || session.id,
+    );
     const completedDayIds = new Set(
       logsThisWeek
         .filter((log) => mainDayIds.includes(log.dayId))
         .map((log) => log.dayId),
     );
     const completedDays = completedDayIds.size;
-    const latestRpe = appState.logs.find((log) => log.rpe);
+    const latestRpe = appState.logs.find((log) => String(log.rpe || "").trim());
     const latestPr = appState.prAttempts.find((attempt) => attempt.isPr);
     const trainingProgress = activePlan
       ? weeklyTrainingProgress(activePlan, appState.logs, appState.selectedWeek)
@@ -2212,11 +2673,258 @@
           Math.round((completedProgression / weekSessionCount) * 100),
         )
       : 0;
-    const nextDay = getNextDayForToday();
-    const session = activePlan
-      ? weekSessions.find((item) => !completedDayIds.has(item.id)) ||
-        weekSessions[0]
-      : weekSessions.find((item) => item.id === nextDay.id) || weekSessions[0];
+    const today = todayInputValue();
+    const schedule = buildTrainingSchedule({
+      sessions: allSessions,
+      trainingEvents: appState.trainingEvents,
+      logs: appState.logs,
+      cycleStartDate: appState.cycleStartDate,
+    });
+    const currentEvent =
+      schedule.find(
+        (event) =>
+          event.kind === "app" &&
+          event.date === today &&
+          event.status !== "completed" &&
+          event.status !== "skipped",
+      ) ||
+      schedule.find(
+        (event) =>
+          event.kind === "app" &&
+          event.date >= today &&
+          event.status === "planned",
+      ) ||
+      schedule.find(
+        (event) => event.kind === "app" && event.status === "planned",
+      );
+    const session =
+      allSessions.find((item) => item.id === currentEvent?.sessionId) ||
+      weekSessions.find(
+        (item) => !completedDayIds.has(item.logDayId || item.id),
+      ) ||
+      weekSessions[0];
+    const todaysBoxEvent = appState.trainingEvents.find(
+      (event) => event.kind === "box" && event.date === today,
+    );
+    const todaysCheckin = appState.readinessChecks.find(
+      (checkin) => checkin.date === today,
+    );
+    const [boxText, setBoxText] = ReactRuntime.useState(
+      todaysBoxEvent?.rawBoxText || "",
+    );
+    const [energy, setEnergy] = ReactRuntime.useState(
+      String(todaysCheckin?.energy || 3),
+    );
+    const [soreness, setSoreness] = ReactRuntime.useState(
+      todaysCheckin?.soreness || "none",
+    );
+    const [pain, setPain] = ReactRuntime.useState(Boolean(todaysCheckin?.pain));
+    const [availableMinutes, setAvailableMinutes] = ReactRuntime.useState(
+      String(todaysCheckin?.availableMinutes || 60),
+    );
+    const [manualStimuli, setManualStimuli] = ReactRuntime.useState(
+      todaysBoxEvent?.stimuli || [],
+    );
+    const [savedRecommendation, setSavedRecommendation] = ReactRuntime.useState(
+      todaysBoxEvent?.recommendation || null,
+    );
+    const parsedBox = parseBoxWorkout(boxText);
+    const boxStimuli = [...new Set([...parsedBox.stimuli, ...manualStimuli])];
+    const boxWorkout = boxText.trim()
+      ? { ...parsedBox, stimuli: boxStimuli }
+      : null;
+    const liveRecommendation = buildDailyRecommendation({
+      checkin: {
+        energy: Number(energy),
+        soreness,
+        pain,
+        availableMinutes: Number(availableMinutes),
+      },
+      boxWorkout,
+      session,
+      alternatives: weekSessions.filter(
+        (candidate) => !completedDayIds.has(candidate.logDayId || candidate.id),
+      ),
+    });
+    const recommendation = savedRecommendation || liveRecommendation;
+    const recommendedSession =
+      allSessions.find(
+        (candidate) => candidate.id === recommendation.recommendedSessionId,
+      ) || session;
+    const primaryRecommendationTitle =
+      recommendation.action === "rest"
+        ? "Recovery day"
+        : boxWorkout
+          ? "Complete the box WOD"
+          : recommendedSession?.shortTitle ||
+            recommendedSession?.title ||
+            "Recovery day";
+
+    if (activeView === "moreView") {
+      const backup = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        athleteState: {
+          profile: appState.profile,
+          plans: appState.plans,
+          activePlanId: appState.activePlanId,
+          selectedWeek: appState.selectedWeek,
+          cycleStartDate: appState.cycleStartDate,
+          planSchemaVersion: appState.planSchemaVersion,
+        },
+        scoreData: {
+          logs: appState.logs,
+          prs: appState.prs,
+          prAttempts: appState.prAttempts,
+          trainingEvents: appState.trainingEvents,
+          readinessChecks: appState.readinessChecks,
+        },
+      };
+      return h(
+        "section",
+        {
+          id: "moreView",
+          className: "view is-active",
+          "aria-labelledby": "moreTitle",
+        },
+        h(
+          "div",
+          { className: "section-heading" },
+          h(
+            "div",
+            null,
+            h("p", { className: "eyebrow" }, "Settings and tools"),
+            h("h2", { id: "moreTitle" }, "More"),
+          ),
+        ),
+        h(
+          "section",
+          { className: "more-grid", "aria-label": "Training tools" },
+          [
+            [
+              "builderView",
+              "Build programme",
+              "Generate or edit your eight-week progression.",
+            ],
+            [
+              "learnView",
+              "Movement library",
+              "Open coaching cues, progressions, and videos.",
+            ],
+            [
+              "proofView",
+              "Competition proof",
+              "Record a workout with a synchronized timer.",
+            ],
+          ].map(([viewId, title, detail]) =>
+            h(
+              "button",
+              {
+                key: viewId,
+                className: "panel more-card",
+                type: "button",
+                "aria-label": title,
+                onClick: () => onActivate(viewId),
+              },
+              h("strong", null, title),
+              h("span", null, detail),
+            ),
+          ),
+        ),
+        h(
+          "section",
+          { className: "panel", "aria-labelledby": "dataOwnershipTitle" },
+          h("p", { className: "eyebrow" }, "Data ownership"),
+          h("h3", { id: "dataOwnershipTitle" }, "Backup and export"),
+          h(
+            "p",
+            { className: "muted-copy" },
+            "Download a complete private backup or a spreadsheet-ready workout history.",
+          ),
+          h(
+            "div",
+            { className: "quick-actions" },
+            h(
+              "button",
+              {
+                className: "primary-button",
+                type: "button",
+                onClick: () =>
+                  downloadTextFile(
+                    `crossfit-backup-${today}.json`,
+                    JSON.stringify(backup, null, 2),
+                    "application/json",
+                  ),
+              },
+              "Download JSON backup",
+            ),
+            h(
+              "button",
+              {
+                className: "ghost-button",
+                type: "button",
+                onClick: () =>
+                  downloadTextFile(
+                    `crossfit-logs-${today}.csv`,
+                    workoutLogsCsv(appState.logs),
+                    "text/csv;charset=utf-8",
+                  ),
+              },
+              "Export logs CSV",
+            ),
+            h(
+              "button",
+              {
+                className: "ghost-button",
+                type: "button",
+                onClick: () =>
+                  downloadTextFile(
+                    `crossfit-pr-history-${today}.csv`,
+                    prHistoryCsv(appState.prAttempts),
+                    "text/csv;charset=utf-8",
+                  ),
+              },
+              "Export PR history CSV",
+            ),
+          ),
+          h(
+            "label",
+            { className: "file-input-label" },
+            "Restore JSON backup",
+            h("input", {
+              type: "file",
+              accept: "application/json,.json",
+              onChange: async (event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                const payload = JSON.parse(await file.text());
+                if (
+                  window.confirm(
+                    "Replace this account's local profile, plans, logs, and PR data with the selected backup?",
+                  )
+                ) {
+                  onRestoreBackup(payload);
+                }
+                event.target.value = "";
+              },
+            }),
+          ),
+        ),
+        h(ProfilePanel, {
+          profile: appState.profile,
+          onSave: onSaveProfile,
+          onReset,
+        }),
+        h(
+          "section",
+          { className: "panel", "aria-labelledby": "appearanceTitle" },
+          h("p", { className: "eyebrow" }, "Display"),
+          h("h3", { id: "appearanceTitle" }, "Appearance"),
+          themeControl,
+        ),
+        accountSyncPanel,
+      );
+    }
 
     return h(
       "section",
@@ -2231,8 +2939,8 @@
         h(
           "div",
           null,
-          h("p", { className: "eyebrow" }, "Today"),
-          h("h2", { id: "dashboardTitle" }, "Training dashboard"),
+          h("p", { className: "eyebrow" }, formatDate(today)),
+          h("h2", { id: "dashboardTitle" }, "Today coach"),
         ),
         h(WeekSelect, {
           id: "dashboardWeek",
@@ -2240,6 +2948,59 @@
           value: appState.selectedWeek,
           onChange: onWeekChange,
         }),
+      ),
+      h(
+        "section",
+        {
+          className: `panel today-hero recommendation-${recommendation.action}`,
+          "aria-live": "polite",
+          "aria-labelledby": "todayHeroTitle",
+        },
+        h(
+          "div",
+          { className: "recommendation-heading" },
+          h("p", { className: "eyebrow" }, "Today's decision"),
+          h(
+            "span",
+            { className: "recommendation-action" },
+            recommendation.action.toUpperCase(),
+          ),
+        ),
+        h("h3", { id: "todayHeroTitle" }, primaryRecommendationTitle),
+        h("p", { className: "today-hero-reason" }, recommendation.reasons[0]),
+        h(
+          "div",
+          { className: "quick-actions" },
+          recommendedSession && recommendation.action !== "rest"
+            ? h(
+                "button",
+                {
+                  className: "primary-button",
+                  type: "button",
+                  onClick: () =>
+                    onJumpLog(
+                      recommendedSession.logDayId || recommendedSession.id,
+                      recommendedSession.week,
+                      {
+                        workoutSource: boxWorkout ? "box" : "app",
+                        boxWorkoutTitle: boxWorkout ? "CrossFit box WOD" : null,
+                        trainingEventId: boxWorkout
+                          ? todaysBoxEvent?.id || null
+                          : currentEvent?.id || null,
+                        readinessCheckId: todaysCheckin?.id || null,
+                        recommendationSnapshot: recommendation,
+                      },
+                    ),
+                },
+                boxWorkout ? "Log box workout" : "Start and log workout",
+              )
+            : null,
+          h(
+            "button",
+            { className: "ghost-button", type: "button", onClick: onViewPlan },
+            "Open calendar",
+          ),
+        ),
       ),
       h(
         "div",
@@ -2277,46 +3038,273 @@
           label: trainingProgress ? "Progression week" : "Latest PR",
         }),
       ),
-      trainingProgress && trainingProgress.expectedBoxDays
-        ? h(
-            "section",
-            { className: "panel", "aria-label": "Weekly training schedule" },
-            h("h3", null, "This week"),
-            h(
-              "p",
-              { className: "muted-copy" },
-              `${trainingProgress.completedProgramWorkouts} of ${trainingProgress.programTarget} app sessions · ${trainingProgress.completedBoxWorkouts} of ${trainingProgress.expectedBoxDays} box workouts`,
-            ),
-            h(
-              "ul",
-              null,
-              logsThisWeek
-                .filter((log) => log.workoutSource === "box")
-                .map((log) =>
-                  h(
-                    "li",
-                    { key: log.id },
-                    `✓ ${formatDate(log.date)} — ${log.dayTitle}`,
-                  ),
-                ),
-              Array.from(
-                {
-                  length: Math.max(
-                    0,
-                    trainingProgress.expectedBoxDays -
-                      trainingProgress.completedBoxWorkouts,
-                  ),
+      h(
+        "form",
+        {
+          className: "panel today-checkin",
+          onSubmit: (event) => {
+            event.preventDefault();
+            const createdAt = new Date().toISOString();
+            const checkin = {
+              id: todaysCheckin?.id || createId(),
+              date: today,
+              energy: Number(energy),
+              soreness,
+              pain,
+              availableMinutes: Number(availableMinutes),
+              createdAt: todaysCheckin?.createdAt || createdAt,
+            };
+            onSaveReadinessCheck(checkin);
+            let appliedRecommendation = liveRecommendation;
+            if (
+              boxWorkout &&
+              currentEvent?.kind === "app" &&
+              currentEvent.status === "planned" &&
+              currentEvent.date === today
+            ) {
+              const latestPlannedDate = schedule
+                .filter(
+                  (item) =>
+                    item.kind === "app" &&
+                    item.status === "planned" &&
+                    item.sessionId !== currentEvent.sessionId,
+                )
+                .map((item) => item.date)
+                .sort()
+                .at(-1);
+              const rescheduledTo = addCoachDays(latestPlannedDate || today, 1);
+              appliedRecommendation = {
+                ...liveRecommendation,
+                reasons: [
+                  ...liveRecommendation.reasons,
+                  `The conflicting key session moves to ${rescheduledTo}; it is not deleted.`,
+                ],
+                modifications: {
+                  ...liveRecommendation.modifications,
+                  movedSessionId: currentEvent.sessionId,
+                  rescheduledFrom: currentEvent.date,
+                  rescheduledTo,
                 },
-                (_value, index) =>
-                  h("li", { key: `box-placeholder-${index}` }, "○ Box workout"),
+              };
+              onSaveTrainingEvent({
+                id: currentEvent.generated ? createId() : currentEvent.id,
+                date: rescheduledTo,
+                kind: "app",
+                status: "planned",
+                sessionId: currentEvent.sessionId,
+                title: currentEvent.title,
+                rawBoxText: "",
+                movementIds: [],
+                stimuli: currentEvent.stimuli || [],
+                recommendation: appliedRecommendation,
+                createdAt: currentEvent.createdAt || createdAt,
+                updatedAt: createdAt,
+              });
+            }
+            if (boxWorkout) {
+              onSaveTrainingEvent({
+                id: todaysBoxEvent?.id || createId(),
+                date: today,
+                kind: "box",
+                status: "planned",
+                sessionId: null,
+                title: "CrossFit box WOD",
+                rawBoxText: boxWorkout.rawText,
+                movementIds: boxWorkout.movementIds,
+                stimuli: boxWorkout.stimuli,
+                recommendation: appliedRecommendation,
+                createdAt: todaysBoxEvent?.createdAt || createdAt,
+                updatedAt: createdAt,
+              });
+            }
+            setSavedRecommendation(appliedRecommendation);
+          },
+        },
+        h(
+          "div",
+          { className: "panel-title" },
+          h(
+            "div",
+            null,
+            h("p", { className: "eyebrow" }, "Ten-second check-in"),
+            h("h3", null, "How ready are you?"),
+          ),
+          todaysCheckin
+            ? h("span", { className: "metric-pill" }, "Saved today")
+            : null,
+        ),
+        h(
+          "div",
+          { className: "today-checkin-grid" },
+          h(
+            "label",
+            null,
+            "Energy",
+            h(
+              "select",
+              {
+                value: energy,
+                onChange: (event) => setEnergy(event.target.value),
+              },
+              [1, 2, 3, 4, 5].map((value) =>
+                h("option", { key: value, value: String(value) }, `${value}/5`),
               ),
             ),
-          )
-        : null,
+          ),
+          h(
+            "label",
+            null,
+            "Soreness",
+            h(
+              "select",
+              {
+                value: soreness,
+                onChange: (event) => setSoreness(event.target.value),
+              },
+              h("option", { value: "none" }, "None"),
+              h("option", { value: "manageable" }, "Manageable"),
+              h("option", { value: "high" }, "High"),
+            ),
+          ),
+          h(
+            "label",
+            null,
+            "Time available",
+            h(
+              "select",
+              {
+                value: availableMinutes,
+                onChange: (event) => setAvailableMinutes(event.target.value),
+              },
+              [30, 45, 60, 75, 90].map((value) =>
+                h(
+                  "option",
+                  { key: value, value: String(value) },
+                  `${value} min`,
+                ),
+              ),
+            ),
+          ),
+          h(
+            "label",
+            { className: "check-row pain-check" },
+            h("input", {
+              type: "checkbox",
+              checked: pain,
+              onChange: (event) => setPain(event.target.checked),
+            }),
+            "Pain today",
+          ),
+        ),
+        h(
+          "label",
+          null,
+          "Paste today's box WOD (optional)",
+          h("textarea", {
+            rows: "4",
+            value: boxText,
+            placeholder: "AMRAP 15: 10 thrusters, 10 chest-to-bar, 200 m run",
+            onChange: (event) => {
+              setBoxText(event.target.value);
+              setSavedRecommendation(null);
+            },
+          }),
+        ),
+        boxText.trim()
+          ? h(
+              "div",
+              { className: "box-wod-review" },
+              h(
+                "p",
+                { className: "stat-detail" },
+                parsedBox.movements.length
+                  ? `Detected: ${parsedBox.movements.map((movement) => movement.name).join(", ")}.`
+                  : "No catalog movements detected yet; confirm the stimulus below.",
+              ),
+              parsedBox.unmatchedLines.length
+                ? h(
+                    "p",
+                    { className: "warning-copy" },
+                    `Review unmatched text: ${parsedBox.unmatchedLines.slice(0, 2).join(" · ")}`,
+                  )
+                : null,
+              h(
+                "fieldset",
+                { className: "stimulus-picker" },
+                h("legend", null, "Confirm extra stimulus"),
+                [
+                  ["squat", "Squat"],
+                  ["hinge", "Hinge"],
+                  ["olympic_lifting", "Olympic lifting"],
+                  ["vertical_pull", "Pulling"],
+                  ["gymnastics", "Gymnastics"],
+                  ["aerobic", "Aerobic"],
+                  ["long_conditioning", "Long conditioning"],
+                ].map(([value, label]) =>
+                  h(
+                    "label",
+                    { key: value, className: "check-row" },
+                    h("input", {
+                      type: "checkbox",
+                      checked:
+                        parsedBox.stimuli.includes(value) ||
+                        manualStimuli.includes(value),
+                      onChange: (event) =>
+                        setManualStimuli((current) =>
+                          event.target.checked
+                            ? [...new Set([...current, value])]
+                            : current.filter((item) => item !== value),
+                        ),
+                    }),
+                    label,
+                  ),
+                ),
+              ),
+            )
+          : null,
+        h(
+          "button",
+          { className: "primary-button", type: "submit" },
+          "Save check-in and recommendation",
+        ),
+      ),
+      h(
+        "section",
+        {
+          className: `panel recommendation-card recommendation-${recommendation.action}`,
+          "aria-live": "polite",
+          "aria-labelledby": "todayRecommendationTitle",
+        },
+        h(
+          "div",
+          { className: "recommendation-heading" },
+          h("p", { className: "eyebrow" }, "Today's recommendation"),
+          h(
+            "span",
+            { className: "recommendation-action" },
+            recommendation.action.toUpperCase(),
+          ),
+        ),
+        h("h3", { id: "todayRecommendationTitle" }, primaryRecommendationTitle),
+        h(
+          "ul",
+          null,
+          recommendation.reasons.map((reason) =>
+            h("li", { key: reason }, reason),
+          ),
+        ),
+        recommendation.action === "scale"
+          ? h(
+              "p",
+              { className: "warning-copy" },
+              `Use about ${Math.round(recommendation.modifications.volumeMultiplier * 100)}% of accessory and conditioning volume. Preserve technically sound strength sets.`,
+            )
+          : null,
+      ),
       h(
         "div",
         { id: "nextSession" },
-        session
+        recommendedSession && recommendation.action !== "rest"
           ? h(
               "section",
               { className: "panel" },
@@ -2326,16 +3314,25 @@
                 h(
                   "div",
                   null,
-                  h("p", { className: "eyebrow" }, "Next up"),
-                  h("h3", null, `${session.weekday} - ${session.shortTitle}`),
+                  h(
+                    "p",
+                    { className: "eyebrow" },
+                    boxWorkout ? "Protected progression" : "Priority session",
+                  ),
+                  h(
+                    "h3",
+                    null,
+                    `${recommendedSession.weekday || `Week ${recommendedSession.week}`} - ${recommendedSession.shortTitle}`,
+                  ),
                 ),
                 h(
                   "span",
                   { className: "metric-pill" },
-                  `${session.duration || 60} min`,
+                  `${recommendedSession.duration || 60} min`,
                 ),
               ),
-              h("p", { className: "muted-copy" }, session.focus),
+              h("p", { className: "muted-copy" }, recommendedSession.focus),
+              h(MovementGuides, { session: recommendedSession }),
               h(
                 "div",
                 {
@@ -2347,15 +3344,28 @@
               h(
                 "div",
                 { className: "quick-actions" },
-                h(
-                  "button",
-                  {
-                    className: "primary-button",
-                    type: "button",
-                    onClick: () => onJumpLog(session.id, appState.selectedWeek),
-                  },
-                  "Log this",
-                ),
+                boxWorkout
+                  ? null
+                  : h(
+                      "button",
+                      {
+                        className: "primary-button",
+                        type: "button",
+                        onClick: () =>
+                          onJumpLog(
+                            recommendedSession.logDayId ||
+                              recommendedSession.id,
+                            recommendedSession.week,
+                            {
+                              workoutSource: "app",
+                              trainingEventId: currentEvent?.id || null,
+                              readinessCheckId: todaysCheckin?.id || null,
+                              recommendationSnapshot: recommendation,
+                            },
+                          ),
+                      },
+                      "Log workout",
+                    ),
                 h(
                   "button",
                   {
@@ -2366,24 +3376,19 @@
                   "View plan",
                 ),
               ),
-              h(WorkoutTimer, {
-                session,
-                onFinish: onTimerFinish,
-              }),
+              boxWorkout
+                ? null
+                : h(WorkoutTimer, {
+                    session: recommendedSession,
+                    onFinish: onTimerFinish,
+                  }),
             )
           : h(
               "div",
               { className: "empty-state" },
-              `No sessions are scheduled for week ${appState.selectedWeek}.`,
+              "No progression session is scheduled. Use the calendar to move the next key session.",
             ),
       ),
-      h(ProfilePanel, {
-        profile: appState.profile,
-        onSave: onSaveProfile,
-        onReset,
-      }),
-      h(RxReadinessPanel, { profile: appState.profile, logs: appState.logs }),
-      accountSyncPanel,
     );
   }
 
@@ -2746,7 +3751,20 @@
     );
   }
 
-  function NumberInput({ id, name, label, value, min = "1", onChange }) {
+  function NumberInput({
+    id = null,
+    name = null,
+    label,
+    value,
+    min = "1",
+    onChange = null,
+  }) {
+    const valueProps = onChange
+      ? {
+          value,
+          onChange: (event) => onChange(event.target.value),
+        }
+      : { defaultValue: value };
     return h(
       "label",
       null,
@@ -2758,8 +3776,7 @@
         min,
         step: "0.5",
         inputMode: "decimal",
-        value,
-        onChange: (event) => onChange(event.target.value),
+        ...valueProps,
       }),
     );
   }
@@ -3010,25 +4027,90 @@
     onWeekChange,
     onLogSession,
     onTimerFinish,
+    onCycleStartChange,
+    onSaveTrainingEvent,
+    onDeleteTrainingEvent,
   }) {
     const week = WEEK_META.find((item) => item.week === appState.selectedWeek);
     const activePlan = selectActivePlan(appState);
-    const activeWeekSessions = selectActiveWeekSessions(
-      appState,
-      appState.selectedWeek,
-    );
     const programmeSessions = activePlan
-      ? activeWeekSessions.map(customPlanToSession)
-      : getProgramDays().map((day) =>
-          buildSession(day.id, appState.selectedWeek, appState.profile),
-        );
+      ? activePlan.sessions.map(customPlanToSession)
+      : builtInCycleSessions(appState.profile);
+    const schedule = buildTrainingSchedule({
+      sessions: programmeSessions,
+      trainingEvents: appState.trainingEvents,
+      logs: appState.logs,
+      cycleStartDate: appState.cycleStartDate,
+    });
+    const selectedSessions = programmeSessions.filter(
+      (session) => Number(session.week) === Number(appState.selectedWeek),
+    );
+    const selectedSessionIds = new Set(
+      selectedSessions.map((session) => session.id),
+    );
+    const weekStart = coachDateValue(
+      new Date(`${appState.cycleStartDate}T12:00:00`).setDate(
+        new Date(`${appState.cycleStartDate}T12:00:00`).getDate() +
+          (appState.selectedWeek - 1) * 7,
+      ),
+    );
+    const weekEndDate = new Date(`${weekStart}T12:00:00`);
+    weekEndDate.setDate(weekEndDate.getDate() + 6);
+    const weekEnd = coachDateValue(weekEndDate);
+    const weekEvents = schedule.filter(
+      (event) =>
+        selectedSessionIds.has(event.sessionId) ||
+        (event.date >= weekStart && event.date <= weekEnd),
+    );
+    const toStoredEvent = (event, overrides = {}) => ({
+      ...event,
+      ...overrides,
+      id: event.generated ? createId() : event.id,
+      generated: undefined,
+      createdAt: event.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    function moveEvent(event, date) {
+      if (event.status === "completed") return;
+      onSaveTrainingEvent(
+        toStoredEvent(event, { date: coachDateValue(date), status: "planned" }),
+      );
+    }
+
+    function swapEvent(event) {
+      if (event.status === "completed") return;
+      const candidate = weekEvents.find(
+        (item) =>
+          item.kind === "app" &&
+          item.id !== event.id &&
+          item.status !== "completed" &&
+          item.date !== event.date,
+      );
+      if (!candidate) return;
+      const firstDate = event.date;
+      moveEvent(event, candidate.date);
+      moveEvent(candidate, firstDate);
+    }
+
+    function resumeSkipped(event) {
+      const today = todayInputValue();
+      const plannedDates = schedule
+        .filter((item) => item.status === "planned" && item.date >= today)
+        .map((item) => item.date)
+        .sort();
+      const nextDate = plannedDates.at(-1) || today;
+      const target = new Date(`${nextDate}T12:00:00`);
+      target.setDate(target.getDate() + 1);
+      moveEvent(event, coachDateValue(target));
+    }
 
     return h(
       "section",
       {
-        id: "programView",
-        className: viewClass("programView", activeView),
-        "aria-labelledby": "programTitle",
+        id: "calendarView",
+        className: viewClass("calendarView", activeView),
+        "aria-labelledby": "calendarTitle",
       },
       h(
         "div",
@@ -3039,13 +4121,9 @@
           h(
             "p",
             { className: "eyebrow" },
-            activePlan ? "Active saved programme" : "Built-in eight-week cycle",
+            activePlan ? "Active saved programme" : "Dated eight-week cycle",
           ),
-          h(
-            "h2",
-            { id: "programTitle" },
-            activePlan ? activePlan.title : "Programme",
-          ),
+          h("h2", { id: "calendarTitle" }, "Calendar"),
         ),
         h(WeekSelect, {
           id: "programWeek",
@@ -3055,46 +4133,293 @@
         }),
       ),
       h(
-        "div",
-        { className: "week-note", id: "weekNote" },
+        "section",
+        { className: "panel calendar-controls", "aria-label": "Cycle dates" },
+        h(
+          "label",
+          null,
+          "Cycle starts",
+          h("input", {
+            id: "cycleStartDate",
+            type: "date",
+            value: appState.cycleStartDate,
+            onChange: (event) => onCycleStartChange(event.target.value),
+          }),
+        ),
         activePlan
           ? h(
-              "p",
+              "div",
               null,
-              h("strong", null, `Week ${appState.selectedWeek}.`),
-              ` ${activeWeekSessions.length} session${activeWeekSessions.length === 1 ? "" : "s"} from ${activePlan.title}.`,
+              h("h3", null, activePlan.title),
+              h(
+                "p",
+                { className: "muted-copy" },
+                `${selectedSessions.length} progression session${selectedSessions.length === 1 ? "" : "s"} this week.`,
+              ),
             )
-          : h("p", null, h("strong", null, `${week.title}.`), ` ${week.note}`),
+          : h("p", { className: "muted-copy" }, `${week.title}. ${week.note}`),
       ),
       h(
         "div",
-        { className: "day-list", id: "programList" },
-        programmeSessions.length
-          ? programmeSessions.map((session) => {
-              const storedSession = activeWeekSessions.find(
-                (item) => item.id === session.id,
+        { className: "calendar-list", id: "calendarList" },
+        weekEvents.length
+          ? weekEvents.map((event) => {
+              const session = programmeSessions.find(
+                (item) => item.id === event.sessionId,
               );
-              const logged = appState.logs.some(
-                (log) =>
-                  log.week === appState.selectedWeek &&
-                  log.dayId === session.id,
-              );
-              return h(SessionCard, {
-                key: session.id,
-                session,
-                tag: logged ? "Logged" : `${session.duration || 60} min`,
-                meta: storedSession
-                  ? customPlanMeta(storedSession, logged)
+              const locked = event.status === "completed";
+              return h(
+                "article",
+                {
+                  className: `panel calendar-event event-${event.kind} status-${event.status}`,
+                  key: event.id,
+                },
+                h(
+                  "div",
+                  { className: "calendar-event-heading" },
+                  h(
+                    "div",
+                    null,
+                    h(
+                      "p",
+                      { className: "eyebrow" },
+                      `${formatDate(event.date)} · ${event.kind.toUpperCase()}`,
+                    ),
+                    h("h3", null, event.title || "Training event"),
+                  ),
+                  h("span", { className: "metric-pill" }, event.status),
+                ),
+                event.kind === "app" && session
+                  ? h("p", { className: "muted-copy" }, session.focus)
+                  : event.rawBoxText
+                    ? h("p", { className: "muted-copy" }, event.rawBoxText)
+                    : null,
+                session
+                  ? h(
+                      "details",
+                      { className: "calendar-session-details" },
+                      h("summary", null, "Workout details and coaching intent"),
+                      h(SessionCard, {
+                        session,
+                        tag: locked
+                          ? "Logged"
+                          : `${session.duration || 60} min`,
+                        meta: null,
+                        onLog: () =>
+                          onLogSession(
+                            session.logDayId || session.id,
+                            session.week,
+                            {
+                              workoutSource: "app",
+                              logDate: event.date,
+                              trainingEventId: event.generated
+                                ? null
+                                : event.id,
+                            },
+                          ),
+                        onTimerFinish,
+                      }),
+                    )
                   : null,
-                onLog: () => onLogSession(session.id, appState.selectedWeek),
-                onTimerFinish,
-              });
+                !locked
+                  ? h(
+                      "div",
+                      { className: "calendar-event-actions" },
+                      h(
+                        "label",
+                        null,
+                        "Move to",
+                        h("input", {
+                          type: "date",
+                          value: event.date,
+                          onChange: (input) =>
+                            moveEvent(event, input.target.value),
+                        }),
+                      ),
+                      event.kind === "app"
+                        ? h(
+                            "button",
+                            {
+                              className: "ghost-button",
+                              type: "button",
+                              onClick: () => swapEvent(event),
+                            },
+                            "Swap session",
+                          )
+                        : null,
+                      event.status === "skipped"
+                        ? h(
+                            "button",
+                            {
+                              className: "primary-button",
+                              type: "button",
+                              onClick: () => resumeSkipped(event),
+                            },
+                            "Resume session",
+                          )
+                        : event.kind === "app"
+                          ? h(
+                              "button",
+                              {
+                                className: "ghost-button",
+                                type: "button",
+                                onClick: () =>
+                                  onSaveTrainingEvent(
+                                    toStoredEvent(event, { status: "skipped" }),
+                                  ),
+                              },
+                              "Mark skipped",
+                            )
+                          : h(
+                              "button",
+                              {
+                                className: "ghost-button danger-button",
+                                type: "button",
+                                onClick: () => {
+                                  if (
+                                    window.confirm(
+                                      "Delete this calendar event?",
+                                    )
+                                  ) {
+                                    onDeleteTrainingEvent(event.id);
+                                  }
+                                },
+                              },
+                              "Delete",
+                            ),
+                      event.kind === "app" && session
+                        ? h(
+                            "button",
+                            {
+                              className: "primary-button",
+                              type: "button",
+                              onClick: () =>
+                                onLogSession(
+                                  session.logDayId || session.id,
+                                  session.week,
+                                  {
+                                    workoutSource: "app",
+                                    logDate: event.date,
+                                    trainingEventId: event.generated
+                                      ? null
+                                      : event.id,
+                                  },
+                                ),
+                            },
+                            "Mark complete / log",
+                          )
+                        : event.kind === "box"
+                          ? h(
+                              "button",
+                              {
+                                className: "primary-button",
+                                type: "button",
+                                onClick: () =>
+                                  onLogSession("box", appState.selectedWeek, {
+                                    workoutSource: "box",
+                                    boxWorkoutTitle: event.title,
+                                    logDate: event.date,
+                                    trainingEventId: event.id,
+                                  }),
+                              },
+                              "Mark complete / log",
+                            )
+                          : h(
+                              "button",
+                              {
+                                className: "primary-button",
+                                type: "button",
+                                onClick: () =>
+                                  onSaveTrainingEvent(
+                                    toStoredEvent(event, {
+                                      status: "completed",
+                                    }),
+                                  ),
+                              },
+                              "Mark complete",
+                            ),
+                    )
+                  : h(
+                      "p",
+                      { className: "completed-lock" },
+                      "Completed sessions are locked to protect training history.",
+                    ),
+                session && event.status !== "skipped"
+                  ? h(WorkoutTimer, { session, onFinish: onTimerFinish })
+                  : null,
+              );
             })
           : h(
               "div",
               { className: "empty-state" },
-              `No sessions are scheduled for week ${appState.selectedWeek}.`,
+              `No events are scheduled for week ${appState.selectedWeek}.`,
             ),
+      ),
+      h(
+        "form",
+        {
+          className: "panel calendar-add-form",
+          onSubmit: (event) => {
+            event.preventDefault();
+            const data = new FormData(event.currentTarget);
+            const kind = String(data.get("eventKind"));
+            const rawBoxText = String(data.get("eventText") || "").trim();
+            const parsed = kind === "box" ? parseBoxWorkout(rawBoxText) : null;
+            const createdAt = new Date().toISOString();
+            onSaveTrainingEvent({
+              id: createId(),
+              date: String(data.get("eventDate")),
+              kind,
+              status: "planned",
+              sessionId: null,
+              title: kind === "box" ? "CrossFit box WOD" : "Rest day",
+              rawBoxText: parsed?.rawText || "",
+              movementIds: parsed?.movementIds || [],
+              stimuli: parsed?.stimuli || [],
+              createdAt,
+              updatedAt: createdAt,
+            });
+            event.currentTarget.reset();
+          },
+        },
+        h("h3", null, "Add box workout or rest day"),
+        h(
+          "div",
+          { className: "form-row" },
+          h(
+            "label",
+            null,
+            "Event",
+            h(
+              "select",
+              { name: "eventKind", defaultValue: "box" },
+              h("option", { value: "box" }, "Box workout"),
+              h("option", { value: "rest" }, "Rest day"),
+            ),
+          ),
+          h(
+            "label",
+            null,
+            "Date",
+            h("input", {
+              name: "eventDate",
+              type: "date",
+              defaultValue: todayInputValue(),
+              required: true,
+            }),
+          ),
+        ),
+        h(
+          "label",
+          null,
+          "Box WOD (optional for rest)",
+          h("textarea", { name: "eventText", rows: "3" }),
+        ),
+        h(
+          "button",
+          { className: "primary-button", type: "submit" },
+          "Add to calendar",
+        ),
       ),
     );
   }
@@ -3115,6 +4440,7 @@
       duration: plan.duration,
       twoDayStrategy: Boolean(plan.twoDayStrategy),
       readinessVariant: plan.readinessVariant,
+      stimuli: plan.stimuli || [],
     };
   }
 
@@ -3199,6 +4525,7 @@
             )
           : null,
         h(SegmentList, { segments: readinessSession.segments }),
+        h(MovementGuides, { session: readinessSession }),
         readinessSession.addOns && readinessSession.addOns.length
           ? h(AddOnList, { addOns: readinessSession.addOns })
           : null,
@@ -5904,9 +7231,11 @@
     onNotify,
     onSaveLog,
     onClearLogs,
+    onDeleteLog,
   }) {
     const [formVersion, setFormVersion] = ReactRuntime.useState(0);
     const [workoutSource, setWorkoutSource] = ReactRuntime.useState("app");
+    const [editingLog, setEditingLog] = ReactRuntime.useState(null);
     const selectedWeek = appState.selectedWeek;
     const activePlan = selectActivePlan(appState);
     const selectedDayId =
@@ -5919,6 +7248,11 @@
         : null;
     const timerSummary = matchingTimer ? formatTimerResult(matchingTimer) : "";
     const activeSessions = selectActiveWeekSessions(appState, selectedWeek);
+
+    ReactRuntime.useEffect(() => {
+      if (!logSelection.workoutSource) return;
+      setWorkoutSource(logSelection.workoutSource === "box" ? "box" : "app");
+    }, [logSelection.workoutSource, logSelection.trainingEventId]);
 
     return h(
       "section",
@@ -5940,7 +7274,7 @@
       h(
         "form",
         {
-          key: `${formVersion}-${matchingTimer ? matchingTimer.completedAt : "manual"}`,
+          key: `${formVersion}-${editingLog?.id || "new"}-${matchingTimer ? matchingTimer.completedAt : "manual"}`,
           id: "logForm",
           className: "panel log-form",
           onSubmit: async (event) => {
@@ -5976,7 +7310,7 @@
               ? stripPendingTimerContext(matchingTimer)
               : null;
             const log = {
-              id: createId(),
+              id: editingLog?.id || createId(),
               date: String(data.get("logDate")),
               week: day.week || Number(data.get("logWeek")),
               dayId: day.id,
@@ -5999,15 +7333,38 @@
               rpe: String(data.get("rpe") || "").trim(),
               strengthResult: String(data.get("strengthResult") || "").trim(),
               wodScore: String(data.get("wodScore") || "").trim(),
+              structuredScore: {
+                scoreType: String(data.get("scoreType") || "custom"),
+                primaryValue: Number(data.get("primaryValue")) || null,
+                secondaryValue: Number(data.get("secondaryValue")) || null,
+                unit: String(data.get("scoreUnit") || "").trim() || null,
+                splits: String(data.get("intervalSplits") || "")
+                  .split(/\r?\n|,/)
+                  .map((value) => value.trim())
+                  .filter(Boolean),
+                substitutions: String(data.get("movementSubstitutions") || "")
+                  .split(/\r?\n|,/)
+                  .map((value) => value.trim())
+                  .filter(Boolean),
+                strengthSets: Number(data.get("strengthSets")) || null,
+                strengthReps: Number(data.get("strengthReps")) || null,
+                strengthLoad: Number(data.get("strengthLoad")) || null,
+              },
+              rxStatus: String(data.get("rxStatus") || "not_applicable"),
+              trainingEventId: logSelection.trainingEventId || null,
+              readinessCheckId: logSelection.readinessCheckId || null,
+              recommendationSnapshot:
+                logSelection.recommendationSnapshot || null,
               timerResult,
               competitionProof: matchingTimer?.competitionProof || null,
               notes: String(data.get("logNotes") || "").trim(),
               mobilityDone: Boolean(data.get("mobilityDone")),
-              createdAt: new Date().toISOString(),
+              createdAt: editingLog?.createdAt || new Date().toISOString(),
             };
 
             try {
               await onSaveLog(log);
+              setEditingLog(null);
               setFormVersion((version) => version + 1);
             } catch {
               onNotify(
@@ -6044,7 +7401,8 @@
               name: "logDate",
               type: "date",
               required: true,
-              defaultValue: todayInputValue(),
+              defaultValue: logSelection.logDate || todayInputValue(),
+              ...(editingLog ? { defaultValue: editingLog.date } : {}),
             }),
           ),
           h(
@@ -6080,6 +7438,10 @@
                   name: "boxWorkoutTitle",
                   type: "text",
                   placeholder: "Community WOD",
+                  defaultValue:
+                    editingLog?.workoutSource === "box"
+                      ? editingLog.dayTitle
+                      : logSelection.boxWorkoutTitle || "",
                 }),
               ),
               h(
@@ -6095,6 +7457,9 @@
                       id: "boxDifficulty",
                       name: "boxDifficulty",
                       defaultValue: "3",
+                      ...(editingLog?.difficulty
+                        ? { defaultValue: String(editingLog.difficulty) }
+                        : {}),
                     },
                     [1, 2, 3, 4, 5].map((value) =>
                       h(
@@ -6117,6 +7482,9 @@
                     max: "300",
                     step: "1",
                     defaultValue: "60",
+                    ...(editingLog?.durationMinutes
+                      ? { defaultValue: String(editingLog.durationMinutes) }
+                      : {}),
                   }),
                 ),
               ),
@@ -6141,6 +7509,9 @@
                       type: "checkbox",
                       name: "boxMovementPattern",
                       value,
+                      defaultChecked: Boolean(
+                        editingLog?.movementPatterns?.includes(value),
+                      ),
                     }),
                     label,
                   ),
@@ -6218,7 +7589,11 @@
             "Readiness",
             h(
               "select",
-              { id: "readiness", name: "readiness", defaultValue: "green" },
+              {
+                id: "readiness",
+                name: "readiness",
+                defaultValue: editingLog?.readiness || "green",
+              },
               h("option", { value: "green" }, "Green - push the plan"),
               h("option", { value: "amber" }, "Amber - hold technique"),
               h("option", { value: "red" }, "Red - scale today"),
@@ -6237,6 +7612,7 @@
               step: "0.5",
               inputMode: "decimal",
               placeholder: "8",
+              defaultValue: editingLog?.rpe || "",
             }),
           ),
         ),
@@ -6249,6 +7625,7 @@
             name: "strengthResult",
             type: "text",
             placeholder: "Back squat 5x4 at 110 kg, all smooth",
+            defaultValue: editingLog?.strengthResult || "",
           }),
         ),
         h(
@@ -6261,7 +7638,117 @@
             type: "text",
             placeholder: "4 rounds + 8 reps, or 14:36",
             defaultValue: timerSummary,
+            ...(editingLog?.wodScore
+              ? { defaultValue: editingLog.wodScore }
+              : {}),
           }),
+        ),
+        h(
+          "fieldset",
+          { className: "structured-score" },
+          h("legend", null, "Structured result"),
+          h(
+            "div",
+            { className: "form-row" },
+            h(
+              "label",
+              null,
+              "Score type",
+              h(
+                "select",
+                {
+                  name: "scoreType",
+                  defaultValue:
+                    editingLog?.structuredScore?.scoreType || "custom",
+                },
+                h("option", { value: "time" }, "Time"),
+                h("option", { value: "rounds_reps" }, "Rounds + reps"),
+                h("option", { value: "load" }, "Load"),
+                h("option", { value: "distance" }, "Distance"),
+                h("option", { value: "calories" }, "Calories"),
+                h("option", { value: "intervals" }, "Intervals"),
+                h("option", { value: "custom" }, "Custom / legacy"),
+              ),
+            ),
+            h(
+              "label",
+              null,
+              "Rx status",
+              h(
+                "select",
+                {
+                  name: "rxStatus",
+                  defaultValue: editingLog?.rxStatus || "not_applicable",
+                },
+                h("option", { value: "rx" }, "Rx"),
+                h("option", { value: "scaled" }, "Scaled"),
+                h("option", { value: "not_applicable" }, "Not applicable"),
+              ),
+            ),
+          ),
+          h(
+            "div",
+            { className: "structured-score-grid" },
+            h(NumberInput, {
+              name: "primaryValue",
+              label: "Primary value",
+              value: editingLog?.structuredScore?.primaryValue || "",
+            }),
+            h(NumberInput, {
+              name: "secondaryValue",
+              label: "Reps / secondary",
+              value: editingLog?.structuredScore?.secondaryValue || "",
+            }),
+            h(
+              "label",
+              null,
+              "Unit",
+              h("input", {
+                name: "scoreUnit",
+                defaultValue: editingLog?.structuredScore?.unit || "",
+                placeholder: "sec, reps, kg, m, cal",
+              }),
+            ),
+            h(NumberInput, {
+              name: "strengthSets",
+              label: "Strength sets",
+              value: editingLog?.structuredScore?.strengthSets || "",
+            }),
+            h(NumberInput, {
+              name: "strengthReps",
+              label: "Reps per set",
+              value: editingLog?.structuredScore?.strengthReps || "",
+            }),
+            h(NumberInput, {
+              name: "strengthLoad",
+              label: "Strength load (kg)",
+              value: editingLog?.structuredScore?.strengthLoad || "",
+            }),
+          ),
+          h(
+            "label",
+            null,
+            "Interval splits",
+            h("textarea", {
+              name: "intervalSplits",
+              rows: "2",
+              defaultValue:
+                editingLog?.structuredScore?.splits?.join("\n") || "",
+              placeholder: "One split per line",
+            }),
+          ),
+          h(
+            "label",
+            null,
+            "Movement substitutions",
+            h("textarea", {
+              name: "movementSubstitutions",
+              rows: "2",
+              defaultValue:
+                editingLog?.structuredScore?.substitutions?.join("\n") || "",
+              placeholder: "Pull-ups → ring rows",
+            }),
+          ),
         ),
         matchingTimer
           ? h(
@@ -6305,6 +7792,7 @@
             name: "logNotes",
             rows: "4",
             placeholder: "Pacing, scaling, misses, mobility, next adjustment",
+            defaultValue: editingLog?.notes || "",
           }),
         ),
         h(
@@ -6314,14 +7802,29 @@
             id: "mobilityDone",
             name: "mobilityDone",
             type: "checkbox",
+            defaultChecked: Boolean(editingLog?.mobilityDone),
           }),
           "Mobility completed",
         ),
         h(
           "button",
           { className: "primary-button", type: "submit" },
-          "Save workout log",
+          editingLog ? "Update workout log" : "Save workout log",
         ),
+        editingLog
+          ? h(
+              "button",
+              {
+                className: "ghost-button",
+                type: "button",
+                onClick: () => {
+                  setEditingLog(null);
+                  setFormVersion((version) => version + 1);
+                },
+              },
+              "Cancel edit",
+            )
+          : null,
       ),
       h(
         "section",
@@ -6350,9 +7853,26 @@
           "div",
           { id: "recentLogs", className: "history-list" },
           appState.logs.length
-            ? appState.logs
-                .slice(0, 12)
-                .map((log) => h(LogHistoryItem, { key: log.id, log }))
+            ? appState.logs.slice(0, 12).map((log) =>
+                h(LogHistoryItem, {
+                  key: log.id,
+                  log,
+                  onEdit: () => {
+                    setEditingLog(log);
+                    setWorkoutSource(
+                      log.workoutSource === "box" ? "box" : "app",
+                    );
+                    onWeekChange(log.week);
+                    onLogSelectionChange({ dayId: log.dayId });
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                  },
+                  onDelete: () => {
+                    if (window.confirm("Delete this workout log?")) {
+                      onDeleteLog(log.id);
+                    }
+                  },
+                }),
+              )
             : h(
                 "div",
                 { className: "empty-state" },
@@ -6363,7 +7883,7 @@
     );
   }
 
-  function LogHistoryItem({ log }) {
+  function LogHistoryItem({ log, onEdit, onDelete }) {
     return h(
       "article",
       { className: "history-item" },
@@ -6430,6 +7950,24 @@
           ? h("span", { className: "metric-pill" }, "Mobility done")
           : null,
       ),
+      h(
+        "div",
+        { className: "quick-actions history-actions" },
+        h(
+          "button",
+          { className: "ghost-button", type: "button", onClick: onEdit },
+          "Edit",
+        ),
+        h(
+          "button",
+          {
+            className: "ghost-button danger-button",
+            type: "button",
+            onClick: onDelete,
+          },
+          "Delete",
+        ),
+      ),
     );
   }
 
@@ -6459,13 +7997,56 @@
 
   function PrView({ appState, activeView, onNotify, onSaveAttempt }) {
     const [formVersion, setFormVersion] = ReactRuntime.useState(0);
+    const activePlan = selectActivePlan(appState);
+    const plannedSessions = activePlan?.sessions.length || 32;
+    const progression = buildCycleProgressionResult(
+      appState.profile,
+      appState.logs,
+      plannedSessions,
+    );
+    const rpeValues = appState.logs
+      .map((log) => Number(log.rpe))
+      .filter((value) => Number.isFinite(value));
+    const averageRpe = rpeValues.length
+      ? rpeValues.reduce((sum, value) => sum + value, 0) / rpeValues.length
+      : null;
+    const readinessValues = appState.readinessChecks
+      .map((checkin) => Number(checkin.energy))
+      .filter((value) => Number.isFinite(value));
+    const averageEnergy = readinessValues.length
+      ? readinessValues.reduce((sum, value) => sum + value, 0) /
+        readinessValues.length
+      : null;
+    const mobilityRate = appState.logs.length
+      ? Math.round(
+          (appState.logs.filter((log) => log.mobilityDone).length /
+            appState.logs.length) *
+            100,
+        )
+      : 0;
+    const appLogs = appState.logs.filter(
+      (log) => log.workoutSource !== "box",
+    ).length;
+    const boxLogs = appState.logs.filter(
+      (log) => log.workoutSource === "box",
+    ).length;
+    const customMetrics = [
+      ...new Map(
+        appState.prAttempts
+          .filter(
+            (attempt) =>
+              !PR_METRICS.some((metric) => metric.id === attempt.metricId),
+          )
+          .map((attempt) => [attempt.metricId, attempt]),
+      ).values(),
+    ];
 
     return h(
       "section",
       {
-        id: "prView",
-        className: viewClass("prView", activeView),
-        "aria-labelledby": "prTitle",
+        id: "progressView",
+        className: viewClass("progressView", activeView),
+        "aria-labelledby": "progressTitle",
       },
       h(
         "div",
@@ -6473,8 +8054,141 @@
         h(
           "div",
           null,
-          h("p", { className: "eyebrow" }, "Personal records"),
-          h("h2", { id: "prTitle" }, "PR tracker"),
+          h("p", { className: "eyebrow" }, "Measurable development"),
+          h("h2", { id: "progressTitle" }, "Progress"),
+        ),
+      ),
+      h(
+        "div",
+        { className: "stats-grid progress-stats" },
+        h(StatCard, {
+          value: `${appLogs}/${plannedSessions}`,
+          label: "Planned vs completed",
+          detail: `${boxLogs} box sessions also logged`,
+        }),
+        h(StatCard, {
+          value: averageRpe === null ? "-" : trimNumber(averageRpe),
+          label: "Average RPE",
+        }),
+        h(StatCard, {
+          value:
+            averageEnergy === null ? "-" : `${trimNumber(averageEnergy)}/5`,
+          label: "Readiness trend",
+        }),
+        h(StatCard, {
+          value: `${mobilityRate}%`,
+          label: "Mobility consistency",
+        }),
+      ),
+      h(
+        "section",
+        {
+          className: `panel cycle-recommendation progression-${progression.action}`,
+          "aria-labelledby": "cycleRecommendationTitle",
+        },
+        h("p", { className: "eyebrow" }, "Next cycle recommendation"),
+        h(
+          "h3",
+          { id: "cycleRecommendationTitle" },
+          progression.action === "increase"
+            ? "Increase training maxes by about 2.5%"
+            : progression.action === "reduce"
+              ? "Rebase training maxes by about 2.5%"
+              : "Hold training maxes for the next cycle",
+        ),
+        h(
+          "p",
+          { className: "muted-copy" },
+          `${Math.round(progression.completionRate * 100)}% of app sessions completed${
+            progression.averageRpe === null
+              ? "; log RPE to improve the decision."
+              : ` at average RPE ${trimNumber(progression.averageRpe)}.`
+          } This recommendation is never activated automatically.`,
+        ),
+        h(
+          "div",
+          { className: "history-meta" },
+          Object.entries(progression.suggestedMaxes)
+            .slice(0, 4)
+            .map(([metricId, value]) =>
+              h(
+                "span",
+                { className: "metric-pill", key: metricId },
+                `${PR_METRICS.find((metric) => metric.id === metricId)?.name || metricId}: ${value} kg`,
+              ),
+            ),
+        ),
+      ),
+      h(RxReadinessPanel, { profile: appState.profile, logs: appState.logs }),
+      h(
+        "section",
+        { className: "panel progress-trends", "aria-labelledby": "trendTitle" },
+        h("p", { className: "eyebrow" }, "Training balance"),
+        h("h3", { id: "trendTitle" }, "Strength, engine, skill, and scores"),
+        h(
+          "div",
+          { className: "progress-track-list" },
+          [
+            [
+              "Strength trajectories",
+              appState.prAttempts.filter((item) =>
+                [
+                  "backSquat",
+                  "frontSquat",
+                  "deadlift",
+                  "strictPress",
+                  "snatch",
+                  "cleanJerk",
+                ].includes(item.metricId),
+              ).length,
+            ],
+            [
+              "Engine and benchmarks",
+              appState.prAttempts.filter((item) =>
+                [
+                  "row1k",
+                  "row2k",
+                  "run5k",
+                  "bike10MinCalories",
+                  "murph",
+                ].includes(item.metricId),
+              ).length,
+            ],
+            [
+              "Gymnastics capacity",
+              appState.prAttempts.filter((item) =>
+                [
+                  "t2b",
+                  "pullUps",
+                  "chestToBar",
+                  "barMuscleUp",
+                  "ringMuscleUp",
+                  "strictHspu",
+                  "handstandWalk",
+                  "doubleUnders",
+                ].includes(item.metricId),
+              ).length,
+            ],
+            [
+              "Structured workout scores",
+              appState.logs.filter(
+                (log) =>
+                  log.structuredScore?.scoreType &&
+                  log.structuredScore.scoreType !== "custom",
+              ).length,
+            ],
+          ].map(([label, count]) =>
+            h(
+              "div",
+              { className: "progress-track", key: label },
+              h("span", null, label),
+              h("strong", null, `${count} result${count === 1 ? "" : "s"}`),
+              h("span", {
+                className: "progress-track-fill",
+                style: { width: `${Math.min(100, Number(count) * 12.5)}%` },
+              }),
+            ),
+          ),
         ),
       ),
       h(
@@ -6490,6 +8204,15 @@
             h("p", { className: "stat-label" }, pr ? pr.date : "No PR yet"),
           );
         }),
+        customMetrics.map((attempt) =>
+          h(
+            "article",
+            { className: "pr-card", key: attempt.metricId },
+            h("p", { className: "pr-label" }, attempt.metricName),
+            h("p", { className: "pr-value" }, attempt.display),
+            h("p", { className: "stat-label" }, attempt.date),
+          ),
+        ),
       ),
       h(
         "form",
@@ -6500,9 +8223,31 @@
           onSubmit: async (event) => {
             event.preventDefault();
             const data = new FormData(event.currentTarget);
-            const metric = PR_METRICS.find(
-              (item) => item.id === data.get("prMetric"),
+            const selectedMetricId = String(data.get("prMetric"));
+            const customName = String(
+              data.get("customBenchmarkName") || "",
+            ).trim();
+            const customType = String(
+              data.get("customBenchmarkType") || "time",
             );
+            const metric =
+              PR_METRICS.find((item) => item.id === selectedMetricId) ||
+              (selectedMetricId === "custom" && customName
+                ? {
+                    id: `benchmark-${customName
+                      .toLowerCase()
+                      .replace(/[^a-z0-9]+/g, "-")
+                      .replace(/^-|-$/g, "")}`,
+                    name: customName,
+                    type: customType,
+                    unit: customType === "time" ? "time" : "score",
+                    direction: customType === "time" ? "lower" : "higher",
+                  }
+                : null);
+            if (!metric) {
+              onNotify("Name the custom benchmark before saving it.");
+              return;
+            }
             const normalized = normalizePrValue(
               String(data.get("prValue") || ""),
               metric,
@@ -6563,6 +8308,45 @@
             },
             PR_METRICS.map((metric) =>
               h("option", { key: metric.id, value: metric.id }, metric.name),
+            ),
+            h("option", { value: "custom" }, "Custom benchmark"),
+          ),
+        ),
+        h(
+          "div",
+          { className: "form-row" },
+          h(
+            "label",
+            null,
+            "Custom benchmark name",
+            h("input", {
+              name: "customBenchmarkName",
+              list: "benchmarkCatalog",
+              placeholder: "Fran, Grace, Helen, Cindy, Diane…",
+            }),
+            h(
+              "datalist",
+              { id: "benchmarkCatalog" },
+              [
+                "Fran",
+                "Grace",
+                "Helen",
+                "Cindy",
+                "Diane",
+                "Annie",
+                "Karen",
+              ].map((name) => h("option", { key: name, value: name })),
+            ),
+          ),
+          h(
+            "label",
+            null,
+            "Custom score type",
+            h(
+              "select",
+              { name: "customBenchmarkType", defaultValue: "time" },
+              h("option", { value: "time" }, "Time (lower is better)"),
+              h("option", { value: "number" }, "Score (higher is better)"),
             ),
           ),
         ),
@@ -6658,14 +8442,18 @@
 
   function BottomNav({ activeView, onActivate }) {
     const items = [
-      ["dashboardView", "Home"],
-      ["programView", "Plan"],
-      ["builderView", "Build"],
-      ["learnView", "Learn"],
-      ["proofView", "Proof"],
+      ["dashboardView", "Today"],
+      ["calendarView", "Calendar"],
       ["logView", "Log"],
-      ["prView", "PRs"],
+      ["progressView", "Progress"],
+      ["moreView", "More"],
     ];
+    const moreViews = new Set([
+      "moreView",
+      "builderView",
+      "learnView",
+      "proofView",
+    ]);
 
     return h(
       "nav",
@@ -6675,7 +8463,12 @@
           "button",
           {
             key: viewId,
-            className: `nav-button${activeView === viewId ? " is-active" : ""}`,
+            className: `nav-button${
+              activeView === viewId ||
+              (viewId === "moreView" && moreViews.has(activeView))
+                ? " is-active"
+                : ""
+            }`,
             type: "button",
             "data-view": viewId,
             onClick: () => onActivate(viewId),
@@ -6741,13 +8534,12 @@
     );
   }
 
-  const MemoDashboardView = memoizeInactiveView(DashboardView, "dashboardView");
-  const MemoProgramView = memoizeInactiveView(ProgramView, "programView");
+  const MemoProgramView = memoizeInactiveView(ProgramView, "calendarView");
   const MemoBuilderView = memoizeInactiveView(BuilderView, "builderView");
   const MemoLearnView = memoizeInactiveView(LearnView, "learnView");
   const MemoProofView = memoizeInactiveView(ProofView, "proofView");
   const MemoLogView = memoizeInactiveView(LogView, "logView");
-  const MemoPrView = memoizeInactiveView(PrView, "prView");
+  const MemoPrView = memoizeInactiveView(PrView, "progressView");
 
   const root = ReactDOMRuntime.createRoot(rootElement);
   root.render(h(AppErrorBoundary, null, h(App)));

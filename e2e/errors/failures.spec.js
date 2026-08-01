@@ -13,6 +13,7 @@ test("@critical a failed plan save reports local-only persistence", async ({
 }) => {
   const data = uniqueTestData();
   const app = new AppShell(page);
+  const account = new AccountPage(page);
   const builder = new PlanBuilderPage(page);
   await app.open();
   await builder.waitForHydration();
@@ -31,6 +32,7 @@ test("@critical a failed plan save reports local-only persistence", async ({
   ).toBeVisible();
 
   await app.navigate("Home");
+  await account.open();
   await expect(
     page.getByText(
       "Profile or programme changes are saved locally and need a sync retry.",
@@ -48,6 +50,7 @@ test("a failed delete sync does not falsely claim remote success", async ({
 }) => {
   const data = uniqueTestData();
   const app = new AppShell(page);
+  const account = new AccountPage(page);
   const builder = new PlanBuilderPage(page);
   await app.open();
   await builder.open();
@@ -68,6 +71,7 @@ test("a failed delete sync does not falsely claim remote success", async ({
   });
   await builder.deleteActivePlan();
   await app.navigate("Home");
+  await account.open();
 
   await expect(
     page.getByText(
@@ -86,6 +90,7 @@ test("@critical sign-in failure stops loading and offers a retry", async ({
   const app = new AppShell(page);
   const account = new AccountPage(page);
   await app.open();
+  await account.open();
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(
     page.getByRole("button", { name: "Email sign-in link" }),
@@ -111,6 +116,7 @@ test("a slow sign-in exposes loading state and eventually completes", async ({
   const app = new AppShell(page);
   const account = new AccountPage(page);
   await app.open();
+  await account.open();
   await page.getByRole("button", { name: "Sign out" }).click();
   await page.evaluate(() => {
     window.__E2E_SUPABASE_DELAYS__ = { "auth.signInWithOtp": 300 };
@@ -131,7 +137,9 @@ test("expired authentication produces a useful session error", async ({
     window.__E2E_SUPABASE_FAILURES__ = { "auth.getSession": 1 };
   });
   const app = new AppShell(page);
+  const account = new AccountPage(page);
   await app.open();
+  await account.open();
 
   await expect(
     page.getByText("Could not read Supabase session.", { exact: true }),

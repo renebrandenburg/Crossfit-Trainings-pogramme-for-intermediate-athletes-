@@ -10,12 +10,62 @@ test("@smoke application loads its primary navigation", async ({ page }) => {
 
   const navigation = page.getByRole("navigation", { name: "Main navigation" });
   await expect(navigation).toBeVisible();
-  for (const name of ["Home", "Plan", "Build", "Learn", "Log", "PRs"]) {
+  for (const name of ["Today", "Calendar", "Log", "Progress", "More"]) {
     await expect(
       navigation.getByRole("button", { name, exact: true }),
     ).toBeVisible();
   }
   await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("@smoke mobile Today keeps the decision and primary action in view", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const app = new AppShell(page);
+  await app.open();
+
+  const navigation = page.getByRole("navigation", { name: "Main navigation" });
+  await expect(navigation.getByRole("button")).toHaveCount(5);
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
+
+  const action = page.getByRole("button", { name: "Start and log workout" });
+  await expect(action).toBeVisible();
+  const bounds = await action.boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(844);
+});
+
+test("@critical Today to Log to Progress remains local-first while offline", async ({
+  page,
+  context,
+}) => {
+  const app = new AppShell(page);
+  await app.open();
+  await context.setOffline(true);
+
+  await page
+    .getByLabel("Paste today's box WOD (optional)")
+    .fill("AMRAP 12: 8 thrusters, 8 pull-ups, 200 m run");
+  await page
+    .getByRole("button", { name: "Save check-in and recommendation" })
+    .click();
+  await page.getByRole("button", { name: "Log box workout" }).click();
+  await page.getByLabel("RPE").fill("8");
+  await page.getByLabel("WOD score").fill("5 rounds + 4 reps");
+  await page.getByLabel("Score type").selectOption("rounds_reps");
+  await page.getByLabel("Primary value").fill("5");
+  await page.getByLabel("Reps / secondary").fill("4");
+  await page.getByRole("button", { name: "Save workout log" }).click();
+  await expect(page.getByText(/5 rounds \+ 4 reps/)).toBeVisible();
+
+  await page.getByRole("button", { name: "Progress", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Progress" })).toBeVisible();
+  await expect(page.getByText("Structured workout scores")).toBeVisible();
+  await context.setOffline(false);
 });
 
 test("@smoke authenticated state is reusable", async ({ page }) => {

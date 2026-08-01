@@ -4960,6 +4960,16 @@ function inferTimerFromText(value) {
     });
   }
 
+  const timedLadder = lower.match(
+    /\b(\d{1,3})\s*min(?:ute)?s?\s+(?:ascending\s+)?ladder\b/,
+  );
+  if (timedLadder) {
+    const minutes = Number(timedLadder[1]);
+    return timerConfig("amrap", compact, minutes * 60, {
+      label: `Ladder ${minutes}:00`,
+    });
+  }
+
   const every = lower.match(
     /\bevery\s+(\d{1,2})(?::(\d{2}))?\s*min\s*x\s*(\d{1,2})\b/,
   );
@@ -6920,6 +6930,478 @@ function average(values) {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+const COACH_WEEKDAY_INDEX = Object.freeze({
+  monday: 0,
+  tuesday: 1,
+  wednesday: 2,
+  thursday: 3,
+  friday: 4,
+  saturday: 5,
+  sunday: 6,
+});
+
+function coachDateValue(value = new Date()) {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return coachDateValue(new Date());
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function coachDateAtNoon(value) {
+  const normalized = coachDateValue(value);
+  return new Date(`${normalized}T12:00:00`);
+}
+
+function addCoachDays(value, days) {
+  const date = coachDateAtNoon(value);
+  date.setDate(date.getDate() + Number(days || 0));
+  return coachDateValue(date);
+}
+
+function startOfCoachWeek(value = new Date()) {
+  const date = coachDateAtNoon(value);
+  const mondayOffset = (date.getDay() + 6) % 7;
+  date.setDate(date.getDate() - mondayOffset);
+  return coachDateValue(date);
+}
+
+function coachWeekdayIndex(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  return Object.prototype.hasOwnProperty.call(COACH_WEEKDAY_INDEX, normalized)
+    ? COACH_WEEKDAY_INDEX[normalized]
+    : 0;
+}
+
+function scheduledDateForSession(session, cycleStartDate) {
+  const start = startOfCoachWeek(cycleStartDate || new Date());
+  const weekOffset = (clamp(Number(session?.week) || 1, 1, 8) - 1) * 7;
+  const weekday =
+    session?.preferredDay || session?.weekday || session?.day || "monday";
+  return addCoachDays(start, weekOffset + coachWeekdayIndex(weekday));
+}
+
+function coachMovementStimuli(definition) {
+  if (!definition) return [];
+  const id = String(definition.id || "");
+  const displayName = String(definition.displayName || "");
+  const text = `${id} ${displayName}`.toLowerCase();
+  const stimuli = new Set();
+  if (/squat|lunge|wall-ball|wall ball|step-up|step up/.test(text)) {
+    stimuli.add("squat");
+  }
+  if (
+    /deadlift|swing|good-morning|good morning|clean pull|snatch pull/.test(text)
+  ) {
+    stimuli.add("hinge");
+  }
+  if (definition.olympicFamily || /clean|snatch/.test(text)) {
+    stimuli.add("olympic_lifting");
+  }
+  if (
+    /pull-up|pull up|muscle-up|muscle up|rope climb|toes-to-bar|toes to bar|knee-to-elbow|knee to elbow/.test(
+      text,
+    )
+  ) {
+    stimuli.add("vertical_pull");
+    stimuli.add("gymnastics");
+  }
+  if (/handstand|push press|strict press|jerk|thruster/.test(text)) {
+    stimuli.add("vertical_push");
+  }
+  if (/push-up|push up|burpee|bench press|dip/.test(text)) {
+    stimuli.add("horizontal_push");
+  }
+  if (/ring row|dumbbell row|barbell row/.test(text)) {
+    stimuli.add("horizontal_pull");
+  }
+  if (/run|row|bike|ski|shuttle|swim/.test(text)) {
+    stimuli.add("aerobic");
+  }
+  return [...stimuli];
+}
+
+function coachTextStimuli(value) {
+  const text = String(value || "").toLowerCase();
+  const stimuli = new Set();
+  const patterns = [
+    ["squat", /\bsquats?|lunges?|wall[- ]balls?|step[- ]ups?\b/],
+    ["hinge", /deadlifts?|kettlebell swings?|\bkb swings?|good mornings?/],
+    ["olympic_lifting", /snatch|clean(?: and| &)? jerk|power clean|hang clean/],
+    [
+      "vertical_pull",
+      /pull[- ]ups?|muscle[- ]ups?|rope climbs?|toes[- ]to[- ]bar/,
+    ],
+    [
+      "vertical_push",
+      /handstand push[- ]ups?|strict press|push press|jerks?|thrusters?/,
+    ],
+    ["horizontal_push", /push[- ]ups?|burpees?|bench press|ring dips?/],
+    ["horizontal_pull", /ring rows?|dumbbell rows?|barbell rows?/],
+    [
+      "gymnastics",
+      /pull[- ]ups?|muscle[- ]ups?|toes[- ]to[- ]bar|handstand|double[- ]unders?|rope climbs?/,
+    ],
+    ["aerobic", /\brun|rowing?|\brow\b|bike|ski|shuttle|swim/],
+    ["sprint", /sprint|all[- ]out/],
+  ];
+  patterns.forEach(([stimulus, pattern]) => {
+    if (pattern.test(text)) stimuli.add(stimulus);
+  });
+  const minuteMatches = [
+    ...text.matchAll(/(\d{1,3})\s*(?:min(?:ute)?s?|'|’)/g),
+  ].map((match) => Number(match[1]));
+  const longestMinutes = minuteMatches.length ? Math.max(...minuteMatches) : 0;
+  if (longestMinutes > 0) {
+    stimuli.add(
+      longestMinutes <= 10
+        ? "short_conditioning"
+        : longestMinutes <= 20
+          ? "medium_conditioning"
+          : "long_conditioning",
+    );
+  } else if (/amrap|emom|for time|rounds?|interval|chipper|ladder/.test(text)) {
+    stimuli.add("medium_conditioning");
+  }
+  return [...stimuli];
+}
+
+function escapeCoachPattern(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseBoxWorkout(rawText) {
+  const text = String(rawText || "").trim();
+  if (!text) {
+    return {
+      rawText: "",
+      movementIds: [],
+      movements: [],
+      stimuli: [],
+      unmatchedLines: [],
+      durationMinutes: null,
+    };
+  }
+  const recognized = new Map();
+  const matchedLines = new Set();
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  MOVEMENT_CATALOG.forEach((movement) => {
+    const variants = [
+      movement.displayName,
+      movement.id.replace(/-/g, " "),
+      ...(movement.aliases || []),
+    ]
+      .map((variant) => String(variant || "").trim())
+      .filter((variant) => variant.length >= 3)
+      .sort((left, right) => right.length - left.length);
+    const matchedVariant = variants.find((variant) => {
+      const pattern = new RegExp(
+        `(^|[^a-z0-9])${escapeCoachPattern(variant).replace(/\\ /g, "[-\\s]?")}(?=$|[^a-z0-9])`,
+        "i",
+      );
+      return pattern.test(text);
+    });
+    if (!matchedVariant) return;
+    recognized.set(movement.id, movement);
+    lines.forEach((line, index) => {
+      if (line.toLowerCase().includes(matchedVariant.toLowerCase())) {
+        matchedLines.add(index);
+      }
+    });
+  });
+
+  const stimuli = new Set(coachTextStimuli(text));
+  recognized.forEach((movement) => {
+    coachMovementStimuli(movement).forEach((stimulus) => stimuli.add(stimulus));
+  });
+  const durationMatches = [
+    ...text.matchAll(/(\d{1,3})\s*(?:min(?:ute)?s?|'|’)/gi),
+  ].map((match) => Number(match[1]));
+  const unmatchedLines = lines.filter((line, index) => {
+    if (matchedLines.has(index)) return false;
+    return (
+      /[a-z]/i.test(line) &&
+      !/^(?:amrap|emom|for time|rounds?|rest|time cap|every|then|score|rx|scaled)/i.test(
+        line,
+      )
+    );
+  });
+  const movements = [...recognized.values()].map((movement) => ({
+    id: movement.id,
+    name: movement.displayName,
+  }));
+  return {
+    rawText: text,
+    movementIds: movements.map((movement) => movement.id),
+    movements,
+    stimuli: [...stimuli].filter((stimulus) =>
+      TRAINING_STIMULI.includes(stimulus),
+    ),
+    unmatchedLines,
+    durationMinutes: durationMatches.length
+      ? Math.max(...durationMatches)
+      : null,
+  };
+}
+
+function sessionTrainingStimuli(session) {
+  const explicit = Array.isArray(session?.stimuli) ? session.stimuli : [];
+  const sourceText = [
+    session?.title,
+    session?.shortTitle,
+    session?.focus,
+    ...(session?.warmup || []),
+    ...(session?.strength || []),
+    ...(session?.wod || []),
+    ...(session?.mobility || []),
+    ...(session?.segments || []).flatMap((segment) => segment.items || []),
+  ].join("\n");
+  return [
+    ...new Set([
+      ...explicit,
+      ...coachTextStimuli(sourceText),
+      ...(session?.workoutDefinition
+        ? coachTextStimuli(renderWorkoutDescription(session.workoutDefinition))
+        : []),
+    ]),
+  ].filter((stimulus) => TRAINING_STIMULI.includes(stimulus));
+}
+
+function coachConflictStimuli(left = [], right = []) {
+  const first = new Set(left);
+  const repeated = right.filter((stimulus) => first.has(stimulus));
+  const meaningful = new Set([
+    "squat",
+    "hinge",
+    "olympic_lifting",
+    "vertical_pull",
+    "vertical_push",
+    "gymnastics",
+    "long_conditioning",
+    "sprint",
+  ]);
+  return [...new Set(repeated)].filter((stimulus) => meaningful.has(stimulus));
+}
+
+function buildDailyRecommendation({
+  checkin = {},
+  boxWorkout = null,
+  session = null,
+  alternatives = [],
+} = {}) {
+  const energy = clamp(Math.round(Number(checkin.energy) || 3), 1, 5);
+  const soreness = ["none", "manageable", "high"].includes(checkin.soreness)
+    ? checkin.soreness
+    : "none";
+  const pain = Boolean(checkin.pain);
+  const availableMinutes = clamp(
+    Math.round(Number(checkin.availableMinutes) || 60),
+    15,
+    180,
+  );
+  const boxStimuli = Array.isArray(boxWorkout?.stimuli)
+    ? boxWorkout.stimuli
+    : [];
+  const sessionStimuli = sessionTrainingStimuli(session);
+  const conflicts = coachConflictStimuli(boxStimuli, sessionStimuli);
+  const base = {
+    action: "train",
+    recommendedSessionId: session?.id || null,
+    conflicts,
+    reasons: [],
+    modifications: {
+      volumeMultiplier: 1,
+      preserveStrengthSets: true,
+      availableMinutes,
+    },
+  };
+
+  if (pain) {
+    return {
+      ...base,
+      action: "rest",
+      reasons: [
+        "Pain was reported. Stop or choose non-aggravating work and seek qualified medical guidance when needed.",
+      ],
+      modifications: { ...base.modifications, volumeMultiplier: 0 },
+    };
+  }
+  if (energy === 1 && soreness === "high") {
+    return {
+      ...base,
+      action: "rest",
+      reasons: [
+        "Very low energy and high soreness make productive training unlikely today.",
+        "The key session stays on the calendar and should be moved, not deleted.",
+      ],
+      modifications: { ...base.modifications, volumeMultiplier: 0 },
+    };
+  }
+
+  if (session && conflicts.length) {
+    const rankedAlternatives = alternatives
+      .filter((candidate) => candidate && candidate.id !== session.id)
+      .map((candidate) => ({
+        session: candidate,
+        conflicts: coachConflictStimuli(
+          boxStimuli,
+          sessionTrainingStimuli(candidate),
+        ),
+      }))
+      .sort(
+        (left, right) =>
+          left.conflicts.length - right.conflicts.length ||
+          Number(left.session.week || 1) - Number(right.session.week || 1),
+      );
+    const alternative = rankedAlternatives[0];
+    if (alternative && alternative.conflicts.length < conflicts.length) {
+      return {
+        ...base,
+        action: "swap",
+        recommendedSessionId: alternative.session.id,
+        reasons: [
+          `The box WOD already loads ${conflicts.join(", ").replaceAll("_", " ")}.`,
+          `Swap to ${alternative.session.shortTitle || alternative.session.title} to protect the week without duplicating stress.`,
+        ],
+      };
+    }
+  }
+
+  const sessionMinutes = Number(session?.duration) || 60;
+  const needsScaling =
+    energy <= 2 ||
+    soreness === "high" ||
+    availableMinutes < sessionMinutes ||
+    conflicts.length > 0;
+  if (needsScaling) {
+    const volumeMultiplier =
+      energy <= 2 || soreness === "high" ? 0.65 : conflicts.length ? 0.75 : 0.8;
+    const reasons = [];
+    if (energy <= 2)
+      reasons.push("Energy is low, so quality work beats junk volume.");
+    if (soreness === "high")
+      reasons.push(
+        "High soreness calls for reduced accessory and conditioning volume.",
+      );
+    if (availableMinutes < sessionMinutes)
+      reasons.push(
+        `Keep the priority work inside the available ${availableMinutes} minutes.`,
+      );
+    if (conflicts.length)
+      reasons.push(
+        `The box WOD overlaps ${conflicts.join(", ").replaceAll("_", " ")}; preserve technique and reduce duplicate volume.`,
+      );
+    return {
+      ...base,
+      action: "scale",
+      reasons,
+      modifications: {
+        ...base.modifications,
+        volumeMultiplier,
+        preserveStrengthSets: true,
+      },
+    };
+  }
+
+  return {
+    ...base,
+    reasons: [
+      boxWorkout?.rawText
+        ? "Readiness is suitable and the box WOD does not duplicate the priority session."
+        : "Readiness is suitable for the planned progression session.",
+    ],
+  };
+}
+
+function buildTrainingSchedule({
+  sessions = [],
+  trainingEvents = [],
+  logs = [],
+  cycleStartDate = startOfCoachWeek(),
+} = {}) {
+  const eventBySession = new Map(
+    trainingEvents
+      .filter((event) => event?.sessionId)
+      .map((event) => [event.sessionId, event]),
+  );
+  const appEvents = sessions.map((session) => {
+    const override = eventBySession.get(session.id);
+    const completionLog = logs.find(
+      (log) =>
+        log &&
+        log.dayId === (session.logDayId || session.id) &&
+        Number(log.week || session.week) === Number(session.week),
+    );
+    const completed = Boolean(completionLog);
+    return {
+      id: override?.id || `scheduled-${session.id}`,
+      date:
+        completionLog?.date ||
+        override?.date ||
+        scheduledDateForSession(session, cycleStartDate),
+      kind: "app",
+      status: completed ? "completed" : override?.status || "planned",
+      sessionId: session.id,
+      title: session.shortTitle || session.title,
+      stimuli: sessionTrainingStimuli(session),
+      generated: !override,
+      createdAt: override?.createdAt || null,
+      updatedAt: override?.updatedAt || null,
+    };
+  });
+  const standalone = trainingEvents.filter(
+    (event) => !event?.sessionId && ["box", "rest"].includes(event?.kind),
+  );
+  return [...appEvents, ...standalone].sort(
+    (left, right) =>
+      String(left.date).localeCompare(String(right.date)) ||
+      String(left.kind).localeCompare(String(right.kind)),
+  );
+}
+
+function buildCycleProgressionResult(profile, logs = [], targetSessions = 32) {
+  const completed = logs.filter((log) => log?.workoutSource !== "box").length;
+  const completionRate = targetSessions
+    ? clamp(completed / targetSessions, 0, 1)
+    : 0;
+  const rpeValues = logs
+    .map((log) => Number(log.rpe))
+    .filter((value) => Number.isFinite(value) && value >= 1 && value <= 10);
+  const averageRpe = rpeValues.length ? average(rpeValues) : null;
+  const action =
+    completionRate >= 0.85 && averageRpe !== null && averageRpe <= 8
+      ? "increase"
+      : completionRate < 0.6 || (averageRpe !== null && averageRpe >= 9)
+        ? "reduce"
+        : "hold";
+  const factor =
+    action === "increase" ? 1.025 : action === "reduce" ? 0.975 : 1;
+  const suggestedMaxes = Object.fromEntries(
+    Object.entries(profile?.maxes || {}).map(([metricId, value]) => [
+      metricId,
+      roundToNearest((Number(value) || 0) * factor, 2.5),
+    ]),
+  );
+  return {
+    action,
+    completionRate,
+    averageRpe,
+    completedSessions: completed,
+    targetSessions,
+    suggestedMaxes,
+  };
+}
+
 function readinessRecommendation(weakest, missingTests = []) {
   if (missingTests.length && !weakest.length) {
     return `Log ${missingTests
@@ -7437,13 +7919,19 @@ const FORGE_HOUR_API = {
   applyReadinessVariant,
   buildGeneratedProgramme,
   buildOlympicFamilySchedule,
+  buildCycleProgressionResult,
+  buildDailyRecommendation,
   buildRxReadiness,
   buildSession,
+  buildTrainingSchedule,
   clamp,
   cloneDefaultProfile,
   claimUniqueGeneratedWod,
   createGenerationSeed,
   createId,
+  coachDateValue,
+  addCoachDays,
+  startOfCoachWeek,
   customPlanSegments,
   filterMovementLibrary,
   formatDate,
@@ -7459,6 +7947,7 @@ const FORGE_HOUR_API = {
   migratePlanState,
   migrateGeneratedProgrammePlans,
   normalizeGeneratorOptions,
+  parseBoxWorkout,
   regeneratePlanFrequency,
   renderWorkoutDescription,
   renderWorkoutItems,
@@ -7472,6 +7961,8 @@ const FORGE_HOUR_API = {
   selectActivePlan,
   selectActiveWeekSessions,
   selectPlanWeekSessions,
+  scheduledDateForSession,
+  sessionTrainingStimuli,
   splitLines,
   structuralWodSignature,
   trimNumber,

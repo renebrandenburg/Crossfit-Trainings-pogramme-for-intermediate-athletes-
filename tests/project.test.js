@@ -140,18 +140,20 @@ test("React app contains the main app surfaces and navigation", () => {
   const app = read("react-app.js");
 
   assert.match(app, /dashboardView/);
-  assert.match(app, /programView/);
+  assert.match(app, /calendarView/);
   assert.match(app, /builderView/);
   assert.match(app, /learnView/);
   assert.match(app, /logView/);
   assert.match(app, /proofView/);
-  assert.match(app, /prView/);
+  assert.match(app, /progressView/);
   assert.match(app, /eight-week cycle/i);
   assert.match(app, /RX readiness/);
   assert.match(app, /Masters RX assessment/);
   assert.match(app, /nav-button/);
-  assert.match(app, /Home/);
-  assert.match(app, /PRs/);
+  assert.match(app, /Today/);
+  assert.match(app, /Calendar/);
+  assert.match(app, /Progress/);
+  assert.match(app, /More/);
   assert.match(app, /Competition proof/);
 });
 
@@ -325,7 +327,10 @@ test("project documentation describes the current feature set", () => {
   assert.match(readme, /Eight-week progression cycle/);
   assert.match(readme, /Needs-based programme generator/);
   assert.match(readme, /Masters 35-39 RX\/Open prep generator/);
-  assert.match(readme, /RX readiness dashboard/);
+  assert.match(readme, /A combined \*\*Progress\*\* view/);
+  assert.match(readme, /A \*\*Today\*\* coach/);
+  assert.match(readme, /A real dated \*\*Calendar\*\*/);
+  assert.match(readme, /JSON backup\/restore/);
   assert.match(readme, /WOD variation/);
   assert.match(readme, /Manual training programme builder/);
   assert.match(readme, /Movement library/);
@@ -391,14 +396,14 @@ test("Supabase schema scopes policies to authenticated owners", () => {
   const schema = read("supabase-schema.sql");
   const policies = schema.match(/create policy[\s\S]*?;/g) || [];
 
-  assert.equal(policies.length, 15);
+  assert.equal(policies.length, 23);
   for (const policy of policies) {
     assert.match(policy, /to authenticated/);
     assert.match(policy, /\(select auth\.uid\(\)\) = user_id/);
   }
   assert.equal(
     (schema.match(/\(select auth\.uid\(\)\) = user_id/g) || []).length,
-    19,
+    29,
   );
   assert.match(
     schema,
@@ -422,6 +427,17 @@ test("Supabase schema scopes policies to authenticated owners", () => {
     schema,
     /grant select, insert, update on table public\.athlete_states[\s\S]*?to authenticated/,
   );
+  assert.match(
+    schema,
+    /alter table public\.training_events enable row level security/,
+  );
+  assert.match(
+    schema,
+    /alter table public\.readiness_checks enable row level security/,
+  );
+  assert.match(schema, /structured_score jsonb/);
+  assert.match(schema, /recommendation_snapshot jsonb/);
+  assert.match(schema, /rx_status text/);
 });
 
 test("generated Supabase types include the deployed account schema and RPC", () => {
@@ -437,6 +453,10 @@ test("generated Supabase types include the deployed account schema and RPC", () 
   assert.match(databaseTypes, /athlete_states:/);
   assert.match(databaseTypes, /state: Json/);
   assert.match(databaseTypes, /schema_version: number/);
+  assert.match(databaseTypes, /training_events:/);
+  assert.match(databaseTypes, /readiness_checks:/);
+  assert.match(databaseTypes, /structured_score: Json \| null/);
+  assert.match(databaseTypes, /recommendation_snapshot: Json \| null/);
 });
 
 test("local Supabase Auth redirects match the documented development server", () => {

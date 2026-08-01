@@ -2,7 +2,7 @@
   "name": "crossfit",
   "version": "0.1.0",
   "private": true,
-  "description": "Phone-first CrossFit programme, custom builder, and PR tracker.",
+  "description": "Phone-first, box-aware CrossFit coach and progression tracker.",
   "scripts": {
     "check": "npm run lint && npm run format:check && npm run typecheck && npm test",
     "serve:e2e": "node e2e/helpers/static-server.js",

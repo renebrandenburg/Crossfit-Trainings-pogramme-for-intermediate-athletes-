@@ -12,10 +12,14 @@ const {
   mergeById,
   mergePrs,
   prAttemptToRow,
+  readinessCheckToRow,
   rowToLog,
   rowToAthleteState,
   rowToPrAttempt,
+  rowToReadinessCheck,
+  rowToTrainingEvent,
   rowsToPrs,
+  trainingEventToRow,
   unsyncedById,
   validateAthleteState,
 } = require("../supabase-sync.js");
@@ -30,6 +34,7 @@ function athleteState(overrides = {}) {
     activePlanId: "remote-plan",
     selectedWeek: 2,
     planSchemaVersion: 3,
+    cycleStartDate: "2026-07-06",
     ...overrides,
   };
 }
@@ -218,6 +223,19 @@ test("Supabase sync helpers map workout logs to database rows and back", () => {
       interrupted: false,
       overlayEmbedded: true,
     },
+    trainingEventId: "event-1",
+    readinessCheckId: "checkin-1",
+    structuredScore: {
+      scoreType: "rounds_reps",
+      primaryValue: 4,
+      secondaryValue: 8,
+      unit: "reps",
+    },
+    recommendationSnapshot: {
+      action: "train",
+      reasons: ["Ready for planned work."],
+    },
+    rxStatus: "rx",
     notes: "Good pacing",
     mobilityDone: true,
     createdAt: "2026-07-08T10:00:00.000Z",
@@ -230,6 +248,8 @@ test("Supabase sync helpers map workout logs to database rows and back", () => {
   assert.equal(row.wod_score, "4 rounds");
   assert.equal(row.timer_result.mode, "amrap");
   assert.equal(row.competition_proof.proofId, "proof-1");
+  assert.equal(row.training_event_id, "event-1");
+  assert.equal(row.structured_score.scoreType, "rounds_reps");
   assert.deepEqual(rowToLog(row), log);
 
   const ordinaryRow = logToRow(
@@ -256,6 +276,11 @@ test("Supabase sync maps lightweight box workout logs", () => {
     wodScore: "",
     timerResult: null,
     competitionProof: null,
+    trainingEventId: null,
+    readinessCheckId: null,
+    structuredScore: null,
+    recommendationSnapshot: null,
+    rxStatus: "scaled",
     notes: "Heavy legs",
     mobilityDone: false,
     createdAt: "2026-07-29T10:00:00.000Z",
@@ -263,8 +288,89 @@ test("Supabase sync maps lightweight box workout logs", () => {
   const row = logToRow(log, "user-1");
   assert.equal(row.workout_source, "box");
   assert.equal(row.readiness, null);
+  assert.equal(row.rx_status, "scaled");
   assert.deepEqual(row.movement_patterns, ["squat", "long_conditioning"]);
   assert.deepEqual(rowToLog(row), log);
+});
+
+test("Supabase sync maps owner-scoped training events and readiness checks", () => {
+  const event = {
+    id: "event-1",
+    date: "2026-07-31",
+    kind: "box",
+    status: "planned",
+    sessionId: null,
+    title: "CrossFit box WOD",
+    rawBoxText: "AMRAP 15: thrusters and pull-ups",
+    movementIds: ["thrusters", "pull-ups"],
+    stimuli: ["vertical_push", "vertical_pull", "medium_conditioning"],
+    recommendation: { action: "swap", recommendedSessionId: "cycle-1-day2" },
+    createdAt: "2026-07-31T08:00:00.000Z",
+    updatedAt: "2026-07-31T08:05:00.000Z",
+  };
+  const checkin = {
+    id: "checkin-1",
+    date: "2026-07-31",
+    energy: 4,
+    soreness: "manageable",
+    pain: false,
+    availableMinutes: 60,
+    createdAt: "2026-07-31T08:00:00.000Z",
+  };
+
+  const eventRow = trainingEventToRow(event, "user-1");
+  const checkinRow = readinessCheckToRow(checkin, "user-1");
+  assert.equal(eventRow.user_id, "user-1");
+  assert.equal(checkinRow.user_id, "user-1");
+  assert.deepEqual(rowToTrainingEvent(eventRow), event);
+  assert.deepEqual(rowToReadinessCheck(checkinRow), checkin);
+});
+
+test("Supabase sync rejects invalid coach metadata before upload or hydration", () => {
+  assert.throws(
+    () =>
+      trainingEventToRow(
+        {
+          id: "event-1",
+          date: "2026-07-31",
+          kind: "box",
+          status: "planned",
+          stimuli: ["invented_stimulus"],
+          createdAt: "2026-07-31T08:00:00.000Z",
+        },
+        "user-1",
+      ),
+    /Training-event metadata is invalid/,
+  );
+  assert.throws(
+    () =>
+      readinessCheckToRow(
+        {
+          id: "checkin-1",
+          date: "2026-07-31",
+          energy: 6,
+          soreness: "none",
+          pain: false,
+          availableMinutes: 60,
+          createdAt: "2026-07-31T08:00:00.000Z",
+        },
+        "user-1",
+      ),
+    /Readiness metadata is invalid/,
+  );
+  assert.throws(
+    () =>
+      rowToReadinessCheck({
+        id: "checkin-1",
+        date: "2026-07-31",
+        energy: 3,
+        soreness: "unknown",
+        pain: false,
+        available_minutes: 60,
+        created_at: "2026-07-31T08:00:00.000Z",
+      }),
+    /Readiness metadata is invalid/,
+  );
 });
 
 test("Supabase sync preserves box metadata across a legacy workout-log schema", async () => {
@@ -442,6 +548,8 @@ test("Supabase retry sends timer and proof payloads after a legacy schema upgrad
     logs: 1,
     prAttempts: 0,
     prs: 0,
+    trainingEvents: 0,
+    readinessChecks: 0,
     competitionProofPending: 1,
     timerResultPending: 1,
     workoutMetadataPending: 0,
@@ -450,6 +558,8 @@ test("Supabase retry sends timer and proof payloads after a legacy schema upgrad
     logs: 1,
     prAttempts: 0,
     prs: 0,
+    trainingEvents: 0,
+    readinessChecks: 0,
     competitionProofPending: 0,
     timerResultPending: 0,
     workoutMetadataPending: 0,
@@ -473,7 +583,13 @@ test("Supabase sync loads workout logs while a schema migration is rolling out",
           const builder = {
             order: () => builder,
             range: async () => {
-              if (table === "pr_attempts") return { data: [], error: null };
+              if (
+                table === "pr_attempts" ||
+                table === "training_events" ||
+                table === "readiness_checks"
+              ) {
+                return { data: [], error: null };
+              }
               selectedColumns.push(columns);
               if (selectedColumns.length <= 2) {
                 const missingColumn =
@@ -545,6 +661,8 @@ test("Supabase sync paginates logs and attempts with deterministic tie-breakers"
   const rowsByTable = {
     workout_logs: workoutRows,
     pr_attempts: attemptRows,
+    training_events: [],
+    readiness_checks: [],
   };
   const queries = [];
   const client = {
@@ -692,6 +810,8 @@ test("Supabase score sync never uploads canonical training plans", async () => {
     logs: 0,
     prAttempts: 0,
     prs: 0,
+    trainingEvents: 0,
+    readinessChecks: 0,
     competitionProofPending: 0,
     timerResultPending: 0,
     workoutMetadataPending: 0,

@@ -60,6 +60,8 @@ function createMockSupabase({
     athlete_states: remote.athlete_states || [],
     workout_logs: remote.workout_logs || [],
     pr_attempts: remote.pr_attempts || [],
+    training_events: remote.training_events || [],
+    readiness_checks: remote.readiness_checks || [],
     personal_records: (remote.personal_records || []).map((record) => ({
       ...record,
       updated_at:
@@ -274,12 +276,18 @@ function mountApp({
   }
   dom.window.React = require("react");
   const reactDomClient = require("react-dom/client");
+  const reactDom = require("react-dom");
   let appRoot = null;
   dom.window.ReactDOM = {
     ...reactDomClient,
     createRoot(container) {
       appRoot = reactDomClient.createRoot(container);
-      return appRoot;
+      return {
+        ...appRoot,
+        render(node) {
+          reactDom.flushSync(() => appRoot.render(node));
+        },
+      };
     },
   };
   if (supabaseMock) {
@@ -440,6 +448,25 @@ function sessionWod(session) {
   return workoutItemsForSession(session)[0];
 }
 
+function openMore(mounted) {
+  mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "More" }));
+}
+
+function openMoreTool(mounted, name) {
+  openMore(mounted);
+  mounted.fireEvent.click(mounted.ui.getByRole("button", { name }));
+}
+
+async function waitForSignedIn(mounted, { openAccount = false } = {}) {
+  await mounted.waitFor(() => {
+    assert.equal(
+      document.querySelector(".app-shell")?.dataset.syncState,
+      "signed-in",
+    );
+  });
+  if (openAccount) openMore(mounted);
+}
+
 function workoutExercises(definition) {
   const main =
     definition?.format?.type === "emom"
@@ -549,8 +576,8 @@ async function assertPlanSessionAcrossViews(mounted, plan) {
     assert.equal(state.selectedWeek, session.week);
   });
 
-  fireEvent.click(ui.getByRole("button", { name: "Plan" }));
-  const programView = view("programView");
+  fireEvent.click(ui.getByRole("button", { name: "Calendar" }));
+  const programView = view("calendarView");
   assert.ok(programView.getByRole("heading", { name: plan.title }));
   assert.equal(
     programView.getByLabelText("Programme week").value,
@@ -558,12 +585,12 @@ async function assertPlanSessionAcrossViews(mounted, plan) {
   );
   assert.ok(programView.getByText(sessionWod(session)));
 
-  fireEvent.click(ui.getByRole("button", { name: "Build" }));
+  openMoreTool(mounted, "Build programme");
   const builderView = view("builderView");
   assert.equal(builderView.getByLabelText("Active plan").value, plan.id);
   assert.ok(builderView.getByText(sessionWod(session)));
 
-  fireEvent.click(ui.getByRole("button", { name: "Proof" }));
+  openMoreTool(mounted, "Competition proof");
   const proofView = view("proofView");
   await waitFor(() => {
     const option = proofView.getByRole("option", {
@@ -582,12 +609,25 @@ async function assertPlanSessionAcrossViews(mounted, plan) {
 }
 
 test("React Testing Library renders the dashboard and bottom navigation", async () => {
-  const { cleanup, ui } = mountApp();
+  const mounted = mountApp();
+  const { cleanup, fireEvent, ui } = mounted;
 
   try {
-    assert.ok(await ui.findByRole("heading", { name: "Training dashboard" }));
-    assert.ok(ui.getByRole("heading", { name: "Masters RX assessment" }));
-    assert.ok(ui.getByRole("heading", { name: "RX readiness" }));
+    assert.ok(await ui.findByRole("heading", { name: "Today coach" }));
+    assert.ok(ui.getByText("Today's decision"));
+    assert.ok(ui.getByRole("button", { name: "Start and log workout" }));
+    assert.ok(ui.getByText(/Movement coaching \(/));
+    assert.ok(ui.getByRole("button", { name: "Today" }));
+    assert.ok(ui.getByRole("button", { name: "Calendar" }));
+    assert.ok(ui.getByRole("button", { name: "Log" }));
+    assert.ok(ui.getByRole("button", { name: "Progress" }));
+    assert.ok(ui.getByRole("button", { name: "More" }));
+    assert.equal(
+      document.querySelectorAll(".bottom-nav .nav-button").length,
+      5,
+    );
+    fireEvent.click(ui.getByRole("button", { name: "Progress" }));
+    assert.ok(await ui.findByRole("heading", { name: "RX readiness" }));
     assert.ok(ui.getByText("RX Level"));
     assert.equal(
       ui
@@ -597,18 +637,15 @@ test("React Testing Library renders the dashboard and bottom navigation", async 
     );
     assert.ok(ui.getByRole("heading", { name: "Suggested focus" }));
     assert.ok(ui.getAllByText("Why this score?").length >= 7);
+    fireEvent.click(ui.getByRole("button", { name: "More" }));
+    assert.ok(ui.getByRole("heading", { name: "Masters RX assessment" }));
     assert.ok(ui.getByText("Strict press: 60 kg vs 75 kg."));
     assert.ok(ui.getAllByText("Men Masters 35-39").length >= 1);
     assert.ok(ui.getByLabelText("Deadlift 1RM"));
     assert.ok(ui.getByLabelText("Unbroken ring muscle-ups"));
-    assert.ok(ui.getByText("Sessions logged"));
-    assert.ok(ui.getByRole("button", { name: "Home" }));
-    assert.ok(ui.getByRole("button", { name: "Plan" }));
-    assert.ok(ui.getByRole("button", { name: "Build" }));
-    assert.ok(ui.getByRole("button", { name: "Learn" }));
-    assert.ok(ui.getByRole("button", { name: "Proof" }));
-    assert.ok(ui.getByRole("button", { name: "Log" }));
-    assert.ok(ui.getByRole("button", { name: "PRs" }));
+    assert.ok(ui.getByRole("button", { name: "Build programme" }));
+    assert.ok(ui.getByRole("button", { name: "Movement library" }));
+    assert.ok(ui.getByRole("button", { name: "Competition proof" }));
     assert.equal(document.querySelector("#builderView"), null);
     assert.equal(document.querySelector("#learnView"), null);
     assert.equal(document.querySelector("#logView"), null);
@@ -623,23 +660,210 @@ test("React Testing Library renders the dashboard and bottom navigation", async 
   }
 });
 
+test("React Testing Library turns a readiness check and pasted box WOD into a recommendation", async () => {
+  const mounted = mountApp();
+  const { cleanup, fireEvent, readState, ui, waitFor } = mounted;
+
+  try {
+    assert.ok(await ui.findByRole("heading", { name: "Today coach" }));
+    fireEvent.change(ui.getByLabelText("Energy"), {
+      target: { value: "4" },
+    });
+    fireEvent.change(ui.getByLabelText("Paste today's box WOD (optional)"), {
+      target: {
+        value:
+          "AMRAP 15 min\n10 thrusters\n10 chest-to-bar pull-ups\n12 mystery crab crawls",
+      },
+    });
+
+    assert.ok(ui.getByText(/Detected:/));
+    assert.ok(ui.getByText(/Review unmatched text: 12 mystery crab crawls/));
+    fireEvent.click(
+      ui.getByRole("button", {
+        name: "Save check-in and recommendation",
+      }),
+    );
+
+    await waitFor(() => {
+      const scores = activeScores(readState());
+      assert.equal(scores.readinessChecks.length, 1);
+      assert.equal(scores.readinessChecks[0].energy, 4);
+      const boxEvent = scores.trainingEvents.find(
+        (trainingEvent) => trainingEvent.kind === "box",
+      );
+      assert.ok(boxEvent);
+      assert.ok(boxEvent.movementIds.includes("thrusters"));
+      assert.ok(
+        ["swap", "scale", "train"].includes(boxEvent.recommendation.action),
+      );
+      const movedSession = scores.trainingEvents.find(
+        (trainingEvent) => trainingEvent.kind === "app",
+      );
+      if (movedSession) {
+        assert.equal(movedSession.status, "planned");
+        assert.equal(
+          movedSession.recommendation.modifications.rescheduledTo,
+          movedSession.date,
+        );
+      }
+    });
+    fireEvent.click(ui.getByRole("button", { name: "Log box workout" }));
+    assert.ok(await ui.findByRole("heading", { name: "Log workout" }));
+    await waitFor(() => {
+      assert.equal(ui.getByLabelText("Workout type").value, "box");
+    });
+    assert.equal(
+      ui.getByLabelText("Box workout name").value,
+      "CrossFit box WOD",
+    );
+    fireEvent.change(ui.getByLabelText("WOD score"), {
+      target: { value: "5 rounds" },
+    });
+    fireEvent.click(ui.getByRole("button", { name: "Save workout log" }));
+    await waitFor(() => {
+      const scores = activeScores(readState());
+      assert.equal(scores.logs[0].workoutSource, "box");
+      assert.equal(
+        scores.trainingEvents.find((event) => event.kind === "box").status,
+        "completed",
+      );
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library moves, skips, and resumes a dated progression session", async () => {
+  const mounted = mountApp();
+  const { cleanup, fireEvent, readState, ui, waitFor } = mounted;
+
+  function squatEvent() {
+    return ui
+      .getAllByRole("heading", { name: "Back squat + T2B" })[0]
+      .closest(".calendar-event");
+  }
+
+  try {
+    await ui.findByRole("heading", { name: "Today coach" });
+    fireEvent.click(ui.getByRole("button", { name: "Calendar" }));
+    const event = squatEvent();
+    fireEvent.change(event.querySelector('input[type="date"]'), {
+      target: { value: "2026-08-03" },
+    });
+
+    await waitFor(() => {
+      const stored = activeScores(readState()).trainingEvents;
+      assert.equal(stored.length, 1);
+      assert.equal(stored[0].date, "2026-08-03");
+    });
+
+    const skip = Array.from(squatEvent().querySelectorAll("button")).find(
+      (button) => button.textContent === "Mark skipped",
+    );
+    fireEvent.click(skip);
+    await waitFor(() => {
+      assert.equal(
+        activeScores(readState()).trainingEvents[0].status,
+        "skipped",
+      );
+    });
+
+    const resume = Array.from(squatEvent().querySelectorAll("button")).find(
+      (button) => button.textContent === "Resume session",
+    );
+    fireEvent.click(resume);
+    await waitFor(() => {
+      const stored = activeScores(readState()).trainingEvents;
+      assert.equal(stored.length, 1);
+      assert.equal(stored[0].status, "planned");
+      assert.notEqual(stored[0].date, "2026-08-03");
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test("React Testing Library saves, edits, and deletes a structured workout score", async () => {
+  const mounted = mountApp();
+  const { cleanup, fireEvent, readState, ui, waitFor } = mounted;
+
+  try {
+    await ui.findByRole("heading", { name: "Today coach" });
+    fireEvent.click(ui.getByRole("button", { name: "Log" }));
+    fireEvent.change(ui.getByLabelText("Score type"), {
+      target: { value: "rounds_reps" },
+    });
+    fireEvent.change(ui.getByLabelText("Rx status"), {
+      target: { value: "scaled" },
+    });
+    fireEvent.change(ui.getByLabelText("Primary value"), {
+      target: { value: "5" },
+    });
+    fireEvent.change(ui.getByLabelText("Reps / secondary"), {
+      target: { value: "12" },
+    });
+    fireEvent.change(ui.getByLabelText("Strength sets"), {
+      target: { value: "5" },
+    });
+    fireEvent.change(ui.getByLabelText("Reps per set"), {
+      target: { value: "3" },
+    });
+    fireEvent.change(ui.getByLabelText("Strength load (kg)"), {
+      target: { value: "120" },
+    });
+    fireEvent.change(ui.getByLabelText("Interval splits"), {
+      target: { value: "2:01\n2:05" },
+    });
+    fireEvent.change(ui.getByLabelText("Movement substitutions"), {
+      target: { value: "Chest-to-bar → pull-ups" },
+    });
+    fireEvent.click(ui.getByRole("button", { name: "Save workout log" }));
+
+    await waitFor(() => {
+      const log = activeScores(readState()).logs[0];
+      assert.equal(log.rxStatus, "scaled");
+      assert.equal(log.structuredScore.scoreType, "rounds_reps");
+      assert.equal(log.structuredScore.primaryValue, 5);
+      assert.deepEqual(log.structuredScore.splits, ["2:01", "2:05"]);
+      assert.equal(log.structuredScore.strengthLoad, 120);
+    });
+
+    fireEvent.click(ui.getByRole("button", { name: "Edit" }));
+    fireEvent.change(ui.getByLabelText("Notes"), {
+      target: { value: "Corrected technique note" },
+    });
+    fireEvent.click(ui.getByRole("button", { name: "Update workout log" }));
+    await waitFor(() => {
+      const logs = activeScores(readState()).logs;
+      assert.equal(logs.length, 1);
+      assert.equal(logs[0].notes, "Corrected technique note");
+    });
+
+    fireEvent.click(ui.getByRole("button", { name: "Delete" }));
+    await waitFor(() => {
+      assert.equal(activeScores(readState()).logs.length, 0);
+    });
+    assert.match(mounted.confirmCalls.at(-1), /Delete this workout log/);
+  } finally {
+    cleanup();
+  }
+});
+
 test("React Testing Library lazy-mounts views and preserves unfinished drafts", async () => {
   const mounted = mountApp();
 
   try {
-    assert.ok(
-      await mounted.ui.findByRole("heading", { name: "Training dashboard" }),
-    );
+    assert.ok(await mounted.ui.findByRole("heading", { name: "Today coach" }));
     assert.equal(document.querySelector("#builderView"), null);
 
-    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "Build" }));
+    openMoreTool(mounted, "Build programme");
     const builder = mounted.view("builderView");
     const title = builder.getByLabelText("Day or title");
     mounted.fireEvent.change(title, { target: { value: "Unfinished Friday" } });
 
-    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "Home" }));
+    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "Today" }));
     assert.ok(document.querySelector("#builderView"));
-    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "Build" }));
+    openMoreTool(mounted, "Build programme");
 
     assert.equal(
       mounted.view("builderView").getByLabelText("Day or title").value,
@@ -651,9 +875,11 @@ test("React Testing Library lazy-mounts views and preserves unfinished drafts", 
 });
 
 test("React Testing Library keeps cleared time benchmarks as test-needed values", async () => {
-  const { cleanup, fireEvent, ui, waitFor } = mountApp();
+  const mounted = mountApp();
+  const { cleanup, fireEvent, ui, waitFor } = mounted;
 
   try {
+    openMore(mounted);
     assert.ok(
       await ui.findByRole("heading", { name: "Masters RX assessment" }),
     );
@@ -662,6 +888,7 @@ test("React Testing Library keeps cleared time benchmarks as test-needed values"
     fireEvent.change(ui.getByLabelText("2 km row"), { target: { value: " " } });
     fireEvent.change(ui.getByLabelText("5 km run"), { target: { value: " " } });
     fireEvent.click(ui.getByRole("button", { name: "Save assessment" }));
+    fireEvent.click(ui.getByRole("button", { name: "Progress" }));
 
     await waitFor(
       () => {
@@ -681,14 +908,17 @@ test("React Testing Library keeps cleared time benchmarks as test-needed values"
 });
 
 test("React Testing Library updates RX guidance after assessment changes", async () => {
-  const { cleanup, fireEvent, ui, waitFor } = mountApp();
+  const mounted = mountApp();
+  const { cleanup, fireEvent, ui, waitFor } = mounted;
 
   try {
+    fireEvent.click(ui.getByRole("button", { name: "Progress" }));
     assert.ok(await ui.findByRole("heading", { name: "RX readiness" }));
     const overall = ui.getByRole("progressbar", { name: "Overall RX Level" });
     const initialLevel = overall.getAttribute("aria-valuenow");
     assert.ok(ui.getByText(/Use frequent submaximal sets/));
 
+    openMore(mounted);
     const improvements = {
       "Unbroken pull-ups": "25",
       "Unbroken chest-to-bar": "18",
@@ -703,9 +933,15 @@ test("React Testing Library updates RX guidance after assessment changes", async
       fireEvent.change(ui.getByLabelText(label), { target: { value } });
     });
     fireEvent.click(ui.getByRole("button", { name: "Save assessment" }));
+    fireEvent.click(ui.getByRole("button", { name: "Progress" }));
 
     await waitFor(() => {
-      assert.notEqual(overall.getAttribute("aria-valuenow"), initialLevel);
+      assert.notEqual(
+        ui
+          .getByRole("progressbar", { name: "Overall RX Level" })
+          .getAttribute("aria-valuenow"),
+        initialLevel,
+      );
       assert.equal(ui.queryByText(/Use frequent submaximal sets/), null);
       assert.ok(ui.getByText(/^Prioritize .* next training cycle/));
     });
@@ -718,7 +954,7 @@ test("React Testing Library generates a level-aware bar muscle-up programme", as
   const { cleanup, fireEvent, ui, waitFor } = mountApp();
 
   try {
-    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    openMoreTool({ fireEvent, ui }, "Build programme");
     fireEvent.change(ui.getByLabelText("Main goal"), {
       target: { value: "barMuscleUp" },
     });
@@ -785,7 +1021,7 @@ test("React Testing Library creates a two-day plan and counts a box workout sepa
   const { cleanup, fireEvent, ui, waitFor } = mountApp();
 
   try {
-    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    openMoreTool({ fireEvent, ui }, "Build programme");
     fireEvent.change(ui.getByLabelText("App-programmed sessions"), {
       target: { value: "2" },
     });
@@ -833,7 +1069,7 @@ test("React Testing Library creates a two-day plan and counts a box workout sepa
       assert.deepEqual(boxLog.movementPatterns, ["squat", "long_conditioning"]);
     });
 
-    fireEvent.click(ui.getByRole("button", { name: "Home" }));
+    fireEvent.click(ui.getByRole("button", { name: "Today" }));
     await waitFor(() => {
       assert.ok(ui.getByText("0/2"));
       assert.ok(ui.getByText("1/4"));
@@ -848,7 +1084,7 @@ test("React Testing Library persists exact Olympic prescriptions", async () => {
   const { cleanup, fireEvent, readState, ui, waitFor } = mountApp();
 
   try {
-    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    openMoreTool({ fireEvent, ui }, "Build programme");
     fireEvent.change(ui.getByLabelText("Main goal"), {
       target: { value: "balanced" },
     });
@@ -940,7 +1176,7 @@ test("React Testing Library marks a logged custom session complete without doubl
   const { cleanup, ui } = mountApp({ storedState });
 
   try {
-    assert.ok(await ui.findByRole("heading", { name: "Training dashboard" }));
+    assert.ok(await ui.findByRole("heading", { name: "Today coach" }));
     assert.match(
       ui.getByText("Sessions logged").closest(".stat-card").textContent,
       /1\/1/,
@@ -962,7 +1198,7 @@ test("React Testing Library generates a Masters 35-39 RX Open prep programme", a
   const { cleanup, fireEvent, ui, waitFor } = mountApp();
 
   try {
-    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    openMoreTool({ fireEvent, ui }, "Build programme");
     assert.ok(await ui.findByRole("heading", { name: "Programme builder" }));
 
     fireEvent.change(ui.getByLabelText("Main goal"), {
@@ -1024,7 +1260,7 @@ test("React Testing Library records workout timer splits into a saved log", asyn
   const { cleanup, fireEvent, ui, waitFor } = mountApp();
 
   try {
-    assert.ok(await ui.findByRole("heading", { name: "Training dashboard" }));
+    assert.ok(await ui.findByRole("heading", { name: "Today coach" }));
     const nextSession = document.querySelector("#nextSession");
     const openTimer = nextSession.querySelector(".timer-panel button");
     fireEvent.click(openTimer);
@@ -1079,8 +1315,8 @@ test("React Testing Library explains when competition recording is unsupported",
   const { cleanup, fireEvent, ui } = mountApp();
 
   try {
-    assert.ok(await ui.findByRole("heading", { name: "Training dashboard" }));
-    fireEvent.click(ui.getByRole("button", { name: "Proof" }));
+    assert.ok(await ui.findByRole("heading", { name: "Today coach" }));
+    openMoreTool({ fireEvent, ui }, "Competition proof");
     assert.ok(await ui.findByRole("heading", { name: "Competition proof" }));
     fireEvent.click(ui.getByRole("button", { name: "Open camera" }));
 
@@ -1101,8 +1337,8 @@ test("React Testing Library records competition proof metadata into a workout lo
   });
 
   try {
-    assert.ok(await ui.findByRole("heading", { name: "Training dashboard" }));
-    fireEvent.click(ui.getByRole("button", { name: "Proof" }));
+    assert.ok(await ui.findByRole("heading", { name: "Today coach" }));
+    openMoreTool({ fireEvent, ui }, "Competition proof");
     assert.ok(await ui.findByRole("heading", { name: "Competition proof" }));
     fireEvent.change(ui.getByLabelText("Workout source"), {
       target: { value: "custom" },
@@ -1178,8 +1414,8 @@ test("React Testing Library recovers an unexpectedly stopped proof recording", a
   });
 
   try {
-    assert.ok(await ui.findByRole("heading", { name: "Training dashboard" }));
-    fireEvent.click(ui.getByRole("button", { name: "Proof" }));
+    assert.ok(await ui.findByRole("heading", { name: "Today coach" }));
+    openMoreTool({ fireEvent, ui }, "Competition proof");
     assert.ok(await ui.findByRole("heading", { name: "Competition proof" }));
     fireEvent.click(ui.getByRole("button", { name: "Open camera" }));
     fireEvent.click(
@@ -1222,7 +1458,7 @@ test("React Testing Library saves a manual training session", async () => {
   const { cleanup, fireEvent, readState, ui, view, waitFor } = mountApp();
 
   try {
-    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    openMoreTool({ fireEvent, ui }, "Build programme");
     assert.ok(await ui.findByRole("heading", { name: "Programme builder" }));
 
     fireEvent.change(ui.getByLabelText("Day or title"), {
@@ -1259,12 +1495,19 @@ test("React Testing Library saves a manual training session", async () => {
     assert.equal(saved.activePlanId, saved.plans[0].id);
     assert.equal(Object.hasOwn(saved, "customPlans"), false);
 
-    fireEvent.click(ui.getByRole("button", { name: "Plan" }));
-    const planView = view("programView");
-    assert.match(document.querySelector("#programView").className, /is-active/);
-    assert.ok(planView.getByRole("heading", { name: "Friday engine + skill" }));
+    fireEvent.click(ui.getByRole("button", { name: "Calendar" }));
+    const planView = view("calendarView");
+    assert.match(
+      document.querySelector("#calendarView").className,
+      /is-active/,
+    );
     assert.ok(
-      planView.getByText("AMRAP 14: 12 cal row, 10 DB snatches, 8 burpees"),
+      planView.getAllByRole("heading", { name: "Friday engine + skill" })
+        .length >= 1,
+    );
+    assert.ok(
+      planView.getAllByText("AMRAP 14: 12 cal row, 10 DB snatches, 8 burpees")
+        .length >= 1,
     );
   } finally {
     cleanup();
@@ -1276,9 +1519,7 @@ test("React Testing Library reloads the canonical active plan without regenerati
   let serialized;
 
   try {
-    assert.ok(
-      await first.ui.findByRole("heading", { name: "Training dashboard" }),
-    );
+    assert.ok(await first.ui.findByRole("heading", { name: "Today coach" }));
     serialized = JSON.stringify(first.readState());
     assert.equal(first.readState().plans[0].sessions[0].id, "saved-session-1");
   } finally {
@@ -1287,9 +1528,7 @@ test("React Testing Library reloads the canonical active plan without regenerati
 
   const second = mountApp({ storedState: serialized });
   try {
-    assert.ok(
-      await second.ui.findByRole("heading", { name: "Training dashboard" }),
-    );
+    assert.ok(await second.ui.findByRole("heading", { name: "Today coach" }));
     const reloaded = second.readState();
     assert.equal(reloaded.activePlanId, "saved-plan-1");
     assert.equal(reloaded.plans[0].sessions[0].id, "saved-session-1");
@@ -1298,13 +1537,13 @@ test("React Testing Library reloads the canonical active plan without regenerati
       "AMRAP 12: row, burpees, and pull-ups",
     );
 
-    second.fireEvent.click(second.ui.getByRole("button", { name: "Plan" }));
+    second.fireEvent.click(second.ui.getByRole("button", { name: "Calendar" }));
     assert.ok(
       second
-        .view("programView")
+        .view("calendarView")
         .getByText("AMRAP 12: row, burpees, and pull-ups"),
     );
-    second.fireEvent.click(second.ui.getByRole("button", { name: "Build" }));
+    openMoreTool(second, "Build programme");
     assert.ok(
       second
         .view("builderView")
@@ -1321,7 +1560,7 @@ test("React Testing Library edits one canonical session across every consumer", 
   });
 
   try {
-    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    openMoreTool({ fireEvent, ui }, "Build programme");
     const builder = view("builderView");
     fireEvent.change(ui.getByLabelText("Plan name"), {
       target: { value: "Renamed canonical programme" },
@@ -1348,19 +1587,19 @@ test("React Testing Library edits one canonical session across every consumer", 
       assert.equal(session.title, "Edited canonical session");
     });
 
-    fireEvent.click(ui.getByRole("button", { name: "Plan" }));
+    fireEvent.click(ui.getByRole("button", { name: "Calendar" }));
     assert.ok(
-      view("programView").getByRole("heading", {
+      view("calendarView").getByRole("heading", {
         name: "Renamed canonical programme",
       }),
     );
     assert.ok(
-      view("programView").getByText(
+      view("calendarView").getByText(
         "For time: run, thrusters, and chest-to-bar",
       ),
     );
 
-    fireEvent.click(ui.getByRole("button", { name: "Proof" }));
+    openMoreTool({ fireEvent, ui }, "Competition proof");
     assert.ok(
       view("proofView").getByRole("option", {
         name: /Edited canonical session/,
@@ -1383,7 +1622,7 @@ test("React Testing Library regenerates once and renders the same saved WOD in P
   });
 
   try {
-    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    openMoreTool({ fireEvent, ui }, "Build programme");
     const before = structuredClone(readState());
     fireEvent.click(
       ui.getByRole("button", { name: "Regenerate 8-week programme" }),
@@ -1414,14 +1653,14 @@ test("React Testing Library regenerates once and renders the same saved WOD in P
       sessionWod(before.plans[0].sessions[0]),
     );
 
-    fireEvent.click(ui.getByRole("button", { name: "Plan" }));
+    fireEvent.click(ui.getByRole("button", { name: "Calendar" }));
     const firstSession = after.plans[0].sessions.find(
       (session) => session.week === 1,
     );
-    assert.ok(view("programView").getByText(sessionWod(firstSession)));
-    fireEvent.click(ui.getByRole("button", { name: "Build" }));
+    assert.ok(view("calendarView").getByText(sessionWod(firstSession)));
+    openMoreTool({ fireEvent, ui }, "Build programme");
     assert.ok(view("builderView").getByText(sessionWod(firstSession)));
-    fireEvent.click(ui.getByRole("button", { name: "Proof" }));
+    openMoreTool({ fireEvent, ui }, "Competition proof");
     const proofOption = view("proofView").getByRole("option", {
       name: new RegExp(
         firstSession.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
@@ -1460,7 +1699,7 @@ test("React Testing Library preserves the active plan when generation is rejecte
   const { cleanup, fireEvent, readState, ui, waitFor } = mounted;
 
   try {
-    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    openMoreTool({ fireEvent, ui }, "Build programme");
     const before = structuredClone(readState());
     fireEvent.click(
       ui.getByRole("button", { name: "Regenerate 8-week programme" }),
@@ -1502,9 +1741,7 @@ test("React Testing Library persists a sparse plan fallback week when switching 
   let persistedState;
 
   try {
-    mounted.fireEvent.click(
-      await mounted.ui.findByRole("button", { name: "Build" }),
-    );
+    openMoreTool(mounted, "Build programme");
     mounted.fireEvent.change(mounted.ui.getByLabelText("Active plan"), {
       target: { value: weekFourPlan.id },
     });
@@ -1517,7 +1754,7 @@ test("React Testing Library persists a sparse plan fallback week when switching 
 
   const reloaded = mountApp({ storedState: persistedState });
   try {
-    await reloaded.ui.findByRole("heading", { name: "Training dashboard" });
+    await reloaded.ui.findByRole("heading", { name: "Today coach" });
     await assertPlanSessionAcrossViews(reloaded, weekFourPlan);
   } finally {
     reloaded.cleanup();
@@ -1540,7 +1777,7 @@ test("React Testing Library repairs a stale selected week when a sparse plan loa
   });
 
   try {
-    await mounted.ui.findByRole("heading", { name: "Training dashboard" });
+    await mounted.ui.findByRole("heading", { name: "Today coach" });
     await assertPlanSessionAcrossViews(mounted, plan);
   } finally {
     mounted.cleanup();
@@ -1565,9 +1802,7 @@ test("React Testing Library selects and reloads a session added to a different s
   let updatedPlan;
 
   try {
-    mounted.fireEvent.click(
-      await mounted.ui.findByRole("button", { name: "Build" }),
-    );
+    openMoreTool(mounted, "Build programme");
     mounted.fireEvent.change(document.querySelector("#customPlanWeek"), {
       target: { value: "5" },
     });
@@ -1598,7 +1833,7 @@ test("React Testing Library selects and reloads a session added to a different s
 
   const reloaded = mountApp({ storedState: persistedState });
   try {
-    await reloaded.ui.findByRole("heading", { name: "Training dashboard" });
+    await reloaded.ui.findByRole("heading", { name: "Today coach" });
     await assertPlanSessionAcrossViews(reloaded, {
       ...updatedPlan,
       sessions: [updatedPlan.sessions[0]],
@@ -1619,9 +1854,7 @@ test("React Testing Library selects the first session added without an active pl
   });
 
   try {
-    mounted.fireEvent.click(
-      await mounted.ui.findByRole("button", { name: "Build" }),
-    );
+    openMoreTool(mounted, "Build programme");
     mounted.fireEvent.change(document.querySelector("#customPlanWeek"), {
       target: { value: "7" },
     });
@@ -1672,9 +1905,7 @@ test("React Testing Library persists the sparse fallback week after deleting the
   let persistedState;
 
   try {
-    mounted.fireEvent.click(
-      await mounted.ui.findByRole("button", { name: "Build" }),
-    );
+    openMoreTool(mounted, "Build programme");
     mounted.fireEvent.click(
       mounted.ui.getByRole("button", { name: "Delete custom plan" }),
     );
@@ -1696,7 +1927,7 @@ test("React Testing Library persists the sparse fallback week after deleting the
 
   const reloaded = mountApp({ storedState: persistedState });
   try {
-    await reloaded.ui.findByRole("heading", { name: "Training dashboard" });
+    await reloaded.ui.findByRole("heading", { name: "Today coach" });
     await assertPlanSessionAcrossViews(reloaded, weekSixPlan);
   } finally {
     reloaded.cleanup();
@@ -1719,9 +1950,7 @@ test("React Testing Library follows a session moved out of the active sparse wee
   });
 
   try {
-    mounted.fireEvent.click(
-      await mounted.ui.findByRole("button", { name: "Build" }),
-    );
+    openMoreTool(mounted, "Build programme");
     mounted.fireEvent.click(
       mounted.view("builderView").getByRole("button", { name: "Edit" }),
     );
@@ -1737,11 +1966,13 @@ test("React Testing Library follows a session moved out of the active sparse wee
       assert.equal(state.plans[0].sessions[0].week, 4);
       assert.equal(state.selectedWeek, 4);
     });
-    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "Plan" }));
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Calendar" }),
+    );
     assert.equal(document.querySelector("#programWeek").value, "4");
     assert.ok(
       mounted
-        .view("programView")
+        .view("calendarView")
         .getByText("AMRAP 11: Move session plan workout"),
     );
     mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "Log" }));
@@ -1781,9 +2012,7 @@ test("React Testing Library falls back after deleting the last session in the se
   });
 
   try {
-    mounted.fireEvent.click(
-      await mounted.ui.findByRole("button", { name: "Build" }),
-    );
+    openMoreTool(mounted, "Build programme");
     mounted.fireEvent.click(
       mounted.view("builderView").getAllByRole("button", { name: "Delete" })[0],
     );
@@ -1820,9 +2049,7 @@ test("React Testing Library renders a valid empty Log state for an empty active 
   });
 
   try {
-    mounted.fireEvent.click(
-      await mounted.ui.findByRole("button", { name: "Build" }),
-    );
+    openMoreTool(mounted, "Build programme");
     mounted.fireEvent.click(
       mounted.view("builderView").getByRole("button", { name: "Delete" }),
     );
@@ -1862,7 +2089,7 @@ test("React Testing Library confirms and fully deletes a custom plan", async () 
     });
 
   try {
-    fireEvent.click(await ui.findByRole("button", { name: "Build" }));
+    openMoreTool({ fireEvent, ui }, "Build programme");
     const deleteButton = ui.getByRole("button", {
       name: "Delete custom plan",
     });
@@ -1875,10 +2102,13 @@ test("React Testing Library confirms and fully deletes a custom plan", async () 
     const saved = readState();
     assert.equal(saved.activePlanId, null);
     assert.equal(activeScores(saved).logs[0].id, "historical-log");
-    assert.match(document.querySelector("#programView").className, /is-active/);
-    assert.ok(view("programView").getByRole("heading", { name: "Programme" }));
+    assert.match(
+      document.querySelector("#calendarView").className,
+      /is-active/,
+    );
+    assert.ok(view("calendarView").getByRole("heading", { name: "Calendar" }));
 
-    fireEvent.click(ui.getByRole("button", { name: "Proof" }));
+    openMoreTool({ fireEvent, ui }, "Competition proof");
     assert.equal(
       ui.queryByRole("option", { name: /Saved canonical session/ }),
       null,
@@ -1914,13 +2144,13 @@ test("React Testing Library migrates legacy custom plans during startup", async 
   });
 
   try {
-    assert.ok(await ui.findByRole("heading", { name: "Training dashboard" }));
+    assert.ok(await ui.findByRole("heading", { name: "Today coach" }));
     const saved = readState();
     assert.equal(Object.hasOwn(saved, "customPlans"), false);
     assert.equal(saved.plans[0].sessions[0].id, "legacy-session");
-    fireEvent.click(ui.getByRole("button", { name: "Plan" }));
-    assert.ok(view("programView").getByText("AMRAP 10: legacy workout"));
-    fireEvent.click(ui.getByRole("button", { name: "Build" }));
+    fireEvent.click(ui.getByRole("button", { name: "Calendar" }));
+    assert.ok(view("calendarView").getByText("AMRAP 10: legacy workout"));
+    openMoreTool({ fireEvent, ui }, "Build programme");
     assert.ok(view("builderView").getByText("AMRAP 10: legacy workout"));
   } finally {
     cleanup();
@@ -1928,24 +2158,32 @@ test("React Testing Library migrates legacy custom plans during startup", async 
 });
 
 test("React Testing Library filters the movement library", async () => {
-  const { cleanup, fireEvent, ui, waitFor } = mountApp();
+  const { cleanup, fireEvent, ui, view, waitFor } = mountApp();
 
   try {
-    fireEvent.click(await ui.findByRole("button", { name: "Learn" }));
-    assert.ok(await ui.findByRole("heading", { name: "Learn the skills" }));
+    openMoreTool({ fireEvent, ui }, "Movement library");
+    const learnView = view("learnView");
+    assert.ok(
+      await learnView.findByRole("heading", { name: "Learn the skills" }),
+    );
 
-    fireEvent.change(ui.getByLabelText("Movement category"), {
+    fireEvent.change(learnView.getByLabelText("Movement category"), {
       target: { value: "Weightlifting" },
     });
     fireEvent.change(
-      ui.getByPlaceholderText("Bar muscle-up, snatch, rope climb"),
+      learnView.getByPlaceholderText("Bar muscle-up, snatch, rope climb"),
       {
         target: { value: "snatch" },
       },
     );
 
-    await waitFor(() => assert.ok(ui.getByRole("heading", { name: "Snatch" })));
-    assert.equal(ui.queryByRole("heading", { name: "Bar muscle-up" }), null);
+    await waitFor(() =>
+      assert.ok(learnView.getByRole("heading", { name: "Snatch" })),
+    );
+    assert.equal(
+      learnView.queryByRole("heading", { name: "Bar muscle-up" }),
+      null,
+    );
   } finally {
     cleanup();
   }
@@ -1956,7 +2194,7 @@ test("React Testing Library rejects zero and negative PR attempts before saving"
 
   try {
     mounted.fireEvent.click(
-      await mounted.ui.findByRole("button", { name: "PRs" }),
+      await mounted.ui.findByRole("button", { name: "Progress" }),
     );
     const result = mounted.ui.getByLabelText("Result");
     const save = mounted.ui.getByRole("button", { name: "Save PR attempt" });
@@ -1976,9 +2214,11 @@ test("React Testing Library rejects zero and negative PR attempts before saving"
 });
 
 test("React Testing Library persists and applies the theme preference", async () => {
-  const { cleanup, fireEvent, ui, waitFor } = mountApp({ prefersDark: false });
+  const mounted = mountApp({ prefersDark: false });
+  const { cleanup, fireEvent, ui, waitFor } = mounted;
 
   try {
+    openMore(mounted);
     const themeSelect = await ui.findByLabelText("Theme preference");
     assert.equal(themeSelect.value, "system");
 
@@ -2021,9 +2261,11 @@ test("React Testing Library persists and applies the theme preference", async ()
 });
 
 test("React Testing Library uses system preference by default", async () => {
-  const { cleanup, ui, waitFor } = mountApp({ prefersDark: true });
+  const mounted = mountApp({ prefersDark: true });
+  const { cleanup, ui, waitFor } = mounted;
 
   try {
+    openMore(mounted);
     const themeSelect = await ui.findByLabelText("Theme preference");
     assert.equal(themeSelect.value, "system");
     await waitFor(() =>
@@ -2035,9 +2277,11 @@ test("React Testing Library uses system preference by default", async () => {
 });
 
 test("React Testing Library shows Supabase setup guidance when sync is not configured", async () => {
-  const { cleanup, ui } = mountApp();
+  const mounted = mountApp();
+  const { cleanup, ui } = mounted;
 
   try {
+    openMore(mounted);
     assert.ok(await ui.findByRole("heading", { name: "Database sync" }));
     assert.ok(ui.getAllByText(/Supabase SDK could not load/).length >= 1);
   } finally {
@@ -2047,9 +2291,11 @@ test("React Testing Library shows Supabase setup guidance when sync is not confi
 
 test("React Testing Library uses bundled Supabase config if the config file is cached or missing", async () => {
   const supabaseMock = createMockSupabase();
-  const { cleanup, ui } = mountApp({ supabaseMock, supabaseConfig: false });
+  const mounted = mountApp({ supabaseMock, supabaseConfig: false });
+  const { cleanup, ui } = mounted;
 
   try {
+    openMore(mounted);
     assert.ok(await ui.findByRole("heading", { name: "Database sync" }));
     assert.ok(ui.getByText("Sign in to sync your private athlete account."));
     assert.ok(ui.getByRole("button", { name: "Email sign-in link" }));
@@ -2071,10 +2317,10 @@ test("React Testing Library migrates legacy profile and programmes into the gues
 
   try {
     await mounted.waitFor(() => {
-      assert.equal(mounted.readState().schemaVersion, 4);
+      assert.equal(mounted.readState().schemaVersion, 5);
     });
     const saved = mounted.readState();
-    assert.equal(saved.schemaVersion, 4);
+    assert.equal(saved.schemaVersion, 5);
     assert.equal(saved.activeScoreOwner, "guest");
     assert.equal(
       saved.athleteStateByOwner.guest.profile.athleteName,
@@ -2110,11 +2356,7 @@ test("React Testing Library lets remote account data win and restores guest data
   const mounted = mountApp({ storedState, supabaseMock });
 
   try {
-    assert.ok(
-      await mounted.ui.findByText(
-        "Profile, programmes, logs, and PRs are syncing.",
-      ),
-    );
+    await waitForSignedIn(mounted, { openAccount: true });
     assert.equal(mounted.ui.getByLabelText("Athlete").value, "Remote Athlete");
     let saved = mounted.readState();
     assert.equal(saved.activeScoreOwner, "user-1");
@@ -2173,11 +2415,7 @@ test("React Testing Library imports guest profile and programmes only after conf
   const mounted = mountApp({ storedState, supabaseMock });
 
   try {
-    assert.ok(
-      await mounted.ui.findByText(
-        "Profile, programmes, logs, and PRs are syncing.",
-      ),
-    );
+    await waitForSignedIn(mounted, { openAccount: true });
     mounted.fireEvent.click(
       mounted.ui.getByRole("button", { name: /Import guest data \(/ }),
     );
@@ -2229,11 +2467,7 @@ test("React Testing Library autosaves signed-in profile changes", async () => {
   const mounted = mountApp({ supabaseMock });
 
   try {
-    assert.ok(
-      await mounted.ui.findByText(
-        "Profile, programmes, logs, and PRs are syncing.",
-      ),
-    );
+    await waitForSignedIn(mounted, { openAccount: true });
     mounted.fireEvent.change(mounted.ui.getByLabelText("Athlete"), {
       target: { value: "After Save" },
     });
@@ -2290,15 +2524,14 @@ test("React Testing Library loads remote Supabase scores for a signed-in user", 
       ],
     },
   });
-  const { cleanup, fireEvent, ui } = mountApp({ supabaseMock });
+  const mounted = mountApp({ supabaseMock });
+  const { cleanup, fireEvent, ui } = mounted;
 
   try {
-    assert.ok(
-      await ui.findByText("Profile, programmes, logs, and PRs are syncing."),
-    );
+    await waitForSignedIn(mounted);
     fireEvent.click(ui.getByRole("button", { name: "Log" }));
     assert.ok(await ui.findByText(/Remote squat/));
-    fireEvent.click(ui.getByRole("button", { name: "PRs" }));
+    fireEvent.click(ui.getByRole("button", { name: "Progress" }));
     assert.ok(await ui.findByText("150 kg"));
   } finally {
     cleanup();
@@ -2311,12 +2544,11 @@ test("React Testing Library saves workout logs through Supabase when signed in",
     session: { user: { id: "user-1", email: "athlete@example.com" } },
     calls,
   });
-  const { cleanup, fireEvent, ui, waitFor } = mountApp({ supabaseMock });
+  const mounted = mountApp({ supabaseMock });
+  const { cleanup, fireEvent, ui, waitFor } = mounted;
 
   try {
-    assert.ok(
-      await ui.findByText("Profile, programmes, logs, and PRs are syncing."),
-    );
+    await waitForSignedIn(mounted);
     fireEvent.click(ui.getByRole("button", { name: "Log" }));
     fireEvent.change(ui.getByLabelText("WOD score"), {
       target: { value: "4 rounds + 8 reps" },
@@ -2384,11 +2616,7 @@ test("React Testing Library does not re-upload a timer already present remotely"
   const mounted = mountApp({ storedState, supabaseMock });
 
   try {
-    assert.ok(
-      await mounted.ui.findByText(
-        "Profile, programmes, logs, and PRs are syncing.",
-      ),
-    );
+    await waitForSignedIn(mounted, { openAccount: true });
     mounted.fireEvent.click(
       mounted.ui.getByRole("button", { name: "Retry account sync" }),
     );
@@ -2456,11 +2684,7 @@ test("React Testing Library reports timer metadata pending on a legacy schema", 
   const mounted = mountApp({ storedState, supabaseMock });
 
   try {
-    assert.ok(
-      await mounted.ui.findByText(
-        "Profile, programmes, logs, and PRs are syncing.",
-      ),
-    );
+    await waitForSignedIn(mounted, { openAccount: true });
     mounted.fireEvent.click(
       mounted.ui.getByRole("button", { name: "Retry account sync" }),
     );
@@ -2524,15 +2748,13 @@ test("React Testing Library isolates signed-in scores from legacy guest scores",
   const { cleanup, fireEvent, readState, ui, waitFor } = mounted;
 
   try {
-    assert.ok(
-      await ui.findByText("Profile, programmes, logs, and PRs are syncing."),
-    );
-    assert.equal(calls.filter((call) => call.type === "select").length, 4);
+    await waitForSignedIn(mounted, { openAccount: true });
+    assert.equal(calls.filter((call) => call.type === "select").length, 6);
     fireEvent.click(ui.getByRole("button", { name: "Log" }));
     assert.ok(await ui.findByText(/Account-only squat/));
     assert.equal(ui.queryByText(/Guest-only squat/), null);
 
-    fireEvent.click(ui.getByRole("button", { name: "Home" }));
+    fireEvent.click(ui.getByRole("button", { name: "More" }));
     assert.ok(ui.getByRole("button", { name: /Import guest data \(/ }));
     fireEvent.click(ui.getByRole("button", { name: "Sign out" }));
     await waitFor(() => {
@@ -2543,7 +2765,7 @@ test("React Testing Library isolates signed-in scores from legacy guest scores",
     assert.equal(ui.queryByText(/Account-only squat/), null);
 
     const saved = readState();
-    assert.equal(saved.schemaVersion, 4);
+    assert.equal(saved.schemaVersion, 5);
     assert.equal(saved.planSchemaVersion, 5);
     assert.equal(Object.hasOwn(saved, "logs"), false);
     assert.equal(saved.scoreDataByOwner.guest.logs[0].id, "guest-log");
@@ -2586,15 +2808,14 @@ test("React Testing Library reloads only the authenticated owner's score bucket"
   const supabaseMock = createMockSupabase({
     session: { user: { id: "user-2", email: "two@example.com" } },
   });
-  const { cleanup, fireEvent, ui } = mountApp({
+  const mounted = mountApp({
     storedState,
     supabaseMock,
   });
+  const { cleanup, fireEvent, ui } = mounted;
 
   try {
-    assert.ok(
-      await ui.findByText("Profile, programmes, logs, and PRs are syncing."),
-    );
+    await waitForSignedIn(mounted);
     fireEvent.click(ui.getByRole("button", { name: "Log" }));
     assert.ok(await ui.findByText(/User two private score/));
     assert.equal(ui.queryByText(/User one private score/), null);
@@ -2652,16 +2873,15 @@ test("React Testing Library does not overwrite an offline PR with stale remote d
       ],
     },
   });
-  const { cleanup, fireEvent, ui } = mountApp({
+  const mounted = mountApp({
     storedState,
     supabaseMock,
   });
+  const { cleanup, fireEvent, ui } = mounted;
 
   try {
-    assert.ok(
-      await ui.findByText("Profile, programmes, logs, and PRs are syncing."),
-    );
-    fireEvent.click(ui.getByRole("button", { name: "PRs" }));
+    await waitForSignedIn(mounted);
+    fireEvent.click(ui.getByRole("button", { name: "Progress" }));
     assert.ok(await ui.findByText("160 kg"));
     assert.equal(ui.queryByText("150 kg"), null);
   } finally {
@@ -2723,12 +2943,10 @@ test("React Testing Library keeps a better remote PR over a stale offline PR", a
   const mounted = mountApp({ storedState, supabaseMock });
 
   try {
-    assert.ok(
-      await mounted.ui.findByText(
-        "Profile, programmes, logs, and PRs are syncing.",
-      ),
+    await waitForSignedIn(mounted);
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Progress" }),
     );
-    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "PRs" }));
     assert.ok(await mounted.ui.findByText("160 kg"));
     const saved = mounted.readState().scoreDataByOwner["user-1"];
     assert.equal(saved.prs.backSquat.value, 160);
@@ -2769,12 +2987,10 @@ test("React Testing Library reconciles an immediate PR save with the canonical r
   const mounted = mountApp({ supabaseMock });
 
   try {
-    assert.ok(
-      await mounted.ui.findByText(
-        "Profile, programmes, logs, and PRs are syncing.",
-      ),
+    await waitForSignedIn(mounted);
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Progress" }),
     );
-    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "PRs" }));
     assert.ok(await mounted.ui.findByText("150 kg"));
 
     mounted.fireEvent.change(mounted.ui.getByLabelText("Result"), {
@@ -2843,12 +3059,10 @@ test("React Testing Library preserves a better standalone local PR during hydrat
   const mounted = mountApp({ storedState, supabaseMock });
 
   try {
-    assert.ok(
-      await mounted.ui.findByText(
-        "Profile, programmes, logs, and PRs are syncing.",
-      ),
+    await waitForSignedIn(mounted);
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Progress" }),
     );
-    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "PRs" }));
     assert.ok(await mounted.ui.findByText("170 kg"));
     assert.equal(
       mounted.readState().scoreDataByOwner["user-1"].prs.backSquat.value,
@@ -2918,11 +3132,7 @@ test("React Testing Library preserves newer local PR metadata when the value tie
   const mounted = mountApp({ storedState, supabaseMock });
 
   try {
-    assert.ok(
-      await mounted.ui.findByText(
-        "Profile, programmes, logs, and PRs are syncing.",
-      ),
-    );
+    await waitForSignedIn(mounted);
     const record = mounted.readState().scoreDataByOwner["user-1"].prs.backSquat;
     assert.equal(record.value, 160);
     assert.equal(record.notes, "Newer local technique note");
@@ -2948,11 +3158,12 @@ test("React Testing Library never uploads local scores before failed hydration s
   const mounted = mountApp({ supabaseMock });
 
   try {
-    assert.ok(
-      await mounted.ui.findByText(
-        "Could not load your private athlete account.",
-      ),
-    );
+    await mounted.waitFor(() => {
+      assert.equal(
+        document.querySelector(".app-shell")?.dataset.syncState,
+        "error",
+      );
+    });
     assert.equal(
       calls.some(
         (call) =>
@@ -2962,6 +3173,10 @@ test("React Testing Library never uploads local scores before failed hydration s
       false,
     );
 
+    openMore(mounted);
+    assert.ok(
+      mounted.ui.getByText("Could not load your private athlete account."),
+    );
     mounted.fireEvent.click(
       mounted.ui.getByRole("button", { name: "Retry account sync" }),
     );
@@ -2995,11 +3210,7 @@ test("React Testing Library ignores a stale initial session after an auth event"
     supabaseMock.emitAuth("SIGNED_IN", {
       user: { id: "user-2", email: "two@example.com" },
     });
-    assert.ok(
-      await mounted.ui.findByText(
-        "Profile, programmes, logs, and PRs are syncing.",
-      ),
-    );
+    await waitForSignedIn(mounted);
 
     initialSession.resolve({
       data: {
@@ -3010,6 +3221,7 @@ test("React Testing Library ignores a stale initial session after an auth event"
     await mounted.waitFor(() =>
       assert.equal(mounted.readState().activeScoreOwner, "user-2"),
     );
+    openMore(mounted);
     assert.ok(mounted.ui.getByText("two@example.com"));
     assert.equal(mounted.ui.queryByText("one@example.com"), null);
   } finally {
@@ -3026,14 +3238,13 @@ test("React Testing Library keeps failed remote workout saves locally for retry"
     calls,
     failUpsertOnce: { workout_logs: 1 },
   });
-  const { cleanup, fireEvent, readState, ui, waitFor } = mountApp({
+  const mounted = mountApp({
     supabaseMock,
   });
+  const { cleanup, fireEvent, readState, ui, waitFor } = mounted;
 
   try {
-    assert.ok(
-      await ui.findByText("Profile, programmes, logs, and PRs are syncing."),
-    );
+    await waitForSignedIn(mounted);
     fireEvent.click(ui.getByRole("button", { name: "Log" }));
     fireEvent.change(ui.getByLabelText("Strength or skill result"), {
       target: { value: "Offline squat survives" },
@@ -3057,7 +3268,7 @@ test("React Testing Library keeps failed remote workout saves locally for retry"
       true,
     );
 
-    fireEvent.click(ui.getByRole("button", { name: "Home" }));
+    fireEvent.click(ui.getByRole("button", { name: "More" }));
     assert.ok(ui.getByText(/Remote sync is pending; retry from Account/));
     fireEvent.click(ui.getByRole("button", { name: "Retry account sync" }));
     assert.ok(

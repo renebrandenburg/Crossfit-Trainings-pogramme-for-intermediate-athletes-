@@ -1,7 +1,7 @@
 {
   "name": "CrossFit Training Programme",
   "short_name": "CrossFit",
-  "description": "An 8-week phone-first CrossFit programme generator, movement library, custom builder, and PR tracker for intermediate athletes.",
+  "description": "A box-aware CrossFit coach with 8-week progression, readiness decisions, structured logging, and PR tracking.",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#f7f8f4",

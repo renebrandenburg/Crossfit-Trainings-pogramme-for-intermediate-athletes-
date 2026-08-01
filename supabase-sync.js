@@ -17,6 +17,11 @@
     "wod_score",
     "timer_result",
     "competition_proof",
+    "training_event_id",
+    "readiness_check_id",
+    "structured_score",
+    "recommendation_snapshot",
+    "rx_status",
     "notes",
     "mobility_done",
     "created_at",
@@ -40,6 +45,29 @@
     "notes",
     "updated_at",
   ].join(",");
+  const TRAINING_EVENT_COLUMNS = [
+    "id",
+    "date",
+    "kind",
+    "status",
+    "session_id",
+    "title",
+    "raw_box_text",
+    "movement_ids",
+    "stimuli",
+    "recommendation",
+    "created_at",
+    "updated_at",
+  ].join(",");
+  const READINESS_CHECK_COLUMNS = [
+    "id",
+    "date",
+    "energy",
+    "soreness",
+    "pain",
+    "available_minutes",
+    "created_at",
+  ].join(",");
   const WORKOUT_METADATA_COLUMNS = new Set([
     "workout_source",
     "difficulty",
@@ -49,6 +77,11 @@
   const OPTIONAL_LOG_COLUMNS = [
     "competition_proof",
     "timer_result",
+    "training_event_id",
+    "readiness_check_id",
+    "structured_score",
+    "recommendation_snapshot",
+    "rx_status",
     ...WORKOUT_METADATA_COLUMNS,
   ];
   const OPTIONAL_LOG_FIELDS = [
@@ -61,6 +94,31 @@
       column: "timer_result",
       property: "timerResult",
       remoteNeedsValue: true,
+    },
+    {
+      column: "training_event_id",
+      property: "trainingEventId",
+      hasValue: Boolean,
+    },
+    {
+      column: "readiness_check_id",
+      property: "readinessCheckId",
+      hasValue: Boolean,
+    },
+    {
+      column: "structured_score",
+      property: "structuredScore",
+      remoteNeedsValue: true,
+    },
+    {
+      column: "recommendation_snapshot",
+      property: "recommendationSnapshot",
+      remoteNeedsValue: true,
+    },
+    {
+      column: "rx_status",
+      property: "rxStatus",
+      hasValue: Boolean,
     },
     {
       column: "workout_source",
@@ -84,12 +142,15 @@
     },
   ];
   const SELECT_PAGE_SIZE = 1000;
-  const ATHLETE_STATE_SCHEMA_VERSION = 1;
+  const ATHLETE_STATE_SCHEMA_VERSION = 2;
   const ATHLETE_STATE_MAX_BYTES = 5 * 1024 * 1024;
   const ATHLETE_STATE_COLUMNS = "user_id,schema_version,state,updated_at";
   const LOWER_IS_BETTER_PR_IDS = new Set(["row1k", "row2k", "run5k", "murph"]);
   const LEGACY_RECORD_UPDATED_AT = "1970-01-01T00:00:00.000Z";
   const WORKOUT_SOURCES = new Set(["app", "box", "custom"]);
+  const TRAINING_EVENT_KINDS = new Set(["app", "box", "rest"]);
+  const TRAINING_EVENT_STATUSES = new Set(["planned", "completed", "skipped"]);
+  const READINESS_SORENESS = new Set(["none", "manageable", "high"]);
   const TRAINING_STIMULI = new Set([
     "squat",
     "hinge",
@@ -226,6 +287,11 @@
       activePlanId: state.activePlanId,
       selectedWeek,
       planSchemaVersion,
+      cycleStartDate:
+        typeof state.cycleStartDate === "string" &&
+        /^\d{4}-\d{2}-\d{2}$/.test(state.cycleStartDate)
+          ? state.cycleStartDate
+          : null,
     };
     const serialized = JSON.stringify(canonical);
     if (new TextEncoder().encode(serialized).length > ATHLETE_STATE_MAX_BYTES) {
@@ -258,7 +324,7 @@
       row.schema_version,
       "Athlete-state schema version",
     );
-    if (schemaVersion !== ATHLETE_STATE_SCHEMA_VERSION) {
+    if (![1, ATHLETE_STATE_SCHEMA_VERSION].includes(schemaVersion)) {
       throw syncError(
         "validate_remote_athlete_state",
         new Error("Athlete-state schema version is unsupported"),
@@ -417,6 +483,21 @@
         "Workout timer result",
         "validate_local_data",
       ),
+      training_event_id: log.trainingEventId || null,
+      readiness_check_id: log.readinessCheckId || null,
+      structured_score: optionalObject(
+        log.structuredScore,
+        "Structured workout score",
+        "validate_local_data",
+      ),
+      recommendation_snapshot: optionalObject(
+        log.recommendationSnapshot,
+        "Recommendation snapshot",
+        "validate_local_data",
+      ),
+      rx_status: ["rx", "scaled", "not_applicable"].includes(log.rxStatus)
+        ? log.rxStatus
+        : null,
       notes: log.notes || null,
       mobility_done: Boolean(log.mobilityDone),
       created_at: requiredString(
@@ -504,6 +585,17 @@
         row.competition_proof,
         "Competition proof",
       ),
+      trainingEventId: row.training_event_id || null,
+      readinessCheckId: row.readiness_check_id || null,
+      structuredScore: optionalObject(
+        row.structured_score,
+        "Structured workout score",
+      ),
+      recommendationSnapshot: optionalObject(
+        row.recommendation_snapshot,
+        "Recommendation snapshot",
+      ),
+      rxStatus: row.rx_status || null,
       notes: row.notes || "",
       mobilityDone: Boolean(row.mobility_done),
       createdAt: requiredString(row.created_at, "Workout creation time"),
@@ -521,6 +613,199 @@
       log.durationMinutes = durationMinutes;
     }
     return log;
+  }
+
+  function trainingEventToRow(event, userId) {
+    assertObject(event, "Training event", "validate_local_data");
+    const kind = requiredString(
+      event.kind,
+      "Training-event kind",
+      "validate_local_data",
+    );
+    const status = requiredString(
+      event.status || "planned",
+      "Training-event status",
+      "validate_local_data",
+    );
+    const date = requiredString(
+      event.date,
+      "Training-event date",
+      "validate_local_data",
+    );
+    const stimuli = Array.isArray(event.stimuli)
+      ? [...new Set(event.stimuli.map(String))]
+      : [];
+    const movementIds = Array.isArray(event.movementIds)
+      ? [...new Set(event.movementIds.map(String).filter(Boolean))]
+      : [];
+    if (
+      !TRAINING_EVENT_KINDS.has(kind) ||
+      !TRAINING_EVENT_STATUSES.has(status) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+      stimuli.some((stimulus) => !TRAINING_STIMULI.has(stimulus))
+    ) {
+      throw syncError(
+        "validate_local_data",
+        new Error("Training-event metadata is invalid"),
+      );
+    }
+    return {
+      id: requiredString(event.id, "Training-event ID", "validate_local_data"),
+      user_id: requiredString(userId, "User ID", "validate_local_data"),
+      date,
+      kind,
+      status,
+      session_id: event.sessionId || null,
+      title: requiredString(
+        event.title || (kind === "rest" ? "Rest day" : "Training"),
+        "Training-event title",
+        "validate_local_data",
+      ),
+      raw_box_text: event.rawBoxText || null,
+      movement_ids: movementIds,
+      stimuli,
+      recommendation: optionalObject(
+        event.recommendation,
+        "Training-event recommendation",
+        "validate_local_data",
+      ),
+      created_at: requiredString(
+        event.createdAt,
+        "Training-event creation time",
+        "validate_local_data",
+      ),
+      updated_at: requiredString(
+        event.updatedAt || event.createdAt,
+        "Training-event update time",
+        "validate_local_data",
+      ),
+    };
+  }
+
+  function rowToTrainingEvent(row) {
+    assertObject(row, "Training event");
+    const kind = requiredString(row.kind, "Training-event kind");
+    const status = requiredString(row.status, "Training-event status");
+    const date = requiredString(row.date, "Training-event date");
+    const stimuli = Array.isArray(row.stimuli) ? row.stimuli.map(String) : [];
+    if (
+      !TRAINING_EVENT_KINDS.has(kind) ||
+      !TRAINING_EVENT_STATUSES.has(status) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+      stimuli.some((stimulus) => !TRAINING_STIMULI.has(stimulus))
+    ) {
+      throw syncError(
+        "validate_remote_data",
+        new Error("Training-event metadata is invalid"),
+      );
+    }
+    return {
+      id: requiredString(row.id, "Training-event ID"),
+      date,
+      kind,
+      status,
+      sessionId: row.session_id || null,
+      title: requiredString(row.title, "Training-event title"),
+      rawBoxText: row.raw_box_text || "",
+      movementIds: Array.isArray(row.movement_ids)
+        ? row.movement_ids.map(String)
+        : [],
+      stimuli,
+      recommendation: optionalObject(
+        row.recommendation,
+        "Training-event recommendation",
+      ),
+      createdAt: requiredString(row.created_at, "Training-event creation time"),
+      updatedAt: requiredString(row.updated_at, "Training-event update time"),
+    };
+  }
+
+  function readinessCheckToRow(checkin, userId) {
+    assertObject(checkin, "Readiness check", "validate_local_data");
+    const energy = requiredFiniteNumber(
+      checkin.energy,
+      "Readiness energy",
+      "validate_local_data",
+    );
+    const soreness = requiredString(
+      checkin.soreness,
+      "Readiness soreness",
+      "validate_local_data",
+    );
+    const availableMinutes = requiredFiniteNumber(
+      checkin.availableMinutes,
+      "Readiness available minutes",
+      "validate_local_data",
+    );
+    const date = requiredString(
+      checkin.date,
+      "Readiness date",
+      "validate_local_data",
+    );
+    if (
+      !Number.isInteger(energy) ||
+      energy < 1 ||
+      energy > 5 ||
+      !READINESS_SORENESS.has(soreness) ||
+      !Number.isInteger(availableMinutes) ||
+      availableMinutes < 15 ||
+      availableMinutes > 180 ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(date)
+    ) {
+      throw syncError(
+        "validate_local_data",
+        new Error("Readiness metadata is invalid"),
+      );
+    }
+    return {
+      id: requiredString(checkin.id, "Readiness ID", "validate_local_data"),
+      user_id: requiredString(userId, "User ID", "validate_local_data"),
+      date,
+      energy,
+      soreness,
+      pain: Boolean(checkin.pain),
+      available_minutes: availableMinutes,
+      created_at: requiredString(
+        checkin.createdAt,
+        "Readiness creation time",
+        "validate_local_data",
+      ),
+    };
+  }
+
+  function rowToReadinessCheck(row) {
+    assertObject(row, "Readiness check");
+    const energy = requiredFiniteNumber(row.energy, "Readiness energy");
+    const soreness = requiredString(row.soreness, "Readiness soreness");
+    const availableMinutes = requiredFiniteNumber(
+      row.available_minutes,
+      "Readiness available minutes",
+    );
+    const date = requiredString(row.date, "Readiness date");
+    if (
+      !Number.isInteger(energy) ||
+      energy < 1 ||
+      energy > 5 ||
+      !READINESS_SORENESS.has(soreness) ||
+      !Number.isInteger(availableMinutes) ||
+      availableMinutes < 15 ||
+      availableMinutes > 180 ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(date)
+    ) {
+      throw syncError(
+        "validate_remote_data",
+        new Error("Readiness metadata is invalid"),
+      );
+    }
+    return {
+      id: requiredString(row.id, "Readiness ID"),
+      date,
+      energy,
+      soreness,
+      pain: Boolean(row.pain),
+      availableMinutes,
+      createdAt: requiredString(row.created_at, "Readiness creation time"),
+    };
   }
 
   function prAttemptToRow(attempt, userId) {
@@ -752,6 +1037,19 @@
     );
   }
 
+  async function selectOptionalRows(client, table, columns, operation) {
+    const result = await selectPaginatedRows(client, table, columns, operation);
+    if (
+      result?.error &&
+      ["42P01", "42703", "PGRST204", "PGRST205"].includes(
+        String(result.error.code || ""),
+      )
+    ) {
+      return { data: [], error: null };
+    }
+    return result;
+  }
+
   async function savePrAttemptAtomic(client, attempt, currentPrs, userId) {
     const { user_id: _attemptUserId, ...attemptPayload } = prAttemptToRow(
       attempt,
@@ -835,15 +1133,33 @@
         await assertNoError(await client.auth.signOut());
       },
       async loadUserData() {
-        const [logsResult, attemptsResult, prsResult] = await Promise.all([
+        const [
+          logsResult,
+          attemptsResult,
+          prsResult,
+          trainingEventsResult,
+          readinessChecksResult,
+        ] = await Promise.all([
           selectCompatibleLogs(client),
-          selectPaginatedRows(
+          selectOptionalRows(
             client,
             "pr_attempts",
             PR_ATTEMPT_COLUMNS,
             "load_pr_attempts",
           ),
           client.from("personal_records").select(PERSONAL_RECORD_COLUMNS),
+          selectOptionalRows(
+            client,
+            "training_events",
+            TRAINING_EVENT_COLUMNS,
+            "load_training_events",
+          ),
+          selectOptionalRows(
+            client,
+            "readiness_checks",
+            READINESS_CHECK_COLUMNS,
+            "load_readiness_checks",
+          ),
         ]);
 
         return {
@@ -852,6 +1168,14 @@
             rowToPrAttempt,
           ),
           prs: rowsToPrs(assertNoError(prsResult, "load_personal_records")),
+          trainingEvents: assertNoError(
+            trainingEventsResult,
+            "load_training_events",
+          ).map(rowToTrainingEvent),
+          readinessChecks: assertNoError(
+            readinessChecksResult,
+            "load_readiness_checks",
+          ).map(rowToReadinessCheck),
         };
       },
       async loadAthleteState(userId) {
@@ -893,9 +1217,65 @@
           ),
         };
       },
+      async deleteLog(logId, userId) {
+        await assertNoError(
+          await client
+            .from("workout_logs")
+            .delete()
+            .eq(
+              "user_id",
+              requiredString(userId, "User ID", "delete_workout_log"),
+            )
+            .eq(
+              "id",
+              requiredString(logId, "Workout ID", "delete_workout_log"),
+            ),
+          "delete_workout_log",
+        );
+      },
       async clearLogs() {
         await assertNoError(
           await client.from("workout_logs").delete().neq("id", ""),
+        );
+      },
+      async saveTrainingEvent(event, userId) {
+        const row = trainingEventToRow(event, userId);
+        const result = await client
+          .from("training_events")
+          .upsert(row)
+          .select(TRAINING_EVENT_COLUMNS)
+          .single();
+        return rowToTrainingEvent(assertNoError(result, "save_training_event"));
+      },
+      async deleteTrainingEvent(eventId, userId) {
+        await assertNoError(
+          await client
+            .from("training_events")
+            .delete()
+            .eq(
+              "user_id",
+              requiredString(userId, "User ID", "delete_training_event"),
+            )
+            .eq(
+              "id",
+              requiredString(
+                eventId,
+                "Training-event ID",
+                "delete_training_event",
+              ),
+            ),
+          "delete_training_event",
+        );
+      },
+      async saveReadinessCheck(checkin, userId) {
+        const row = readinessCheckToRow(checkin, userId);
+        const result = await client
+          .from("readiness_checks")
+          .upsert(row)
+          .select(READINESS_CHECK_COLUMNS)
+          .single();
+        return rowToReadinessCheck(
+          assertNoError(result, "save_readiness_check"),
         );
       },
       async savePrAttempt(attempt, currentPrs, userId) {
@@ -905,6 +1285,14 @@
         assertHydratedRemoteIndex(remoteState, userId);
         const logs = unsyncedById(state.logs, remoteState.logs);
         const attempts = unsyncedById(state.prAttempts, remoteState.prAttempts);
+        const trainingEvents = unsyncedById(
+          state.trainingEvents,
+          remoteState.trainingEvents,
+        );
+        const readinessChecks = unsyncedById(
+          state.readinessChecks,
+          remoteState.readinessChecks,
+        );
         const recordsCoveredByAttempts = new Set(
           attempts
             .filter(
@@ -959,6 +1347,30 @@
             await savePrAttemptAtomic(client, attempt, state.prs, userId);
           }
         }
+        if (trainingEvents.length) {
+          await assertNoError(
+            await client
+              .from("training_events")
+              .upsert(
+                trainingEvents.map((event) =>
+                  trainingEventToRow(event, userId),
+                ),
+              ),
+            "upload_training_events",
+          );
+        }
+        if (readinessChecks.length) {
+          await assertNoError(
+            await client
+              .from("readiness_checks")
+              .upsert(
+                readinessChecks.map((checkin) =>
+                  readinessCheckToRow(checkin, userId),
+                ),
+              ),
+            "upload_readiness_checks",
+          );
+        }
         if (prs.length) {
           for (const [metricId, record] of prs) {
             await savePersonalRecordAtomic(client, metricId, record, userId);
@@ -969,6 +1381,8 @@
           logs: logs.length,
           prAttempts: attempts.length,
           prs: prs.length,
+          trainingEvents: trainingEvents.length,
+          readinessChecks: readinessChecks.length,
           competitionProofPending,
           timerResultPending,
           workoutMetadataPending,
@@ -987,11 +1401,15 @@
     mergePrs,
     personalRecordToRow,
     prAttemptToRow,
+    readinessCheckToRow,
     rowToLog,
     rowToAthleteState,
     rowToPersonalRecord,
     rowToPrAttempt,
+    rowToReadinessCheck,
+    rowToTrainingEvent,
     rowsToPrs,
+    trainingEventToRow,
     unsyncedById,
     validateAthleteState,
   };
