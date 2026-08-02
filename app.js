@@ -451,6 +451,7 @@ const {
 } = MOVEMENT_CATALOG_API;
 
 const {
+  DEFAULT_GYMNASTICS_PRESCRIPTION,
   TRAINING_BLOCK_SCHEMA_VERSION,
   finalizeGeneratedTraining,
   freeTextTrainingIssues,
@@ -5958,7 +5959,9 @@ function weaknessAccessory(weakness, week, olympicFamily = "clean") {
     (movementId) =>
       getMovementDefinition(movementId)?.displayName || movementId,
   );
-  const olympicAccessory = `${reps}: 3 ${pull} + 20-second ${hold}`;
+  const referenceLift =
+    olympicFamily === "snatch" ? "snatch" : "clean and jerk";
+  const olympicAccessory = `${reps}: 3 ${pull} + 20-sec ${hold} at 35–45% of ${referenceLift} 1RM or RPE 5–6. Rest 60–90 sec.`;
   if (weakness === "olympic") {
     traceGenerationStage("4. Accessory-block assembly", {
       weakness,
@@ -5983,21 +5986,21 @@ function weaknessAccessory(weakness, week, olympicFamily = "clean") {
 function gymnasticsSkillBlock(weakness, week) {
   if (weakness === "muscleup")
     return week >= 6
-      ? "Muscle-up practice: 6-10 quality singles, full rest"
-      : "Muscle-up base: transition drill, dip strength, slow negative";
+      ? "Gymnastics — every 2:00 for 6 rounds: 1–3 quality muscle-up attempts. Rest the remaining time. Scale to 3 low-bar transitions + 5 deep straight-bar dips."
+      : "Gymnastics — 3 rounds: 3 low-bar transitions, 5 deep straight-bar dips, 3 slow negatives. Rest 60 sec. Scale dips with band assistance.";
   if (weakness === "t2b")
     return week >= 6
-      ? "Toes-to-bar EMOM 8: 6-9 reps, never to failure"
-      : "Toes-to-bar base: kip swings, knee raises, hollow rocks";
+      ? "Gymnastics — EMOM 8: 6–9 toes-to-bar. Scale to 8–12 hanging knee raises."
+      : "Gymnastics — 3 rounds: 8 kip swings, 8–12 hanging knee raises, 20-sec hollow hold. Rest 60 sec. Scale hanging work to 8–12 dead bugs per side.";
   if (weakness === "pulling")
     return week >= 6
-      ? "Pulling density: 8 min submax pull-up sets"
-      : "Pulling base: strict pulls, ring rows, active hangs";
+      ? "Gymnastics — every 2:00 for 4 rounds: 5–8 strict pull-ups + 20-sec active hang. Rest the remaining time. Scale pull-ups to 8–12 ring rows."
+      : "Gymnastics — 3 rounds: 5–8 strict pull-ups, 8–12 ring rows, 20-sec active hang. Rest 60 sec. Scale strict pull-ups to 8–12 ring rows.";
   if (weakness === "runningBodyweight")
     return week >= 6
-      ? "Bodyweight density: 8 min of submax push-up, pull-up, and air-squat sets"
-      : "Bodyweight base: strict push-ups, ring rows, air squats, and hollow holds";
-  return "Gymnastics skill: hollow and arch control, strict pulling, and midline strength";
+      ? "Gymnastics — EMOM 8: odd minutes 8–12 push-ups; even minutes 10–15 air squats. Scale push-ups to an elevated surface."
+      : "Gymnastics — 3 rounds: 8–12 strict push-ups, 8–12 ring rows, 12–15 air squats, 20-sec hollow hold. Rest 60 sec. Scale push-ups to an elevated surface.";
+  return DEFAULT_GYMNASTICS_PRESCRIPTION;
 }
 
 function weaknessMobility(weakness) {

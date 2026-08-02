@@ -1081,8 +1081,8 @@ test("React Testing Library creates a two-day plan and counts a box workout sepa
   }
 });
 
-test("React Testing Library persists exact Olympic prescriptions", async () => {
-  const { cleanup, fireEvent, readState, ui, waitFor } = mountApp();
+test("React renders complete strength and skill prescriptions", async () => {
+  const { cleanup, dom, fireEvent, readState, ui, waitFor } = mountApp();
 
   try {
     openMoreTool({ fireEvent, ui }, "Build programme");
@@ -1135,7 +1135,7 @@ test("React Testing Library persists exact Olympic prescriptions", async () => {
       assert.ok(
         plan.sessions.every(
           (session) =>
-            session.trainingBlockSchemaVersion === 2 &&
+            session.trainingBlockSchemaVersion === 3 &&
             session.trainingBlocks.every(
               (trainingBlock) =>
                 trainingBlock.durationMinutes > 0 &&
@@ -1157,6 +1157,29 @@ test("React Testing Library persists exact Olympic prescriptions", async () => {
         ),
       );
       assert.ok(ui.getAllByText(/35–45% of snatch 1RM or RPE 5–6/).length > 0);
+      const bulletText = Array.from(
+        dom.window.document.querySelectorAll(".segment li"),
+        (item) => item.textContent.trim(),
+      );
+      assert.equal(
+        bulletText.includes(
+          "Gymnastics skill: hollow and arch control, strict pulling, and midline strength",
+        ),
+        false,
+      );
+      assert.equal(
+        bulletText.includes(
+          "3 sets: 3 tall snatch pulls + 20-second overhead hold",
+        ),
+        false,
+      );
+      const renderedText = bulletText.join(" ");
+      assert.match(renderedText, /3 rounds/);
+      assert.match(renderedText, /20-second hollow hold/);
+      assert.match(renderedText, /5-8 strict pull-ups/);
+      assert.match(renderedText, /Scaling:.*ring rows/);
+      assert.match(renderedText, /35–45% of snatch 1RM or RPE 5–6/);
+      assert.match(renderedText, /Rest: 60–90 seconds after each set/);
       assert.deepEqual(
         new Set(plan.sessions.map((session) => session.olympicFamily)),
         new Set(["clean", "snatch"]),

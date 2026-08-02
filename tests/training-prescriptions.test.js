@@ -127,6 +127,23 @@ test("free-text tall snatch accessory cannot pass without load and rest", () => 
   assert.deepEqual(prescriptions.freeTextTrainingIssues(repaired), []);
 });
 
+test("free-text gymnastics theme is rejected and repaired into executable work", () => {
+  const block =
+    "Gymnastics skill: hollow and arch control, strict pulling, and midline strength";
+
+  const validation = prescriptions.freeTextTrainingIssues(block);
+  assert.ok(validation.some((issue) => issue.code === "VAGUE_SKILL_BLOCK"));
+
+  const repaired = prescriptions.repairFreeTextTraining(block);
+  assert.notEqual(repaired, block);
+  assert.match(repaired, /3 rounds/);
+  assert.match(repaired, /20-sec hollow hold/);
+  assert.match(repaired, /5–8 strict pull-ups/);
+  assert.match(repaired, /Rest 60 sec/);
+  assert.match(repaired, /Scale pull-ups to 8–12 ring rows/);
+  assert.deepEqual(prescriptions.freeTextTrainingIssues(repaired), []);
+});
+
 test("vague gymnastics intent fails while a complete block passes", () => {
   const vague = gymnasticsFixture({
     trainingIntent: [

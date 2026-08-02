@@ -15,8 +15,10 @@
     resolveMovementId,
   } = catalogApi;
 
-  const TRAINING_BLOCK_SCHEMA_VERSION = 2;
+  const TRAINING_BLOCK_SCHEMA_VERSION = 3;
   const GENERATION_TRACE_KEY = "__FORGE_HOUR_GENERATION_TRACE__";
+  const DEFAULT_GYMNASTICS_PRESCRIPTION =
+    "Gymnastics — 3 rounds: 20-sec hollow hold, 20-sec arch hold, 5–8 strict pull-ups, 8–12 hanging knee raises. Rest 60 sec. Scale pull-ups to 8–12 ring rows.";
   const VAGUE_PATTERN =
     /(?:^|\b)(?:work on|practice|focus on|develop|base|control|prep|rehearsal|technique density)(?:\b|:)/i;
   const AMBIGUOUS_PATTERN =
@@ -25,6 +27,13 @@
     /(?:\b\d+(?:\.\d+)?\s*(?:kg|lb)\b|\b\d+(?:\.\d+)?(?:\s*[–-]\s*\d+(?:\.\d+)?)?%\s*(?:of\s+[^;—,.]+\s+1RM)?|\bRPE\s*\d+(?:\s*[–-]\s*\d+)?|\bRIR\s*\d+|\b\d+\s*RIR|\bempty\s+(?:training\s+)?bar\b|\bPVC\b)/i;
   const MEASURABLE_TEXT_REST_PATTERN =
     /\brest\b[^.;]*(?:\d+(?:\s*[–-]\s*\d+)?\s*(?:seconds?|secs?|minutes?|mins?)|\d+:\d{2})/i;
+  const GYMNASTICS_FORMAT_PATTERN =
+    /(?:\b\d+\s+(?:sets?|rounds?)\b|\bEMOM\s*\d+\b|\bevery\s+\d+(?::\d{2})?\b)/i;
+  const GYMNASTICS_VOLUME_PATTERN =
+    /(?:\b\d+(?:\s*[–-]\s*\d+)?(?:-sec|\s+(?:reps?|secs?|seconds?))\b|\b\d+(?:\s*[–-]\s*\d+)?\s+(?:quality\s+)?(?:muscle-ups?|transitions?|dips?|negatives?|toes-to-bar|kip swings?|hanging knee raises?|dead bugs?|strict pull-ups?|ring rows?|push-ups?|air squats?|hollow holds?|arch holds?))/i;
+  const GYMNASTICS_REST_PATTERN =
+    /(?:\brest\b|\bEMOM\b|\bevery\s+\d+(?::\d{2})?\b)/i;
+  const GYMNASTICS_SCALING_PATTERN = /\bscale\b/i;
 
   function traceGenerationStage(stage, strengthAndSkillBlock) {
     if (typeof window === "undefined") return strengthAndSkillBlock;
@@ -409,6 +418,48 @@
       (movement) => movement.loadRequired,
     );
     const issues = [];
+    if (/^Gymnastics(?:\s+skill)?\s*[:—-]/i.test(text)) {
+      if (!GYMNASTICS_FORMAT_PATTERN.test(text)) {
+        issues.push(
+          issue(
+            blockId,
+            "error",
+            "VAGUE_SKILL_BLOCK",
+            "Gymnastics free text needs a sets, rounds, EMOM, or interval format.",
+          ),
+        );
+      }
+      if (!GYMNASTICS_VOLUME_PATTERN.test(text)) {
+        issues.push(
+          issue(
+            blockId,
+            "error",
+            "MISSING_VOLUME",
+            "Gymnastics free text needs measurable reps or duration.",
+          ),
+        );
+      }
+      if (!GYMNASTICS_REST_PATTERN.test(text)) {
+        issues.push(
+          issue(
+            blockId,
+            "error",
+            "MISSING_REST",
+            "Gymnastics free text needs rest or an interval that controls rest.",
+          ),
+        );
+      }
+      if (!GYMNASTICS_SCALING_PATTERN.test(text)) {
+        issues.push(
+          issue(
+            blockId,
+            "error",
+            "MISSING_SCALING",
+            "Gymnastics free text needs a scaling option.",
+          ),
+        );
+      }
+    }
     if (loadedMovements.length && !MEASURABLE_TEXT_LOAD_PATTERN.test(text)) {
       issues.push(
         issue(
@@ -442,6 +493,9 @@
     const text = String(value || "").trim();
     const issues = freeTextTrainingIssues(text);
     if (!issues.length) return text;
+    if (/^Gymnastics(?:\s+skill)?\s*[:—-]/i.test(text)) {
+      return DEFAULT_GYMNASTICS_PRESCRIPTION;
+    }
     const additions = [];
     if (issues.some((item) => item.code === "MISSING_LOAD")) {
       const referenceLift = /snatch|overhead hold/i.test(text)
@@ -472,7 +526,7 @@
       );
     }
     if (
-      /gymnastics skill|hollow and arch|muscle-up|toes-to-bar|pulling (?:base|density)|bodyweight (?:base|density)|handstand line|strict pull-up volume|chest-to-bar density|weakest RX category/i.test(
+      /^Gymnastics\s*[—:-]|gymnastics skill|hollow and arch|muscle-up|toes-to-bar|pulling (?:base|density)|bodyweight (?:base|density)|handstand line|strict pull-up volume|chest-to-bar density|weakest RX category/i.test(
         text,
       )
     ) {
@@ -980,6 +1034,7 @@
   }
 
   const api = Object.freeze({
+    DEFAULT_GYMNASTICS_PRESCRIPTION,
     TRAINING_BLOCK_SCHEMA_VERSION,
     applyWorkoutLoadGuidance,
     buildGeneratedTrainingBlocks,
