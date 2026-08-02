@@ -300,11 +300,13 @@ function mountApp({
   }
 
   const localStateApi = freshRequire("../local-state-store.js");
+  const achievementApi = freshRequire("../achievements.js");
   dom.window.ForgeHourLocalState = {
     ...localStateApi,
     createLocalStateStore: (storage) =>
       localStateApi.createLocalStateStore(storage, { legacySnapshotDelay: 0 }),
   };
+  dom.window.ForgeHourAchievements = achievementApi;
   freshRequire("../app.js");
   freshRequire("../supabase-sync.js");
   dom.window.ForgeHour = global.ForgeHour;
@@ -610,13 +612,14 @@ async function assertPlanSessionAcrossViews(mounted, plan) {
 
 test("React Testing Library renders the dashboard and bottom navigation", async () => {
   const mounted = mountApp();
-  const { cleanup, fireEvent, ui } = mounted;
+  const { cleanup, fireEvent, ui, view } = mounted;
 
   try {
     assert.ok(await ui.findByRole("heading", { name: "Today coach" }));
     assert.ok(ui.getByText("Today's decision"));
     assert.ok(ui.getByRole("button", { name: "Start and log workout" }));
     assert.ok(ui.getByText(/Movement coaching \(/));
+    assert.ok(ui.getByRole("heading", { name: "Achievements" }));
     assert.ok(ui.getByRole("button", { name: "Today" }));
     assert.ok(ui.getByRole("button", { name: "Calendar" }));
     assert.ok(ui.getByRole("button", { name: "Log" }));
@@ -627,7 +630,18 @@ test("React Testing Library renders the dashboard and bottom navigation", async 
       5,
     );
     fireEvent.click(ui.getByRole("button", { name: "Progress" }));
-    assert.ok(await ui.findByRole("heading", { name: "RX readiness" }));
+    const progressView = view("progressView");
+    assert.ok(
+      await progressView.findByRole("heading", { name: "Your achievements" }),
+    );
+    assert.ok(progressView.getByRole("heading", { name: "Consistency" }));
+    assert.ok(progressView.getByRole("heading", { name: "Skills" }));
+    assert.ok(
+      await progressView.findByRole("heading", {
+        name: "RX readiness",
+        level: 3,
+      }),
+    );
     assert.ok(ui.getByText("RX Level"));
     assert.equal(
       ui
@@ -657,6 +671,106 @@ test("React Testing Library renders the dashboard and bottom navigation", async 
     );
   } finally {
     cleanup();
+  }
+});
+
+test("React unlocks a first bar muscle-up once and persists it across reload", async () => {
+  const first = mountApp();
+  let savedState;
+
+  try {
+    await first.waitFor(() => {
+      const state = first.readState();
+      assert.ok(
+        activeScores(state).achievementState.acknowledgedIds.includes(
+          "rx-contender",
+        ),
+      );
+    });
+    openMore(first);
+    first.fireEvent.change(first.ui.getByLabelText("Unbroken bar muscle-ups"), {
+      target: { value: "1" },
+    });
+    first.fireEvent.click(
+      first.ui.getByRole("button", { name: "Save assessment" }),
+    );
+
+    await first.waitFor(() => {
+      assert.ok(
+        first.ui.getByText("Achievement unlocked: First Bar Muscle-Up"),
+      );
+      const achievementState = activeScores(first.readState()).achievementState;
+      assert.ok(achievementState.earned["first-bar-muscle-up"]);
+      assert.ok(
+        achievementState.acknowledgedIds.includes("first-bar-muscle-up"),
+      );
+    });
+    savedState = first.readState();
+  } finally {
+    first.cleanup();
+  }
+
+  const reloaded = mountApp({ storedState: savedState });
+  try {
+    reloaded.fireEvent.click(
+      reloaded.ui.getByRole("button", { name: "Progress" }),
+    );
+    assert.ok(
+      await reloaded.view("progressView").findByRole("heading", {
+        name: "First Bar Muscle-Up",
+      }),
+    );
+    assert.equal(
+      reloaded.ui.queryByText("Achievement unlocked: First Bar Muscle-Up"),
+      null,
+    );
+  } finally {
+    reloaded.cleanup();
+  }
+});
+
+test("React retroactively unlocks consistency badges from existing logs", async () => {
+  const planState = canonicalPlanState({
+    logs: [
+      {
+        id: "retro-1",
+        date: "2026-07-30",
+        createdAt: "2026-07-30T10:00:00.000Z",
+      },
+      {
+        id: "retro-2",
+        date: "2026-07-31",
+        createdAt: "2026-07-31T10:00:00.000Z",
+      },
+      {
+        id: "retro-3",
+        date: "2026-08-01",
+        createdAt: "2026-08-01T10:00:00.000Z",
+      },
+    ],
+  });
+  const mounted = mountApp({
+    storedState: {
+      schemaVersion: 5,
+      ...planState,
+      profile: cloneDefaultProfile(),
+      prs: {},
+      prAttempts: [],
+    },
+  });
+
+  try {
+    await mounted.waitFor(() => {
+      const achievementState = activeScores(
+        mounted.readState(),
+      ).achievementState;
+      assert.ok(achievementState.earned["first-session"]);
+      assert.ok(achievementState.earned["training-habit"]);
+    });
+    assert.ok(mounted.ui.getByRole("heading", { name: "Training Habit" }));
+    assert.equal(mounted.readState().schemaVersion, 6);
+  } finally {
+    mounted.cleanup();
   }
 });
 
@@ -910,11 +1024,16 @@ test("React Testing Library keeps cleared time benchmarks as test-needed values"
 
 test("React Testing Library updates RX guidance after assessment changes", async () => {
   const mounted = mountApp();
-  const { cleanup, fireEvent, ui, waitFor } = mounted;
+  const { cleanup, fireEvent, ui, view, waitFor } = mounted;
 
   try {
     fireEvent.click(ui.getByRole("button", { name: "Progress" }));
-    assert.ok(await ui.findByRole("heading", { name: "RX readiness" }));
+    assert.ok(
+      await view("progressView").findByRole("heading", {
+        name: "RX readiness",
+        level: 3,
+      }),
+    );
     const overall = ui.getByRole("progressbar", { name: "Overall RX Level" });
     const initialLevel = overall.getAttribute("aria-valuenow");
     assert.ok(ui.getByText(/Use frequent submaximal sets/));
@@ -2366,10 +2485,10 @@ test("React Testing Library migrates legacy profile and programmes into the gues
 
   try {
     await mounted.waitFor(() => {
-      assert.equal(mounted.readState().schemaVersion, 5);
+      assert.equal(mounted.readState().schemaVersion, 6);
     });
     const saved = mounted.readState();
-    assert.equal(saved.schemaVersion, 5);
+    assert.equal(saved.schemaVersion, 6);
     assert.equal(saved.activeScoreOwner, "guest");
     assert.equal(
       saved.athleteStateByOwner.guest.profile.athleteName,
@@ -2584,6 +2703,66 @@ test("React Testing Library loads remote Supabase scores for a signed-in user", 
     assert.ok(await ui.findByText("150 kg"));
   } finally {
     cleanup();
+  }
+});
+
+test("React Testing Library preserves local achievements during remote score hydration", async () => {
+  const storedState = {
+    ...canonicalPlanState(),
+    schemaVersion: 6,
+    activeScoreOwner: "user-1",
+    scoreDataByOwner: {
+      guest: { logs: [], prs: {}, prAttempts: [] },
+      "user-1": {
+        logs: [],
+        prs: {},
+        prAttempts: [],
+        achievementState: {
+          version: 1,
+          earned: { "rx-ready": "2026-07-01T10:00:00.000Z" },
+          acknowledgedIds: ["rx-ready"],
+          lastEvaluatedAt: "2026-07-01T10:00:00.000Z",
+        },
+      },
+    },
+  };
+  delete storedState.logs;
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    remote: {
+      workout_logs: [
+        {
+          id: "hydrated-log",
+          date: "2026-07-08",
+          week: 1,
+          day_id: "day1",
+          day_title: "Hydrated workout",
+          readiness: "green",
+          created_at: "2026-07-08T10:00:00.000Z",
+        },
+      ],
+    },
+  });
+  const mounted = mountApp({ storedState, supabaseMock });
+
+  try {
+    await waitForSignedIn(mounted);
+    await mounted.waitFor(() => {
+      const scores = mounted.readState().scoreDataByOwner["user-1"];
+      assert.equal(scores.logs[0].id, "hydrated-log");
+      assert.ok(scores.achievementState.earned["rx-ready"]);
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Progress" }),
+    );
+    const rxReady = mounted
+      .view("progressView")
+      .getAllByRole("article")
+      .find((article) => article.textContent.includes("RX Ready"));
+    assert.ok(rxReady);
+    assert.match(rxReady.textContent, /Earned/);
+  } finally {
+    mounted.cleanup();
   }
 });
 
@@ -2814,7 +2993,7 @@ test("React Testing Library isolates signed-in scores from legacy guest scores",
     assert.equal(ui.queryByText(/Account-only squat/), null);
 
     const saved = readState();
-    assert.equal(saved.schemaVersion, 5);
+    assert.equal(saved.schemaVersion, 6);
     assert.equal(saved.planSchemaVersion, 5);
     assert.equal(Object.hasOwn(saved, "logs"), false);
     assert.equal(saved.scoreDataByOwner.guest.logs[0].id, "guest-log");

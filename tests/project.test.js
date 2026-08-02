@@ -127,6 +127,7 @@ test("HTML mounts the React app and references the required assets", () => {
     html,
     /<script src="\.\/local-state-store\.js" defer><\/script>/,
   );
+  assert.match(html, /<script src="\.\/achievements\.js" defer><\/script>/);
   assert.match(html, /<script src="\.\/movement-catalog\.js" defer><\/script>/);
   assert.match(
     html,
@@ -226,6 +227,7 @@ test("service worker precaches the app and only the primary CDN runtimes", async
     "build-info.js",
     "styles.css",
     "local-state-store.js",
+    "achievements.js",
     "movement-catalog.js",
     "training-prescriptions.js",
     "app.js",
