@@ -17,6 +17,16 @@ interface Window {
       save: (state: any, previousState?: any) => boolean;
     };
   };
+  ForgeHourAchievements?: {
+    ACHIEVEMENT_DEFINITIONS: ReadonlyArray<any>;
+    evaluateAchievementProgress: (input?: any) => ReadonlyArray<any>;
+    normalizeAchievementState: (value?: any) => any;
+    reconcileAchievementState: (
+      previousState: any,
+      progress: ReadonlyArray<any>,
+      evaluatedAt?: string,
+    ) => { state: any; newlyEarnedIds: string[] };
+  };
   ForgeHour: any;
   ForgeHourSync: any;
   ForgeHourSupabaseConfig?: {
