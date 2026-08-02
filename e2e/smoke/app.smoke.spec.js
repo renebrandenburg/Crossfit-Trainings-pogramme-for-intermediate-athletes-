@@ -68,6 +68,45 @@ test("@critical Today to Log to Progress remains local-first while offline", asy
   await context.setOffline(false);
 });
 
+test("@critical skill achievement unlocks once and survives a reload", async ({
+  page,
+}) => {
+  const app = new AppShell(page);
+  await app.open();
+
+  await app.navigate("More");
+  await page.getByLabel("Unbroken bar muscle-ups").fill("1");
+  await page.getByRole("button", { name: "Save assessment" }).click();
+  await expect(
+    page.getByText("Achievement unlocked: First Bar Muscle-Up"),
+  ).toBeVisible();
+
+  await app.navigate("Progress");
+  const progress = page.locator("#progressView");
+  const badge = progress
+    .getByRole("article")
+    .filter({ hasText: "First Bar Muscle-Up" });
+  await expect(badge).toContainText("Earned");
+
+  await page.reload();
+  await page
+    .getByRole("heading", {
+      name: "CrossFit Training Programme",
+      level: 1,
+    })
+    .waitFor();
+  await app.navigate("Progress");
+  await expect(
+    page
+      .locator("#progressView")
+      .getByRole("article")
+      .filter({ hasText: "First Bar Muscle-Up" }),
+  ).toContainText("Earned");
+  await expect(
+    page.getByText("Achievement unlocked: First Bar Muscle-Up"),
+  ).toHaveCount(0);
+});
+
 test("@smoke authenticated state is reusable", async ({ page }) => {
   const app = new AppShell(page);
   const account = new AccountPage(page);

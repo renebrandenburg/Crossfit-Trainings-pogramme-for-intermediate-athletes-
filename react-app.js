@@ -5,12 +5,20 @@
   const api = window.ForgeHour;
   const syncApi = window.ForgeHourSync;
   const localStateApi = window.ForgeHourLocalState;
+  const achievementApi = window.ForgeHourAchievements;
   const ReactRuntime = window.React;
   const ReactDOMRuntime = window.ReactDOM;
 
   if (!rootElement) return;
 
-  if (!api || !syncApi || !localStateApi || !ReactRuntime || !ReactDOMRuntime) {
+  if (
+    !api ||
+    !syncApi ||
+    !localStateApi ||
+    !achievementApi ||
+    !ReactRuntime ||
+    !ReactDOMRuntime
+  ) {
     rootElement.innerHTML =
       '<div class="app-shell"><section class="panel"><h1>CrossFit Training Programme</h1><p class="muted-copy">React could not load. Check your connection and reload the app.</p></section></div>';
     return;
@@ -76,6 +84,12 @@
 
   const { createSupabaseStore, mergeById, mergePrs } = syncApi;
   const { createLocalStateStore } = localStateApi;
+  const {
+    ACHIEVEMENT_DEFINITIONS,
+    evaluateAchievementProgress,
+    normalizeAchievementState,
+    reconcileAchievementState,
+  } = achievementApi;
 
   const GUEST_SCORE_OWNER = "guest";
   const BASELINE_UPDATED_AT = "1970-01-01T00:00:00.000Z";
@@ -132,6 +146,7 @@
    * @property {any[]} prAttempts
    * @property {any[]} trainingEvents
    * @property {any[]} readinessChecks
+   * @property {any} achievementState
    */
 
   /**
@@ -156,7 +171,7 @@
   function fallbackState() {
     const guestAthleteState = defaultAthleteState();
     return {
-      schemaVersion: 5,
+      schemaVersion: 6,
       planSchemaVersion: PLAN_SCHEMA_VERSION,
       ...guestAthleteState,
       athleteStateByOwner: {
@@ -235,6 +250,7 @@
       prAttempts: [],
       trainingEvents: [],
       readinessChecks: [],
+      achievementState: normalizeAchievementState(),
     };
   }
 
@@ -336,7 +352,7 @@
     );
     return {
       ...state,
-      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 5),
+      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 6),
       athleteStateByOwner: {
         ...(state.athleteStateByOwner || {}),
         [ownerId]: athleteState,
@@ -385,7 +401,7 @@
     }
     return {
       ...state,
-      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 5),
+      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 6),
       athleteStateByOwner,
     };
   }
@@ -428,7 +444,15 @@
             ),
           )
         : {};
-    return { logs, prs, prAttempts, trainingEvents, readinessChecks };
+    const achievementState = normalizeAchievementState(source.achievementState);
+    return {
+      logs,
+      prs,
+      prAttempts,
+      trainingEvents,
+      readinessChecks,
+      achievementState,
+    };
   }
 
   /** @param {AppState|any} state @returns {AppState} */
@@ -451,6 +475,7 @@
       prAttempts: state.prAttempts,
       trainingEvents: state.trainingEvents,
       readinessChecks: state.readinessChecks,
+      achievementState: state.achievementState,
     });
     const guestScores = normalizeScoreData(scoreDataByOwner[GUEST_SCORE_OWNER]);
     scoreDataByOwner[GUEST_SCORE_OWNER] = {
@@ -465,6 +490,11 @@
         legacyScores.readinessChecks,
         guestScores.readinessChecks,
       ),
+      achievementState:
+        Object.keys(guestScores.achievementState.earned).length ||
+        guestScores.achievementState.acknowledgedIds.length
+          ? guestScores.achievementState
+          : legacyScores.achievementState,
     };
 
     const activeScoreOwner =
@@ -477,7 +507,7 @@
 
     const next = {
       ...state,
-      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 5),
+      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 6),
       scoreDataByOwner,
       activeScoreOwner,
     };
@@ -486,6 +516,7 @@
     delete next.prAttempts;
     delete next.trainingEvents;
     delete next.readinessChecks;
+    delete next.achievementState;
     return next;
   }
 
@@ -775,6 +806,7 @@
         remoteScores.readinessChecks,
       ),
       prs: mergeBestPrs(localScores.prs, remoteScores.prs, true),
+      achievementState: normalizeAchievementState(localScores.achievementState),
     };
   }
 
@@ -813,7 +845,14 @@
     const themePreference = normalizeThemePreference(appState.themePreference);
     const activeTheme = resolveTheme(themePreference, systemTheme);
     const scoreData = selectScoreData(appState);
-    const viewState = { ...appState, ...scoreData };
+    const achievementProgress = evaluateAchievementProgress({
+      logs: scoreData.logs,
+      prAttempts: scoreData.prAttempts,
+      profile: appState.profile,
+      rxLevel: buildRxReadiness(appState.profile, scoreData.logs).rxLevel,
+      now: new Date().toISOString(),
+    });
+    const viewState = { ...appState, ...scoreData, achievementProgress };
 
     const updateAppState = ReactRuntime.useCallback((updater) => {
       const current = appStateRef.current;
@@ -994,6 +1033,67 @@
       window.clearTimeout(toastTimer.current);
       toastTimer.current = window.setTimeout(() => setToast(""), 2400);
     }, []);
+
+    const achievementProgressSignature = achievementProgress
+      .map((item) => `${item.id}:${item.earned ? 1 : 0}:${item.current}`)
+      .join("|");
+    const achievementStateSignature = `${Object.keys(
+      scoreData.achievementState.earned,
+    )
+      .sort()
+      .join(",")}|${scoreData.achievementState.acknowledgedIds
+      .slice()
+      .sort()
+      .join(",")}`;
+
+    ReactRuntime.useEffect(() => {
+      const evaluatedAt = new Date().toISOString();
+      const reconciled = reconcileAchievementState(
+        scoreData.achievementState,
+        achievementProgress,
+        evaluatedAt,
+      );
+      const unacknowledgedIds = Object.keys(reconciled.state.earned).filter(
+        (id) => !reconciled.state.acknowledgedIds.includes(id),
+      );
+      if (!reconciled.newlyEarnedIds.length && !unacknowledgedIds.length) {
+        return;
+      }
+      const nextAchievementState = {
+        ...reconciled.state,
+        acknowledgedIds: [
+          ...new Set([
+            ...reconciled.state.acknowledgedIds,
+            ...unacknowledgedIds,
+          ]),
+        ],
+      };
+      const ownerId = appStateRef.current.activeScoreOwner || GUEST_SCORE_OWNER;
+      updateAppState((current) =>
+        updateScoreData(
+          current,
+          (scores) => ({
+            ...scores,
+            achievementState: nextAchievementState,
+          }),
+          ownerId,
+        ),
+      );
+      const unlocked = ACHIEVEMENT_DEFINITIONS.filter((definition) =>
+        unacknowledgedIds.includes(definition.id),
+      );
+      notify(
+        unlocked.length === 1
+          ? `Achievement unlocked: ${unlocked[0].title}`
+          : `${unlocked.length} achievements unlocked. View them in Progress.`,
+      );
+    }, [
+      achievementProgressSignature,
+      achievementStateSignature,
+      appState.activeScoreOwner,
+      notify,
+      updateAppState,
+    ]);
 
     const activateView = ReactRuntime.useCallback((viewId) => {
       setVisitedViews((current) => {
@@ -2814,6 +2914,7 @@
           prAttempts: appState.prAttempts,
           trainingEvents: appState.trainingEvents,
           readinessChecks: appState.readinessChecks,
+          achievementState: appState.achievementState,
         },
       };
       return h(
@@ -3095,6 +3196,10 @@
           label: trainingProgress ? "Progression week" : "Latest PR",
         }),
       ),
+      h(AchievementSummary, {
+        appState,
+        onViewAll: () => onActivate("progressView"),
+      }),
       h(
         "form",
         {
@@ -3456,6 +3561,197 @@
       h("p", { className: "stat-label" }, label),
       h("p", { className: "stat-value" }, value),
       detail ? h("p", { className: "stat-detail" }, detail) : null,
+    );
+  }
+
+  const ACHIEVEMENT_CATEGORY_LABELS = {
+    consistency: "Consistency",
+    pr: "Personal records",
+    benchmark: "Benchmarks",
+    skill: "Skills",
+    rx: "RX readiness",
+  };
+
+  function achievementItems(appState) {
+    const state = normalizeAchievementState(appState.achievementState);
+    const progressById = new Map(
+      (appState.achievementProgress || []).map((item) => [item.id, item]),
+    );
+    return ACHIEVEMENT_DEFINITIONS.map((definition) => {
+      const progress = progressById.get(definition.id) || {
+        ...definition,
+        current: 0,
+        progress: 0,
+        progressText: `0/${definition.target}`,
+      };
+      return {
+        ...progress,
+        earnedAt: state.earned[definition.id] || null,
+        earned: Boolean(state.earned[definition.id]),
+      };
+    });
+  }
+
+  function AchievementCard({ achievement, compact = false }) {
+    const percentage = Math.round(achievement.progress * 100);
+    return h(
+      "article",
+      {
+        className: `achievement-card ${
+          achievement.earned ? "is-earned" : "is-locked"
+        }${compact ? " is-compact" : ""}`,
+      },
+      h(
+        "div",
+        { className: "achievement-medal", "aria-hidden": "true" },
+        achievement.icon,
+      ),
+      h(
+        "div",
+        { className: "achievement-copy" },
+        h(
+          "div",
+          { className: "achievement-heading" },
+          h("h4", null, achievement.title),
+          h(
+            "span",
+            { className: "metric-pill" },
+            achievement.earned ? "Earned" : "Locked",
+          ),
+        ),
+        compact
+          ? null
+          : h("p", { className: "muted-copy" }, achievement.description),
+        achievement.earned
+          ? h(
+              "p",
+              { className: "achievement-progress-text" },
+              achievement.earnedAt
+                ? `Earned ${formatDate(achievement.earnedAt.slice(0, 10))}`
+                : "Earned",
+            )
+          : h(
+              ReactRuntime.Fragment,
+              null,
+              h(
+                "div",
+                {
+                  className: "achievement-progress",
+                  role: "progressbar",
+                  "aria-label": `${achievement.title} progress`,
+                  "aria-valuemin": 0,
+                  "aria-valuemax": 100,
+                  "aria-valuenow": percentage,
+                },
+                h("span", { style: { width: `${percentage}%` } }),
+              ),
+              h(
+                "p",
+                { className: "achievement-progress-text" },
+                achievement.progressText,
+              ),
+            ),
+      ),
+    );
+  }
+
+  function AchievementSummary({ appState, onViewAll }) {
+    const items = achievementItems(appState);
+    const recent = items
+      .filter((item) => item.earned)
+      .sort(
+        (left, right) =>
+          Date.parse(right.earnedAt || "") - Date.parse(left.earnedAt || ""),
+      )
+      .slice(0, 3);
+    const upcoming = items
+      .filter((item) => !item.earned)
+      .sort((left, right) => right.progress - left.progress)[0];
+    return h(
+      "section",
+      {
+        className: "panel achievement-summary",
+        "aria-labelledby": "achievementSummaryTitle",
+      },
+      h(
+        "div",
+        { className: "panel-title" },
+        h(
+          "div",
+          null,
+          h("p", { className: "eyebrow" }, "Milestones"),
+          h("h3", { id: "achievementSummaryTitle" }, "Achievements"),
+        ),
+        h(
+          "span",
+          { className: "metric-pill" },
+          `${items.filter((item) => item.earned).length}/${items.length}`,
+        ),
+      ),
+      recent.length
+        ? h(
+            "div",
+            { className: "achievement-summary-grid" },
+            recent.map((achievement) =>
+              h(AchievementCard, {
+                achievement,
+                compact: true,
+                key: achievement.id,
+              }),
+            ),
+          )
+        : h(
+            "p",
+            { className: "muted-copy" },
+            "Log training, record PRs, and update skill tests to earn your first badge.",
+          ),
+      upcoming
+        ? h(
+            "div",
+            { className: "achievement-upcoming" },
+            h("p", { className: "eyebrow" }, "Closest milestone"),
+            h(AchievementCard, { achievement: upcoming, compact: true }),
+          )
+        : null,
+      h(
+        "button",
+        { className: "ghost-button", type: "button", onClick: onViewAll },
+        "View all achievements",
+      ),
+    );
+  }
+
+  function AchievementGallery({ appState }) {
+    const items = achievementItems(appState);
+    return h(
+      "section",
+      {
+        className: "panel achievement-gallery",
+        "aria-labelledby": "achievementGalleryTitle",
+      },
+      h("p", { className: "eyebrow" }, "Badges and milestones"),
+      h("h3", { id: "achievementGalleryTitle" }, "Your achievements"),
+      h(
+        "p",
+        { className: "muted-copy" },
+        `${items.filter((item) => item.earned).length} of ${items.length} earned. Locked badges update automatically from your training history.`,
+      ),
+      Object.entries(ACHIEVEMENT_CATEGORY_LABELS).map(([category, label]) =>
+        h(
+          "section",
+          { className: "achievement-category", key: category },
+          h("h4", null, label),
+          h(
+            "div",
+            { className: "achievement-grid" },
+            items
+              .filter((item) => item.category === category)
+              .map((achievement) =>
+                h(AchievementCard, { achievement, key: achievement.id }),
+              ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -8147,6 +8443,7 @@
           label: "Mobility consistency",
         }),
       ),
+      h(AchievementGallery, { appState }),
       h(
         "section",
         {

@@ -77,6 +77,28 @@ test("local state store only rewrites changed owner slices", () => {
   assert.equal(storage.writes.includes(`${SCORES_PREFIX}guest`), true);
 });
 
+test("local state store keeps achievement progress in the active owner score slice", () => {
+  const storage = memoryStorage();
+  const store = createLocalStateStore(storage, { legacySnapshotDelay: 0 });
+  const state = exampleState();
+  state.schemaVersion = 6;
+  state.scoreDataByOwner.guest.achievementState = {
+    version: 1,
+    earned: { "first-session": "2026-08-01T10:00:00.000Z" },
+    acknowledgedIds: ["first-session"],
+    lastEvaluatedAt: "2026-08-01T10:00:00.000Z",
+  };
+
+  store.save(state);
+
+  const loaded = store.load();
+  assert.equal(loaded.schemaVersion, 6);
+  assert.deepEqual(
+    loaded.scoreDataByOwner.guest.achievementState,
+    state.scoreDataByOwner.guest.achievementState,
+  );
+});
+
 test("local state store clears legacy and sliced owner data", () => {
   const storage = memoryStorage();
   const store = createLocalStateStore(storage, { legacySnapshotDelay: 0 });
