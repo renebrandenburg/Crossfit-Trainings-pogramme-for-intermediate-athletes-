@@ -1,13 +1,14 @@
 "use strict";
 
 const CACHE_PREFIX = "crossfit-training-programme-";
-const CACHE_NAME = `${CACHE_PREFIX}v16`;
+const CACHE_NAME = `${CACHE_PREFIX}v17`;
 const LOCAL_ASSETS = [
   "./",
   "./index.html",
   "./build-info.js",
   "./styles.css",
   "./local-state-store.js",
+  "./achievements.js",
   "./movement-catalog.js",
   "./training-prescriptions.js",
   "./app.js",
