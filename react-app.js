@@ -96,6 +96,7 @@
    * @property {string=} focus
    * @property {string[]} warmup
    * @property {string[]} strength
+   * @property {Object[]=} trainingBlocks
    * @property {string[]=} wod
    * @property {Object=} workoutDefinition
    * @property {string[]} mobility
@@ -1001,14 +1002,15 @@
     const finishTimerToLog = ReactRuntime.useCallback(
       (session, timerResult, competitionProof = null) => {
         const week = clamp(Number(session.week) || appState.selectedWeek, 1, 8);
+        const dayId = session.logDayId || session.id;
         setPendingTimerResult({
           ...timerResult,
           competitionProof,
           sessionSnapshot: session,
-          dayId: session.id,
+          dayId,
           week,
         });
-        setLogSelection({ dayId: session.id });
+        setLogSelection({ dayId });
         updateAppState((current) => ({ ...current, selectedWeek: week }));
         activateView("logView");
         notify("Timer result ready to save.");
@@ -2564,6 +2566,11 @@
         if (exercise?.movementId) exerciseIds.add(exercise.movementId);
       });
     }
+    (session.trainingBlocks || []).forEach((trainingBlock) => {
+      (trainingBlock?.prescription?.exercises || []).forEach((exercise) => {
+        if (exercise?.movementId) exerciseIds.add(exercise.movementId);
+      });
+    });
     const normalizedText = [
       session.title,
       session.shortTitle,
@@ -4435,6 +4442,7 @@
       title: plan.title,
       focus: plan.focus,
       workoutDefinition: plan.workoutDefinition,
+      trainingBlocks: plan.trainingBlocks || [],
       segments: customPlanSegments(plan),
       addOns: plan.addOns || [],
       duration: plan.duration,
@@ -6061,7 +6069,10 @@
     return segments.map((segment) =>
       h(
         "section",
-        { className: "segment", key: segment.title },
+        {
+          className: "segment",
+          key: segment.blockId || `${segment.title}-${segment.minutes}`,
+        },
         h(
           "h4",
           null,

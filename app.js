@@ -424,6 +424,15 @@ if (!MOVEMENT_CATALOG_API) {
   throw new Error("Movement catalog failed to load.");
 }
 
+const TRAINING_PRESCRIPTION_API =
+  typeof module !== "undefined" && module.exports
+    ? require("./training-prescriptions.js")
+    : globalThis.ForgeHourTrainingPrescriptions;
+
+if (!TRAINING_PRESCRIPTION_API) {
+  throw new Error("Training prescriptions failed to load.");
+}
+
 const {
   MASTERS_MOVEMENT_VARIATIONS,
   MOVEMENT_CATALOG,
@@ -440,6 +449,13 @@ const {
   resolveMovementId,
   sameMovement,
 } = MOVEMENT_CATALOG_API;
+
+const {
+  TRAINING_BLOCK_SCHEMA_VERSION,
+  finalizeGeneratedTraining,
+  generatedTrainingIssues,
+  renderTrainingBlockItems,
+} = TRAINING_PRESCRIPTION_API;
 
 const canonicalMovementId = resolveMovementId;
 const olympicFamilyForMovement = getOlympicFamily;
@@ -1371,6 +1387,30 @@ function customPlanSegments(plan) {
       },
     ];
   }
+  if (Array.isArray(plan?.trainingBlocks) && plan.trainingBlocks.length) {
+    const blocks = plan.trainingBlocks.map((trainingBlock) => ({
+      title: trainingBlock.title,
+      minutes: String(trainingBlock.durationMinutes),
+      items: renderTrainingBlockItems(trainingBlock),
+      category: trainingBlock.category,
+      blockId: trainingBlock.id,
+    }));
+    const warmup = blocks.filter((item) => item.category === "warmup");
+    const cooldown = blocks.filter((item) => item.category === "cooldown");
+    const training = blocks.filter(
+      (item) => !["warmup", "cooldown"].includes(item.category),
+    );
+    return [
+      ...warmup,
+      ...training,
+      {
+        title: "WOD",
+        minutes: String(plan.segmentMinutes?.wod || 20),
+        items: workoutItemsForSession(plan),
+      },
+      ...cooldown,
+    ].filter((segment) => segment.items.length);
+  }
   const minutes = plan.segmentMinutes || {};
   return [
     {
@@ -1844,7 +1884,28 @@ function generatedSessionErrors(session) {
         `generated movement is not registered: ${exercise?.movementId || exercise?.movement || "unknown"}`,
       );
     }
+    const movement = getMovementDefinition(
+      exercise?.movementId || exercise?.movement,
+    );
+    if (
+      movement?.loadRequired &&
+      !TRAINING_PRESCRIPTION_API.measurableLoad(exercise?.load)
+    ) {
+      errors.push(
+        `generated loaded movement is missing load guidance: ${movement.displayName}`,
+      );
+    }
   });
+  if (
+    (session.generated || session.origin === "generated") &&
+    !session.customized
+  ) {
+    generatedTrainingIssues(session)
+      .filter((issue) => issue.severity === "error")
+      .forEach((issue) =>
+        errors.push(`${issue.code}: ${issue.message} (${issue.blockId})`),
+      );
+  }
   const family = session.olympicFamily;
   if (family != null && !OLYMPIC_FAMILIES.has(family)) {
     errors.push("session Olympic family is invalid");
@@ -1894,7 +1955,7 @@ function generatedWeekErrors(sessions, requirements = {}) {
     const definition = session?.workoutDefinition;
     const definitionErrors = generatedSessionErrors(session);
     definitionErrors.forEach((error) => errors.push(`${label}: ${error}`));
-    if (!definition || definitionErrors.length) return;
+    if (!definition || workoutDefinitionErrors(definition).length) return;
     represented.add(definition.timeDomain);
     const expected = workoutExpectedDurationSeconds(definition);
     if (
@@ -2085,6 +2146,21 @@ function applyReadinessVariant(session, readiness = "normal") {
       );
     }
     variant.runtimeVolumeMultiplier = 0.75;
+    variant.trainingBlocks = arrayOrEmpty(variant.trainingBlocks).map(
+      (trainingBlock) =>
+        ["warmup", "cooldown"].includes(trainingBlock.category)
+          ? trainingBlock
+          : {
+              ...trainingBlock,
+              prescription: {
+                ...trainingBlock.prescription,
+                coachingNotes: [
+                  ...arrayOrEmpty(trainingBlock.prescription?.coachingNotes),
+                  "Low readiness: complete 75% of the prescribed repetitions and avoid maximal attempts.",
+                ],
+              },
+            },
+    );
   } else if (normalized === "high") {
     variant.addOns = [
       ...arrayOrEmpty(variant.addOns),
@@ -2588,17 +2664,19 @@ function buildGeneratedProgramme(
       const candidate = [];
       for (let day = 1; day <= normalized.daysPerWeek; day += 1) {
         candidate.push(
-          applyGeneratedSessionConstraints(
-            frequencyStrategy.buildSession(
+          finalizeGeneratedTraining(
+            applyGeneratedSessionConstraints(
+              frequencyStrategy.buildSession(
+                normalized,
+                profile,
+                week,
+                day,
+                idFactory,
+                weekContext,
+              ),
               normalized,
-              profile,
-              week,
               day,
-              idFactory,
-              weekContext,
             ),
-            normalized,
-            day,
           ),
         );
       }
@@ -3046,6 +3124,7 @@ function migrateCanonicalGeneratedPlans(plans, profile) {
     const hasStaleSession = generatedSessions.some(
       (session) =>
         session.wodSchemaVersion !== WOD_SCHEMA_VERSION ||
+        session.trainingBlockSchemaVersion !== TRAINING_BLOCK_SCHEMA_VERSION ||
         !hasValidWorkoutDefinition(session.workoutDefinition),
     );
     const hasInvalidCompleteWeek = Array.from({ length: 8 }, (_, index) =>
@@ -3303,6 +3382,7 @@ function migrateGeneratedProgrammePlans(plans, profile) {
       !plan.generated ||
       plan.customized ||
       (plan.wodSchemaVersion === WOD_SCHEMA_VERSION &&
+        plan.trainingBlockSchemaVersion === TRAINING_BLOCK_SCHEMA_VERSION &&
         hasValidWorkoutDefinition(plan.workoutDefinition))
     )
       return plan;
@@ -7916,6 +7996,7 @@ const FORGE_HOUR_API = {
   WOD_SCHEMA_VERSION,
   WORKOUT_DEFINITION_VERSION,
   TRAINING_STIMULI,
+  TRAINING_BLOCK_SCHEMA_VERSION,
   applyReadinessVariant,
   buildGeneratedProgramme,
   buildOlympicFamilySchedule,
@@ -7977,6 +8058,8 @@ const FORGE_HOUR_API = {
   generatedProgrammeWarnings,
   generatedWeekErrors,
   generatedSessionErrors,
+  generatedTrainingIssues,
+  renderTrainingBlockItems,
   selectDumbbellSnatchLoad,
   workoutExpectedDurationSeconds,
   TIME_DOMAINS,

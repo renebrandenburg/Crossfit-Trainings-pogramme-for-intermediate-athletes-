@@ -180,6 +180,35 @@ test("@critical Olympic prescriptions are exact, executable, and duplicate-safe"
       expect(longestMissing).toBeLessThanOrEqual(2);
     }
     for (const session of sessions) {
+      expect(session.trainingBlockSchemaVersion).toBe(1);
+      expect(session.trainingBlocks.length).toBeGreaterThan(0);
+      for (const trainingBlock of session.trainingBlocks) {
+        expect(trainingBlock.durationMinutes).toBeGreaterThan(0);
+        expect(trainingBlock.prescription.exercises.length).toBeGreaterThan(0);
+        for (const exercise of trainingBlock.prescription.exercises) {
+          if (
+            /(?:tall (?:clean|snatch) pulls|front-rack hold|overhead hold)/i.test(
+              exercise.name,
+            )
+          ) {
+            expect(
+              exercise.load?.percentage ||
+                exercise.load?.rpe ||
+                exercise.load?.instruction,
+            ).toBeTruthy();
+          }
+        }
+        if (trainingBlock.category === "gymnastics") {
+          expect(
+            trainingBlock.prescription.scalingOptions.length,
+          ).toBeGreaterThan(0);
+          expect(
+            ["emom", "intervals"].includes(
+              trainingBlock.prescription.format.type,
+            ) || Boolean(trainingBlock.prescription.rest),
+          ).toBe(true);
+        }
+      }
       for (const item of session.strength) {
         if (/tall clean pulls/.test(item)) {
           expect(session.olympicFamily).toBe("clean");

@@ -565,6 +565,21 @@
     "overhead-hold",
     "clean-pulls",
     "snatch-pulls",
+    "hollow-hold",
+    "arch-hold",
+    "dead-bugs",
+    "hanging-knee-raises",
+    "kip-swings",
+    "scap-pull-ups",
+    "band-pull-aparts",
+    "external-rotations",
+    "ankle-rocks",
+    "thoracic-rotations",
+    "couch-stretch",
+    "lat-stretch",
+    "pec-stretch",
+    "calf-stretch",
+    "front-rack-stretch",
   ]);
   const CLEAN_FAMILY_IDS = new Set([
     "clean",
@@ -725,6 +740,21 @@
     ["walking-lunges", "walking lunges", "bodyweight"],
     ["loaded-carry", "loaded carry", "mixed"],
     ["hollow-rocks", "hollow rocks", "bodyweight"],
+    ["hollow-hold", "hollow hold", "gymnastics"],
+    ["arch-hold", "arch hold", "gymnastics"],
+    ["dead-bugs", "dead bugs", "bodyweight"],
+    ["hanging-knee-raises", "hanging knee raises", "gymnastics"],
+    ["kip-swings", "kip swings", "gymnastics"],
+    ["scap-pull-ups", "scap pull-ups", "gymnastics"],
+    ["band-pull-aparts", "band pull-aparts", "accessory"],
+    ["external-rotations", "external rotations", "accessory"],
+    ["ankle-rocks", "ankle rocks", "mobility"],
+    ["thoracic-rotations", "thoracic rotations", "mobility"],
+    ["couch-stretch", "couch stretch", "mobility"],
+    ["lat-stretch", "lat stretch", "mobility"],
+    ["pec-stretch", "pec stretch", "mobility"],
+    ["calf-stretch", "calf stretch", "mobility"],
+    ["front-rack-stretch", "front-rack stretch", "mobility"],
     ["light-barbell-reps", "light barbell reps", "weightlifting"],
     ["core-reps", "core reps", "bodyweight"],
     ["easy-machine", "easy machine", "monostructural"],
@@ -933,8 +963,15 @@
     if (/box|step-over/.test(id)) return ["box"];
     if (/dumbbell/.test(id)) return ["dumbbells"];
     if (/kettlebell/.test(id)) return ["kettlebells"];
+    if (/goblet/.test(id)) return ["kettlebells"];
+    if (/wall-ball|medicine-ball/.test(id)) return ["medicineBall"];
+    if (/sandbag/.test(id)) return ["sandbag"];
+    if (/sled/.test(id)) return ["sled"];
+    if (/loaded-carry/.test(id)) return ["loadedCarry"];
     if (
-      /clean|snatch|jerk|deadlift|front-squat|overhead-squat|thruster/.test(id)
+      /clean|snatch|jerk|deadlift|back-squat|front-squat|overhead-squat|thruster|push-press|strict-press|barbell|rack-hold|overhead-hold|pulls/.test(
+        id,
+      )
     ) {
       return ["barbell"];
     }
@@ -952,6 +989,20 @@
     const technicalDrill = TECHNICAL_DRILL_IDS.has(id);
     const conditioningEligible =
       options.conditioningEligible ?? !NON_CONDITIONING_MOVEMENT_IDS.has(id);
+    const equipment = options.equipment || equipmentForMovement(id);
+    const loadRequired =
+      options.loadRequired ??
+      equipment.some((item) =>
+        [
+          "barbell",
+          "dumbbells",
+          "kettlebells",
+          "medicineBall",
+          "sandbag",
+          "sled",
+          "loadedCarry",
+        ].includes(item),
+      );
     return Object.freeze({
       id,
       displayName,
@@ -973,7 +1024,23 @@
           : null,
       olympicVariationType: OLYMPIC_VARIATION_TYPES[id] || null,
       conditioningEligible,
-      equipment: Object.freeze(options.equipment || equipmentForMovement(id)),
+      equipment: Object.freeze(equipment),
+      loadRequired,
+      referenceLift:
+        options.referenceLift ||
+        (SNATCH_FAMILY_IDS.has(id)
+          ? "snatch"
+          : CLEAN_FAMILY_IDS.has(id)
+            ? "cleanJerk"
+            : /front-rack|front-squat/.test(id)
+              ? "frontSquat"
+              : /back-squat/.test(id)
+                ? "backSquat"
+                : /press/.test(id)
+                  ? "strictPress"
+                  : /deadlift/.test(id)
+                    ? "deadlift"
+                    : null),
       supportedTargetTypes: Object.freeze(
         options.supportedTargetTypes || targetTypesForDiscipline(discipline),
       ),

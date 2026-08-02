@@ -44,6 +44,28 @@ test("movement aliases and semantic metadata preserve current behavior", () => {
   );
 });
 
+test("movement catalog identifies loaded prescriptions structurally", () => {
+  [
+    "tall-clean-pulls",
+    "front-rack-hold",
+    "kettlebell-swings",
+    "wall-balls",
+    "loaded-carry",
+    "dumbbell-lunges",
+  ].forEach((movementId) => {
+    assert.equal(
+      catalog.getMovementDefinition(movementId).loadRequired,
+      true,
+      `${movementId} should require load guidance`,
+    );
+  });
+  assert.equal(catalog.getMovementDefinition("air-squats").loadRequired, false);
+  assert.equal(
+    catalog.getMovementDefinition("tall-snatch-pulls").referenceLift,
+    "snatch",
+  );
+});
+
 test("Olympic movement metadata classifies families and meaningful exposure", () => {
   const cleanIds = [
     "clean",

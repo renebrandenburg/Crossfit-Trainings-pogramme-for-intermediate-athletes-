@@ -739,8 +739,9 @@ test("React Testing Library moves, skips, and resumes a dated progression sessio
 
   function squatEvent() {
     return ui
-      .getAllByRole("heading", { name: "Back squat + T2B" })[0]
-      .closest(".calendar-event");
+      .getAllByRole("heading", { name: "Back squat + T2B" })
+      .map((heading) => heading.closest(".calendar-event"))
+      .find(Boolean);
   }
 
   try {
@@ -1129,6 +1130,30 @@ test("React Testing Library persists exact Olympic prescriptions", async () => {
       assert.ok(
         plan.sessions.some((session) =>
           session.strength.some((item) => /tall snatch pulls/.test(item)),
+        ),
+      );
+      assert.ok(
+        plan.sessions.every(
+          (session) =>
+            session.trainingBlockSchemaVersion === 1 &&
+            session.trainingBlocks.every(
+              (trainingBlock) =>
+                trainingBlock.durationMinutes > 0 &&
+                trainingBlock.prescription.exercises.length > 0,
+            ),
+        ),
+      );
+      const olympicTechnique = plan.sessions
+        .flatMap((session) => session.trainingBlocks)
+        .filter((trainingBlock) => trainingBlock.category === "weightlifting")
+        .flatMap((trainingBlock) => trainingBlock.prescription.exercises)
+        .filter((exercise) =>
+          /tall-(?:clean|snatch)-pulls/.test(exercise.movementId),
+        );
+      assert.ok(olympicTechnique.length > 0);
+      assert.ok(
+        olympicTechnique.every(
+          (exercise) => exercise.load?.percentage && exercise.load?.rpe,
         ),
       );
       assert.deepEqual(

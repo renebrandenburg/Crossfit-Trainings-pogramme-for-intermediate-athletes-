@@ -127,10 +127,18 @@ test("HTML mounts the React app and references the required assets", () => {
     /<script src="\.\/local-state-store\.js" defer><\/script>/,
   );
   assert.match(html, /<script src="\.\/movement-catalog\.js" defer><\/script>/);
+  assert.match(
+    html,
+    /<script src="\.\/training-prescriptions\.js" defer><\/script>/,
+  );
   assert.match(html, /<script src="\.\/app\.js" defer><\/script>/);
   assert.ok(
     html.indexOf("./movement-catalog.js") < html.indexOf("./app.js"),
     "the movement catalog must load before the generator",
+  );
+  assert.ok(
+    html.indexOf("./training-prescriptions.js") < html.indexOf("./app.js"),
+    "training prescriptions must load before the generator",
   );
   assert.match(html, /<script src="\.\/supabase-sync\.js" defer><\/script>/);
   assert.match(html, /<script src="\.\/react-app\.js" defer><\/script>/);
@@ -217,6 +225,7 @@ test("service worker precaches the app and only the primary CDN runtimes", async
     "styles.css",
     "local-state-store.js",
     "movement-catalog.js",
+    "training-prescriptions.js",
     "app.js",
     "supabase-config.js",
     "supabase-sync.js",
