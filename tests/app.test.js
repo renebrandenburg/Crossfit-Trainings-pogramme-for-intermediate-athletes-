@@ -58,6 +58,7 @@ const {
   trimNumber,
   renderWorkoutDescription,
   validateWorkoutDefinition,
+  validateGeneratedPlansForPersistence,
   validateGeneratedWeek,
   validateWeeklyPlan,
   weeklyTrainingProgress,
@@ -2124,6 +2125,39 @@ test("generated Olympic prescriptions resolve one coherent family", () => {
       /tall clean\/snatch pulls|overhead or front rack holds/i,
     );
   });
+});
+
+test("the final persistence validator rejects the exact incomplete free-text block", () => {
+  const block = "3 sets: 3 tall snatch pulls + 20-second overhead hold";
+  const sessions = buildGeneratedProgramme(
+    { goal: "balanced", weakness: "olympic", daysPerWeek: 2, duration: 60 },
+    cloneDefaultProfile(),
+    (id) => id,
+    "missing-load-persistence-regression",
+  );
+  const invalidSessions = structuredClone(sessions);
+  const target = invalidSessions.find((session) =>
+    session.strength.some((item) => /tall snatch pulls/.test(item)),
+  );
+  assert.ok(target);
+  target.strength = [block];
+
+  assert.throws(
+    () =>
+      validateGeneratedPlansForPersistence([
+        {
+          kind: "generated",
+          generatorOptions: {
+            goal: "balanced",
+            weakness: "olympic",
+            daysPerWeek: 2,
+            duration: 60,
+          },
+          sessions: invalidSessions,
+        },
+      ]),
+    /MISSING_LOAD/,
+  );
 });
 
 test("movement semantics reject drills, alternatives, and accidental WOD duplicates", () => {

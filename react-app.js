@@ -65,8 +65,10 @@
     selectActiveWeekSessions,
     timerDisplaySeconds,
     validateGeneratedProgramme,
+    validateGeneratedPlansForPersistence,
     validateGeneratedWeek,
     validateGeneratedSession,
+    traceGenerationStage,
     weeklyTrainingProgress,
     valueFromPath,
     workoutItemsForSession,
@@ -207,6 +209,17 @@
   /** @param {AppState} state @param {AppState|null=} previous @returns {boolean} */
   function saveState(state, previous = null) {
     try {
+      validateGeneratedPlansForPersistence(state.plans);
+      state.plans
+        .filter((plan) => plan?.kind === "generated")
+        .flatMap((plan) => plan.sessions || [])
+        .forEach((session) =>
+          traceGenerationStage("7. Object saved locally", {
+            sessionId: session.id,
+            strength: session.strength,
+            strengthAndSkillBlocks: session.trainingBlocks,
+          }),
+        );
       return localStateStore.save(state, previous);
     } catch (error) {
       console.warn("Could not save state.", error);
@@ -809,6 +822,22 @@
       const next = athleteStateChanged(current, candidate)
         ? withActiveAthleteState(candidate)
         : candidate;
+      try {
+        validateGeneratedPlansForPersistence(next.plans);
+      } catch (error) {
+        console.error(
+          "State update rejected invalid generated programme.",
+          error,
+        );
+        window.setTimeout(
+          () =>
+            setLocalSaveError(
+              "Invalid generated programme was rejected and not saved or shown.",
+            ),
+          0,
+        );
+        return;
+      }
       appStateRef.current = next;
       const saved = saveState(next, current);
       setAppState(next);
@@ -2929,6 +2958,27 @@
           h("h3", { id: "appearanceTitle" }, "Appearance"),
           themeControl,
         ),
+        h(
+          "section",
+          { className: "panel", "aria-labelledby": "debugTitle" },
+          h("p", { className: "eyebrow" }, "Debug"),
+          h("h3", { id: "debugTitle" }, "Deployment"),
+          h(
+            "p",
+            { className: "muted-copy" },
+            "Commit SHA: ",
+            h(
+              "code",
+              { "data-testid": "deployment-commit-sha" },
+              window.ForgeHourBuild?.commitSha || "unavailable",
+            ),
+          ),
+          h(
+            "p",
+            { className: "muted-copy" },
+            `Generation trace entries: ${window.__FORGE_HOUR_GENERATION_TRACE__?.length || 0}. Inspect window.__FORGE_HOUR_GENERATION_TRACE__ in developer tools for all nine strength-and-skill snapshots.`,
+          ),
+        ),
         accountSyncPanel,
       );
     }
@@ -4481,6 +4531,12 @@
     onDelete = null,
     onTimerFinish,
   }) {
+    traceGenerationStage("8. Object received by the React component", {
+      sessionId: session.id,
+      strength: session.strength,
+      strengthAndSkillBlocks: session.trainingBlocks,
+      finalSegments: session.segments,
+    });
     const [readiness, setReadiness] = ReactRuntime.useState("normal");
     const readinessSession = session.twoDayStrategy
       ? applyReadinessVariant(session, readiness)

@@ -1,4 +1,12 @@
 interface Window {
+  ForgeHourBuild?: {
+    commitSha?: string;
+  };
+  __FORGE_HOUR_GENERATION_TRACE__?: Array<{
+    stage: string;
+    strengthAndSkillBlock: unknown;
+    timestamp: string;
+  }>;
   ForgeHourLocalState?: {
     createLocalStateStore: (
       storage: Storage,

@@ -114,6 +114,19 @@ test("loaded movements require measurable guidance and accept RPE", () => {
   );
 });
 
+test("free-text tall snatch accessory cannot pass without load and rest", () => {
+  const block = "3 sets: 3 tall snatch pulls + 20-second overhead hold";
+
+  const validation = prescriptions.freeTextTrainingIssues(block);
+  assert.ok(validation.some((issue) => issue.code === "MISSING_LOAD"));
+
+  const repaired = prescriptions.repairFreeTextTraining(block);
+  assert.notEqual(repaired, block);
+  assert.match(repaired, /35–45% of snatch 1RM or RPE 5–6/);
+  assert.match(repaired, /60–90 seconds rest|rest 60–90 seconds/i);
+  assert.deepEqual(prescriptions.freeTextTrainingIssues(repaired), []);
+});
+
 test("vague gymnastics intent fails while a complete block passes", () => {
   const vague = gymnasticsFixture({
     trainingIntent: [

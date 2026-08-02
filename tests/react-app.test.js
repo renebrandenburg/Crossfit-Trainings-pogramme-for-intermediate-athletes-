@@ -1135,7 +1135,7 @@ test("React Testing Library persists exact Olympic prescriptions", async () => {
       assert.ok(
         plan.sessions.every(
           (session) =>
-            session.trainingBlockSchemaVersion === 1 &&
+            session.trainingBlockSchemaVersion === 2 &&
             session.trainingBlocks.every(
               (trainingBlock) =>
                 trainingBlock.durationMinutes > 0 &&
@@ -1156,6 +1156,7 @@ test("React Testing Library persists exact Olympic prescriptions", async () => {
           (exercise) => exercise.load?.percentage && exercise.load?.rpe,
         ),
       );
+      assert.ok(ui.getAllByText(/35–45% of snatch 1RM or RPE 5–6/).length > 0);
       assert.deepEqual(
         new Set(plan.sessions.map((session) => session.olympicFamily)),
         new Set(["clean", "snatch"]),

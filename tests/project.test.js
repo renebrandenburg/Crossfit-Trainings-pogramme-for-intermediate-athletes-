@@ -122,6 +122,7 @@ test("HTML mounts the React app and references the required assets", () => {
   );
   assert.equal((html.match(/integrity="sha384-/g) || []).length, 4);
   assert.match(html, /<script src="\.\/supabase-config\.js" defer><\/script>/);
+  assert.match(html, /<script src="\.\/build-info\.js" defer><\/script>/);
   assert.match(
     html,
     /<script src="\.\/local-state-store\.js" defer><\/script>/,
@@ -222,6 +223,7 @@ test("service worker precaches the app and only the primary CDN runtimes", async
   const serviceWorker = read("sw.js");
   const assets = [
     "index.html",
+    "build-info.js",
     "styles.css",
     "local-state-store.js",
     "movement-catalog.js",

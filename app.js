@@ -453,8 +453,10 @@ const {
 const {
   TRAINING_BLOCK_SCHEMA_VERSION,
   finalizeGeneratedTraining,
+  freeTextTrainingIssues,
   generatedTrainingIssues,
   renderTrainingBlockItems,
+  traceGenerationStage,
 } = TRAINING_PRESCRIPTION_API;
 
 const canonicalMovementId = resolveMovementId;
@@ -1400,7 +1402,7 @@ function customPlanSegments(plan) {
     const training = blocks.filter(
       (item) => !["warmup", "cooldown"].includes(item.category),
     );
-    return [
+    const segments = [
       ...warmup,
       ...training,
       {
@@ -1410,6 +1412,16 @@ function customPlanSegments(plan) {
       },
       ...cooldown,
     ].filter((segment) => segment.items.length);
+    traceGenerationStage("9. Final formatted text", {
+      sessionId: plan.id,
+      strengthAndSkillSegments: segments.filter(
+        (segment) =>
+          !["warmup", "cooldown", "WOD"].includes(
+            segment.category || segment.title,
+          ),
+      ),
+    });
+    return segments;
   }
   const minutes = plan.segmentMinutes || {};
   return [
@@ -1906,6 +1918,34 @@ function generatedSessionErrors(session) {
         errors.push(`${issue.code}: ${issue.message} (${issue.blockId})`),
       );
   }
+  if (
+    (session.generated || session.origin === "generated") &&
+    !session.customized
+  ) {
+    arrayOrEmpty(session.strength).forEach((item, index) => {
+      freeTextTrainingIssues(
+        item,
+        `${session.id || "session"}-strength-${index + 1}`,
+      )
+        .filter((issue) => issue.severity === "error")
+        .forEach((issue) =>
+          errors.push(`${issue.code}: ${issue.message} (${issue.blockId})`),
+        );
+    });
+    arrayOrEmpty(session.trainingBlocks)
+      .filter(
+        (trainingBlock) =>
+          !["warmup", "cooldown"].includes(trainingBlock?.category),
+      )
+      .forEach((trainingBlock) => {
+        const finalText = renderTrainingBlockItems(trainingBlock).join(" ");
+        freeTextTrainingIssues(finalText, trainingBlock.id)
+          .filter((issue) => issue.severity === "error")
+          .forEach((issue) =>
+            errors.push(`${issue.code}: ${issue.message} (${issue.blockId})`),
+          );
+      });
+  }
   const family = session.olympicFamily;
   if (family != null && !OLYMPIC_FAMILIES.has(family)) {
     errors.push("session Olympic family is invalid");
@@ -2289,6 +2329,24 @@ function validateGeneratedProgramme(sessions, options, requirements) {
   const errors = generatedProgrammeErrors(sessions, options, requirements);
   if (errors.length) throw new WorkoutValidationError(errors);
   return sessions;
+}
+
+function validateGeneratedPlansForPersistence(plans) {
+  arrayOrEmpty(plans)
+    .filter((plan) => plan?.kind === "generated")
+    .forEach((plan) => {
+      const generatedSessions = arrayOrEmpty(plan.sessions).filter(
+        (session) => !session?.customized,
+      );
+      generatedSessions.forEach(validateGeneratedSession);
+      if (generatedSessions.length) {
+        validateGeneratedProgramme(
+          generatedSessions,
+          plan.generatorOptions || {},
+        );
+      }
+    });
+  return plans;
 }
 
 function requirePositiveFinite(value, label, errors) {
@@ -2684,6 +2742,15 @@ function buildGeneratedProgramme(
         validateGeneratedWeek(candidate, {
           requiredTimeDomains: frequencyStrategy.requiredTimeDomains,
           requireTwoDayStructure: frequencyStrategy.requireTwoDayStructure,
+        });
+        traceGenerationStage("5. Validation result", {
+          week,
+          errors: [],
+          strengthAndSkillBlocks: candidate.map((session) => ({
+            sessionId: session.id,
+            strength: session.strength,
+            trainingBlocks: session.trainingBlocks,
+          })),
         });
         validWeek = candidate;
         generationContext.usedWodSignatures = weekContext.usedWodSignatures;
@@ -3724,6 +3791,10 @@ function buildTwoDaySession(
     session.origin = "generated";
     session.customized = false;
   }
+  traceGenerationStage("1. Raw generated programme", {
+    sessionId: session.id,
+    strengthAndSkillBlock: session.strength,
+  });
   return session;
 }
 
@@ -3975,6 +4046,10 @@ function buildGeneratedSession(
     olympicFamily,
     createdAt: new Date().toISOString(),
   };
+  traceGenerationStage("1. Raw generated programme", {
+    sessionId: session.id,
+    strengthAndSkillBlock: session.strength,
+  });
   if (generationContext && generationContext.seed) {
     session.generationSeed = generationContext.seed;
     session.origin = "generated";
@@ -5884,6 +5959,14 @@ function weaknessAccessory(weakness, week, olympicFamily = "clean") {
       getMovementDefinition(movementId)?.displayName || movementId,
   );
   const olympicAccessory = `${reps}: 3 ${pull} + 20-second ${hold}`;
+  if (weakness === "olympic") {
+    traceGenerationStage("4. Accessory-block assembly", {
+      weakness,
+      week,
+      olympicFamily,
+      strengthAndSkillBlock: olympicAccessory,
+    });
+  }
   const accessories = {
     squat: `${reps}: 8 tempo goblet squats + 8 split squats per leg`,
     olympic: olympicAccessory,
@@ -8047,9 +8130,11 @@ const FORGE_HOUR_API = {
   splitLines,
   structuralWodSignature,
   trimNumber,
+  traceGenerationStage,
   valueFromPath,
   validateWorkoutDefinition,
   validateGeneratedProgramme,
+  validateGeneratedPlansForPersistence,
   validateGeneratedSession,
   validateGeneratedWeek,
   validateWeeklyPlan,

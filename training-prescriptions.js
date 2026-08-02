@@ -15,11 +15,45 @@
     resolveMovementId,
   } = catalogApi;
 
-  const TRAINING_BLOCK_SCHEMA_VERSION = 1;
+  const TRAINING_BLOCK_SCHEMA_VERSION = 2;
+  const GENERATION_TRACE_KEY = "__FORGE_HOUR_GENERATION_TRACE__";
   const VAGUE_PATTERN =
     /(?:^|\b)(?:work on|practice|focus on|develop|base|control|prep|rehearsal|technique density)(?:\b|:)/i;
   const AMBIGUOUS_PATTERN =
     /\b(?:clean|snatch|row|bike|ski|run|pull-?ups?|ring rows?|toes-to-bar|knee raises?|muscle-ups?|HSPU|wall walks?)\s*(?:\/|\bor\b)|(?:\/|\bor\b)\s*(?:clean|snatch|row|bike|ski|run|pull-?ups?|ring rows?|toes-to-bar|knee raises?|muscle-ups?|HSPU|wall walks?)/i;
+  const MEASURABLE_TEXT_LOAD_PATTERN =
+    /(?:\b\d+(?:\.\d+)?\s*(?:kg|lb)\b|\b\d+(?:\.\d+)?(?:\s*[–-]\s*\d+(?:\.\d+)?)?%\s*(?:of\s+[^;—,.]+\s+1RM)?|\bRPE\s*\d+(?:\s*[–-]\s*\d+)?|\bRIR\s*\d+|\b\d+\s*RIR|\bempty\s+(?:training\s+)?bar\b|\bPVC\b)/i;
+  const MEASURABLE_TEXT_REST_PATTERN =
+    /\brest\b[^.;]*(?:\d+(?:\s*[–-]\s*\d+)?\s*(?:seconds?|secs?|minutes?|mins?)|\d+:\d{2})/i;
+
+  function traceGenerationStage(stage, strengthAndSkillBlock) {
+    if (typeof window === "undefined") return strengthAndSkillBlock;
+    if (/jsdom/i.test(window.navigator?.userAgent || "")) {
+      return strengthAndSkillBlock;
+    }
+    const serialized = JSON.stringify(strengthAndSkillBlock);
+    if (
+      !/tall snatch pulls?/i.test(serialized) ||
+      !/overhead hold/i.test(serialized)
+    ) {
+      return strengthAndSkillBlock;
+    }
+    const entry = {
+      stage,
+      strengthAndSkillBlock: structuredClone(strengthAndSkillBlock),
+      timestamp: new Date().toISOString(),
+    };
+    const trace = Array.isArray(globalScope[GENERATION_TRACE_KEY])
+      ? globalScope[GENERATION_TRACE_KEY]
+      : [];
+    trace.push(entry);
+    globalScope[GENERATION_TRACE_KEY] = trace;
+    console.debug(
+      `[generation-pipeline] ${stage}`,
+      entry.strengthAndSkillBlock,
+    );
+    return strengthAndSkillBlock;
+  }
 
   function range(min, max) {
     return { min, max };
@@ -83,7 +117,7 @@
     const referenceLift = definition?.referenceLift || undefined;
     if (/tall-(?:clean|snatch)-pulls/.test(movementId)) {
       return {
-        percentage: range(40, 50),
+        percentage: range(35, 45),
         referenceLift,
         rpe: range(5, 6),
         instruction: "Use perfect positions and a fast, vertical extension.",
@@ -360,6 +394,73 @@
     return candidates[0] || null;
   }
 
+  function movementsFromText(value) {
+    const normalized = String(value || "").toLowerCase();
+    return MOVEMENT_CATALOG.filter((movement) => {
+      const names = [movement.displayName, movement.id.replaceAll("-", " ")];
+      return names.some((name) => normalized.includes(name.toLowerCase()));
+    });
+  }
+
+  function freeTextTrainingIssues(value, blockId = "free-text-strength") {
+    const text = String(value || "").trim();
+    if (!text) return [];
+    const loadedMovements = movementsFromText(text).filter(
+      (movement) => movement.loadRequired,
+    );
+    const issues = [];
+    if (loadedMovements.length && !MEASURABLE_TEXT_LOAD_PATTERN.test(text)) {
+      issues.push(
+        issue(
+          blockId,
+          "error",
+          "MISSING_LOAD",
+          `Loaded free-text exercise needs measurable load guidance: ${loadedMovements
+            .map((movement) => movement.displayName)
+            .join(", ")}.`,
+        ),
+      );
+    }
+    if (
+      loadedMovements.length &&
+      /\b(?:sets?|rounds?)\b/i.test(text) &&
+      !MEASURABLE_TEXT_REST_PATTERN.test(text)
+    ) {
+      issues.push(
+        issue(
+          blockId,
+          "error",
+          "MISSING_REST",
+          "Loaded free-text exercise needs measurable rest guidance.",
+        ),
+      );
+    }
+    return issues;
+  }
+
+  function repairFreeTextTraining(value) {
+    const text = String(value || "").trim();
+    const issues = freeTextTrainingIssues(text);
+    if (!issues.length) return text;
+    const additions = [];
+    if (issues.some((item) => item.code === "MISSING_LOAD")) {
+      const referenceLift = /snatch|overhead hold/i.test(text)
+        ? "snatch"
+        : /clean|front-rack hold/i.test(text)
+          ? "clean and jerk"
+          : null;
+      additions.push(
+        referenceLift
+          ? `Load: 35–45% of ${referenceLift} 1RM or RPE 5–6`
+          : "Load: RPE 5–6",
+      );
+    }
+    if (issues.some((item) => item.code === "MISSING_REST")) {
+      additions.push("rest 60–90 seconds between sets");
+    }
+    return additions.length ? `${text} — ${additions.join("; ")}` : text;
+  }
+
   function strengthBlockFromText(session, text, index, durationMinutes) {
     const id = `${session.id}-strength-${index + 1}`;
     if (/tall (?:clean|snatch) pulls?/i.test(text)) {
@@ -448,7 +549,7 @@
       totalStrength / Math.max(1, strengthItems.length),
     );
     const remainder = totalStrength - baseStrength * strengthItems.length;
-    return [
+    const blocks = [
       exactWarmupBlock(session),
       ...strengthItems.map((item, index) =>
         strengthBlockFromText(
@@ -460,6 +561,13 @@
       ),
       exactCooldownBlock(session),
     ];
+    traceGenerationStage("2. Parsed programme", {
+      rawStrength: strengthItems,
+      parsedStrengthAndSkillBlocks: blocks.filter(
+        (item) => !["warmup", "cooldown"].includes(item.category),
+      ),
+    });
+    return blocks;
   }
 
   function issue(blockId, severity, code, message, exerciseId) {
@@ -721,9 +829,28 @@
       Array.isArray(session.trainingBlocks) && session.trainingBlocks.length
         ? session.trainingBlocks
         : buildGeneratedTrainingBlocks(session);
-    const repairedIssues = sourceBlocks.flatMap(trainingBlockIssues);
+    traceGenerationStage("3. Normalized programme", {
+      strength: session.strength,
+      strengthAndSkillBlocks: sourceBlocks,
+    });
+    const repairedIssues = [
+      ...sourceBlocks.flatMap(trainingBlockIssues),
+      ...(Array.isArray(session.strength) ? session.strength : []).flatMap(
+        (item, index) =>
+          freeTextTrainingIssues(item, `${session.id}-strength-${index + 1}`),
+      ),
+    ];
+    const repairedStrength = (
+      Array.isArray(session.strength) ? session.strength : []
+    ).map(repairFreeTextTraining);
+    traceGenerationStage("5. Validation result", {
+      issues: repairedIssues,
+      strength: session.strength,
+      strengthAndSkillBlocks: sourceBlocks,
+    });
     let next = {
       ...session,
+      strength: repairedStrength,
       workoutDefinition: applyWorkoutLoadGuidance(session.workoutDefinition),
       trainingBlockSchemaVersion: TRAINING_BLOCK_SCHEMA_VERSION,
       trainingBlocks: sourceBlocks.map(repairTrainingBlock),
@@ -733,6 +860,10 @@
         message: `Automatically repaired: ${item.message}`,
       })),
     };
+    traceGenerationStage("6. Repair result", {
+      strength: next.strength,
+      strengthAndSkillBlocks: next.trainingBlocks,
+    });
     let issues = generatedTrainingIssues(next).filter(
       (item) => item.severity === "error",
     );
@@ -778,18 +909,23 @@
     if (!load) return "";
     const parts = [];
     if (load.fixedWeightKg != null) parts.push(`${load.fixedWeightKg} kg`);
+    let percentageText = "";
     if (load.percentage != null) {
       const value =
         typeof load.percentage === "object"
-          ? `${load.percentage.min}-${load.percentage.max}%`
+          ? `${load.percentage.min}–${load.percentage.max}%`
           : `${load.percentage}%`;
-      parts.push(
-        `${value}${load.referenceLift ? ` of ${load.referenceLift} 1RM` : ""}`,
-      );
+      percentageText = `${value}${load.referenceLift ? ` of ${load.referenceLift} 1RM` : ""}`;
     }
+    let rpeText = "";
     if (load.rpe != null) {
+      rpeText = `RPE ${typeof load.rpe === "object" ? `${load.rpe.min}–${load.rpe.max}` : load.rpe}`;
+    }
+    if (percentageText || rpeText) {
       parts.push(
-        `RPE ${typeof load.rpe === "object" ? `${load.rpe.min}-${load.rpe.max}` : load.rpe}`,
+        percentageText && rpeText
+          ? `${percentageText} or ${rpeText}`
+          : percentageText || rpeText,
       );
     }
     if (load.rir != null) parts.push(`${load.rir} RIR`);
@@ -833,7 +969,7 @@
     });
     if (prescription.rest) {
       const rest = prescription.rest;
-      const seconds = rest.seconds || `${rest.minSeconds}-${rest.maxSeconds}`;
+      const seconds = rest.seconds || `${rest.minSeconds}–${rest.maxSeconds}`;
       items.push(`Rest: ${seconds} seconds after each ${rest.after}.`);
     }
     if (prescription.scalingOptions.length) {
@@ -849,13 +985,16 @@
     buildGeneratedTrainingBlocks,
     defaultLoadForMovement,
     finalizeGeneratedTraining,
+    freeTextTrainingIssues,
     generatedTrainingIssues,
     gymnasticsBlock,
     measurableLoad,
     olympicAccessoryBlock,
     repairTrainingBlock,
+    repairFreeTextTraining,
     renderTrainingBlockItems,
     trainingBlockIssues,
+    traceGenerationStage,
   });
 
   if (typeof globalScope !== "undefined") {
