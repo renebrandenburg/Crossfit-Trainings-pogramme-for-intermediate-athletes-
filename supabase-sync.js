@@ -142,7 +142,7 @@
     },
   ];
   const SELECT_PAGE_SIZE = 1000;
-  const ATHLETE_STATE_SCHEMA_VERSION = 2;
+  const ATHLETE_STATE_SCHEMA_VERSION = 3;
   const ATHLETE_STATE_MAX_BYTES = 5 * 1024 * 1024;
   const ATHLETE_STATE_COLUMNS = "user_id,schema_version,state,updated_at";
   const LOWER_IS_BETTER_PR_IDS = new Set(["row1k", "row2k", "run5k", "murph"]);
@@ -292,6 +292,31 @@
         /^\d{4}-\d{2}-\d{2}$/.test(state.cycleStartDate)
           ? state.cycleStartDate
           : null,
+      v2Programs: Array.isArray(state.v2Programs)
+        ? state.v2Programs.filter(
+            (program) =>
+              program &&
+              typeof program === "object" &&
+              program.engineVersion === "v2" &&
+              typeof program.id === "string",
+          )
+        : [],
+      activeV2ProgramId:
+        typeof state.activeV2ProgramId === "string"
+          ? state.activeV2ProgramId
+          : null,
+      v2ProgramRevisions:
+        state.v2ProgramRevisions &&
+        typeof state.v2ProgramRevisions === "object" &&
+        !Array.isArray(state.v2ProgramRevisions)
+          ? state.v2ProgramRevisions
+          : {},
+      movementRestrictions:
+        state.movementRestrictions &&
+        typeof state.movementRestrictions === "object" &&
+        !Array.isArray(state.movementRestrictions)
+          ? state.movementRestrictions
+          : { movementIds: [], movementFamilyIds: [], guidance: null },
     };
     const serialized = JSON.stringify(canonical);
     if (new TextEncoder().encode(serialized).length > ATHLETE_STATE_MAX_BYTES) {
@@ -324,7 +349,7 @@
       row.schema_version,
       "Athlete-state schema version",
     );
-    if (![1, ATHLETE_STATE_SCHEMA_VERSION].includes(schemaVersion)) {
+    if (![1, 2, ATHLETE_STATE_SCHEMA_VERSION].includes(schemaVersion)) {
       throw syncError(
         "validate_remote_athlete_state",
         new Error("Athlete-state schema version is unsupported"),
@@ -945,6 +970,12 @@
     return result ? result.data : undefined;
   }
 
+  function isMissingV2Schema(error) {
+    return ["42P01", "42883", "PGRST202", "PGRST204", "PGRST205"].includes(
+      String(error?.code || ""),
+    );
+  }
+
   async function upsertCompatibleLogs(client, rows) {
     const isBatch = Array.isArray(rows);
     let compatibleRows = isBatch
@@ -1201,6 +1232,136 @@
           assertNoError(result, "save_athlete_state"),
           userId,
         );
+      },
+      async loadProgrammingEngineV2Flag(userId) {
+        const normalizedUserId = requiredString(
+          userId,
+          "User ID",
+          "load_programming_engine_v2_flag",
+        );
+        const result = await client
+          .from("programming_engine_flags")
+          .select("user_id,v2_enabled,rollout_group,updated_at")
+          .eq("user_id", normalizedUserId)
+          .maybeSingle();
+        if (result?.error && isMissingV2Schema(result.error)) {
+          return {
+            enabled: false,
+            rolloutGroup: "migration_pending",
+            updatedAt: null,
+          };
+        }
+        const row = assertNoError(result, "load_programming_engine_v2_flag");
+        return row
+          ? {
+              enabled: row.v2_enabled === true,
+              rolloutGroup: String(row.rollout_group || "disabled"),
+              updatedAt: row.updated_at ? String(row.updated_at) : null,
+            }
+          : { enabled: false, rolloutGroup: "disabled", updatedAt: null };
+      },
+      async loadActiveProgrammingEngineV2() {
+        const result = await client.rpc("load_active_programming_engine_v2");
+        if (result?.error && isMissingV2Schema(result.error)) return null;
+        const payload = assertNoError(
+          result,
+          "load_active_programming_engine_v2",
+        );
+        if (!payload) return null;
+        assertObject(
+          payload,
+          "V2 programme response",
+          "load_active_programming_engine_v2",
+        );
+        assertObject(
+          payload.program,
+          "V2 programme",
+          "load_active_programming_engine_v2",
+        );
+        return {
+          program: payload.program,
+          revision: requiredFiniteNumber(
+            payload.revision,
+            "V2 programme revision",
+            "load_active_programming_engine_v2",
+          ),
+        };
+      },
+      async saveProgrammingEngineV2(program, expectedRevision = null) {
+        const payload = assertObject(
+          program,
+          "V2 programme",
+          "save_programming_engine_v2",
+        );
+        if (
+          payload.engineVersion !== "v2" ||
+          payload.validation?.valid !== true ||
+          payload.validation?.issues?.some?.(
+            (item) => item?.severity === "error",
+          )
+        ) {
+          throw syncError(
+            "save_programming_engine_v2",
+            new Error("A validated V2 programme is required"),
+          );
+        }
+        const result = await client.rpc("save_programming_engine_v2", {
+          p_program: payload,
+          p_expected_revision:
+            expectedRevision == null
+              ? null
+              : requiredFiniteNumber(
+                  expectedRevision,
+                  "V2 programme revision",
+                  "save_programming_engine_v2",
+                ),
+        });
+        return assertNoError(result, "save_programming_engine_v2");
+      },
+      async loadMovementRestrictions(userId) {
+        const normalizedUserId = requiredString(
+          userId,
+          "User ID",
+          "load_movement_restrictions",
+        );
+        const result = await client
+          .from("athlete_movement_restrictions")
+          .select(
+            "id,user_id,movement_id,movement_family_id,guidance,created_at,updated_at",
+          )
+          .eq("user_id", normalizedUserId);
+        if (result?.error && isMissingV2Schema(result.error)) return [];
+        return assertNoError(result, "load_movement_restrictions").map(
+          (row) => ({
+            id: String(row.id),
+            movementId: row.movement_id ? String(row.movement_id) : null,
+            movementFamilyId: row.movement_family_id
+              ? String(row.movement_family_id)
+              : null,
+            guidance: row.guidance ? String(row.guidance) : null,
+            createdAt: String(row.created_at),
+            updatedAt: String(row.updated_at),
+          }),
+        );
+      },
+      async replaceMovementRestrictions(restrictions) {
+        if (!Array.isArray(restrictions)) {
+          throw syncError(
+            "replace_movement_restrictions",
+            new Error("Movement restrictions must be an array"),
+          );
+        }
+        const payload = restrictions.map((restriction) => ({
+          movement_id: restriction.movementId || null,
+          movement_family_id: restriction.movementFamilyId || null,
+          guidance: restriction.guidance || null,
+        }));
+        const result = await client.rpc(
+          "replace_athlete_movement_restrictions",
+          { p_restrictions: payload },
+        );
+        if (result?.error && isMissingV2Schema(result.error)) return [];
+        return assertNoError(result, "replace_movement_restrictions");
       },
       async saveLog(log, userId) {
         const row = logToRow(log, userId);

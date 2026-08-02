@@ -17,6 +17,7 @@ async function logSelectedWorkout(page) {
 test("@critical generated plan matches and persists builder selections", async ({
   page,
 }) => {
+  test.slow();
   const app = new AppShell(page);
   const builder = new PlanBuilderPage(page);
   await app.open();

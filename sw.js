@@ -1,7 +1,7 @@
 "use strict";
 
 const CACHE_PREFIX = "crossfit-training-programme-";
-const CACHE_NAME = `${CACHE_PREFIX}v17`;
+const CACHE_NAME = `${CACHE_PREFIX}v18-engine-v2`;
 const LOCAL_ASSETS = [
   "./",
   "./index.html",
@@ -11,6 +11,7 @@ const LOCAL_ASSETS = [
   "./achievements.js",
   "./movement-catalog.js",
   "./training-prescriptions.js",
+  "./programming-v2.js",
   "./app.js",
   "./supabase-config.js",
   "./supabase-sync.js",

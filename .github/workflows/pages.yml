@@ -42,6 +42,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
       - name: Set up Supabase CLI
         uses: supabase/setup-cli@v2
         with:
@@ -52,6 +58,12 @@ jobs:
 
       - name: Test migrations, constraints, RPC, and RLS
         run: supabase test db
+
+      - name: Verify full V2 programme save and load
+        run: |
+          npm ci
+          npm run test:db:v2:fixture
+          supabase test db --local build/v2-database-integration.test.sql
 
       - name: Lint public database schema
         run: supabase db lint --local --schema public --level warning --fail-on warning
@@ -79,10 +91,22 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build programming engine V2
+        run: |
+          npm ci
+          npm run build:v2
+
       - name: Prepare static site
         run: |
           mkdir -p dist
-          cp index.html styles.css build-info.js local-state-store.js achievements.js movement-catalog.js training-prescriptions.js app.js supabase-config.js supabase-sync.js react-app.js manifest.webmanifest sw.js icon.svg dist/
+          cp build/programming-v2.js programming-v2.js
+          cp index.html styles.css build-info.js local-state-store.js achievements.js movement-catalog.js training-prescriptions.js app.js supabase-config.js supabase-sync.js react-app.js programming-v2.js manifest.webmanifest sw.js icon.svg dist/
           printf '"use strict";\nwindow.ForgeHourBuild = Object.freeze({ commitSha: "%s" });\n' "${{ github.sha }}" > dist/build-info.js
 
       - name: Configure GitHub Pages

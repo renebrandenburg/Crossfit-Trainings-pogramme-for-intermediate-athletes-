@@ -143,6 +143,9 @@ test("@critical Olympic prescriptions are exact, executable, and duplicate-safe"
   });
 
   let plan = await readActivePlan(page);
+  const trainingBlockSchemaVersion = await page.evaluate(
+    () => window.ForgeHour.TRAINING_BLOCK_SCHEMA_VERSION,
+  );
   const assertMovementSafety = (sessions) => {
     expect(sessions).toHaveLength(16);
     const serialized = JSON.stringify(sessions);
@@ -180,7 +183,9 @@ test("@critical Olympic prescriptions are exact, executable, and duplicate-safe"
       expect(longestMissing).toBeLessThanOrEqual(2);
     }
     for (const session of sessions) {
-      expect(session.trainingBlockSchemaVersion).toBe(1);
+      expect(session.trainingBlockSchemaVersion).toBe(
+        trainingBlockSchemaVersion,
+      );
       expect(session.trainingBlocks.length).toBeGreaterThan(0);
       for (const trainingBlock of session.trainingBlocks) {
         expect(trainingBlock.durationMinutes).toBeGreaterThan(0);

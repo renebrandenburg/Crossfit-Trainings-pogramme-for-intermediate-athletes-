@@ -16,6 +16,7 @@ module.exports = [
       "playwright/.auth/**",
       ".agents/**",
       ".codex/**",
+      "src/programming-v2/**",
       "AGENTS.md",
       "skills-lock.json",
     ],
@@ -40,6 +41,7 @@ module.exports = [
     files: [
       "tests/**/*.js",
       "e2e/**/*.js",
+      "scripts/**/*.js",
       "playwright.config.js",
       "eslint.config.cjs",
     ],

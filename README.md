@@ -22,6 +22,11 @@ A phone-first, box-aware CrossFit coach and progression tracker for intermediate
 - React-powered phone-first UI mounted into a static app shell.
 - Light, dark, and system theme setting saved locally.
 - Optional private Supabase account sync for profiles, programmes, workout logs, and PR records.
+- Feature-flagged Programming Engine V2 with a deterministic six-week,
+  two-session mixed-strength block, independent progression tracks, calculated
+  session duration, structured prescriptions, scoped regeneration, completion
+  feedback, and a database-enforced validation gate. See
+  [the V2 architecture guide](docs/programming-engine-v2.md).
 - Local-first storage in the browser with JSON backup/restore, workout-log and PR-history CSV exports, a PWA manifest, and an offline cache.
 
 The primary navigation is **Today**, **Calendar**, **Log**, **Progress**, and

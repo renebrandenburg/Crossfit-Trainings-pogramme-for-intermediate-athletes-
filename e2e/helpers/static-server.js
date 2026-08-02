@@ -28,7 +28,12 @@ const server = http.createServer(async (request, response) => {
     requestUrl.pathname === "/"
       ? "index.html"
       : decodeURIComponent(requestUrl.pathname).replace(/^\/+/, "");
-  const filePath = path.resolve(workspaceRoot, relativePath);
+  const filePath = path.resolve(
+    workspaceRoot,
+    relativePath === "programming-v2.js"
+      ? path.join("build", "programming-v2.js")
+      : relativePath,
+  );
   if (
     filePath !== workspaceRoot &&
     !filePath.startsWith(`${workspaceRoot}${path.sep}`)

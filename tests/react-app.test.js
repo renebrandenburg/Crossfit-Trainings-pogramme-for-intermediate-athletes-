@@ -58,6 +58,7 @@ function createMockSupabase({
   const authListeners = new Set();
   const data = {
     athlete_states: remote.athlete_states || [],
+    programming_engine_flags: remote.programming_engine_flags || [],
     workout_logs: remote.workout_logs || [],
     pr_attempts: remote.pr_attempts || [],
     training_events: remote.training_events || [],
@@ -110,12 +111,15 @@ function createMockSupabase({
           return ok(data[table]);
         };
         if (table === "personal_records") return selected();
-        if (table === "athlete_states") {
+        if (
+          table === "athlete_states" ||
+          table === "programming_engine_flags"
+        ) {
           let ownerId = null;
-          const athleteBuilder = {
+          const ownerBuilder = {
             eq: (_column, value) => {
               ownerId = String(value);
-              return athleteBuilder;
+              return ownerBuilder;
             },
             maybeSingle: async () => {
               const result = await selected();
@@ -128,7 +132,7 @@ function createMockSupabase({
               };
             },
           };
-          return athleteBuilder;
+          return ownerBuilder;
         }
         const builder = {
           order: () => builder,
@@ -229,12 +233,13 @@ function mountApp({
   storedState = null,
   confirmResponses = [true],
   apiOverrides = null,
+  url = "http://localhost/",
 } = {}) {
   const dom = new JSDOM(
     '<!doctype html><html><head><meta name="theme-color" content="#10120f"></head><body><div id="root"></div></body></html>',
     {
       pretendToBeVisual: true,
-      url: "http://localhost/",
+      url,
     },
   );
 
@@ -312,6 +317,9 @@ function mountApp({
   dom.window.ForgeHour = global.ForgeHour;
   if (apiOverrides) Object.assign(dom.window.ForgeHour, apiOverrides);
   dom.window.ForgeHourSync = global.ForgeHourSync;
+  dom.window.ForgeHourProgrammingV2 = freshRequire(
+    "../build/programming-v2.cjs",
+  );
   freshRequire("../react-app.js");
 
   const testingLibrary = require("@testing-library/react");
@@ -1067,6 +1075,78 @@ test("React Testing Library updates RX guidance after assessment changes", async
     });
   } finally {
     cleanup();
+  }
+});
+
+test("React renders complete V2 strength and skill prescriptions from the validated final graph", async () => {
+  const mounted = mountApp();
+
+  try {
+    openMoreTool(mounted, "Build programme");
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", {
+        name: "Generate six-week V2 block",
+      }),
+    );
+
+    const programme = await mounted.ui.findByTestId("v2-programme");
+    await mounted.waitFor(() => {
+      assert.equal(mounted.ui.getAllByTestId("v2-session-card").length, 2);
+      assert.match(programme.textContent, /72–75% of front squat 1RM/);
+      assert.match(programme.textContent, /Rest 120 sec/);
+      assert.match(programme.textContent, /Working weight90–95 kg/);
+      assert.doesNotMatch(programme.textContent, /Working weight90–937\.5 kg/);
+      assert.match(programme.textContent, /Strict pull-up/);
+      assert.match(programme.textContent, /Scaling:.*Ring row/s);
+      assert.match(programme.textContent, /20 sec/);
+    });
+
+    assert.equal(
+      programme.textContent.includes(
+        "Gymnastics skill: hollow and arch control, strict pulling, and midline strength",
+      ),
+      false,
+    );
+    assert.equal(
+      programme.textContent.includes(
+        "3 sets: 3 tall snatch pulls + 20-second overhead hold",
+      ),
+      false,
+    );
+
+    const saved = mounted.readState();
+    const finalProgramme = saved.v2Programs.find(
+      (item) => item.id === saved.activeV2ProgramId,
+    );
+    assert.equal(
+      window.ForgeHourProgrammingV2.validateProgram(finalProgramme).valid,
+      true,
+    );
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React keeps V2 disabled on production without an allowlist flag", () => {
+  const mounted = mountApp({
+    url: "https://renebrandenburg.github.io/?engine=v2",
+  });
+
+  try {
+    openMoreTool(mounted, "Build programme");
+    const disabled = mounted.ui.getByTestId("v2-disabled");
+    assert.match(
+      disabled.textContent,
+      /Production access requires sign-in and an administrator-managed allowlist flag/,
+    );
+    assert.equal(
+      mounted.ui.queryByRole("button", {
+        name: "Generate six-week V2 block",
+      }),
+      null,
+    );
+  } finally {
+    mounted.cleanup();
   }
 });
 
@@ -2977,7 +3057,15 @@ test("React Testing Library isolates signed-in scores from legacy guest scores",
 
   try {
     await waitForSignedIn(mounted, { openAccount: true });
-    assert.equal(calls.filter((call) => call.type === "select").length, 6);
+    const selectedTables = calls
+      .filter((call) => call.type === "select")
+      .map((call) => call.table);
+    assert.equal(
+      selectedTables.filter((table) => table !== "programming_engine_flags")
+        .length,
+      6,
+    );
+    assert.ok(selectedTables.includes("programming_engine_flags"));
     fireEvent.click(ui.getByRole("button", { name: "Log" }));
     assert.ok(await ui.findByText(/Account-only squat/));
     assert.equal(ui.queryByText(/Guest-only squat/), null);

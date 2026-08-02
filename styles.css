@@ -1543,3 +1543,87 @@ textarea:focus {
     flex-direction: column;
   }
 }
+.v2-programme {
+  display: grid;
+  gap: 1rem;
+}
+
+.v2-session-card {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+}
+
+.v2-session-section {
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+}
+
+.v2-exercise-card {
+  background: color-mix(in srgb, var(--panel) 88%, var(--accent) 12%);
+  border: 1px solid var(--line);
+  border-radius: 0.85rem;
+  margin-top: 0.75rem;
+  padding: 0.9rem;
+}
+
+.v2-exercise-card h5,
+.v2-session-section h5 {
+  margin: 0;
+}
+
+.v2-prescription {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.v2-prescription-grid {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  margin: 0.75rem 0;
+}
+
+.v2-prescription-grid div {
+  background: var(--panel);
+  border-radius: 0.65rem;
+  padding: 0.55rem;
+}
+
+.v2-prescription-grid dt {
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+.v2-prescription-grid dd {
+  margin: 0.2rem 0 0;
+}
+
+.v2-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.v2-completion,
+.v2-restrictions {
+  margin-top: 1rem;
+}
+
+.v2-completion form,
+.v2-restrictions form {
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 0.85rem;
+}
+
+.v2-completion fieldset,
+.v2-restrictions fieldset {
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+}
+
+.v2-week-summary {
+  padding-block: 0.9rem;
+}

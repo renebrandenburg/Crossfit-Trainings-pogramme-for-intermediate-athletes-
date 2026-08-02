@@ -35,6 +35,14 @@ function athleteState(overrides = {}) {
     selectedWeek: 2,
     planSchemaVersion: 3,
     cycleStartDate: "2026-07-06",
+    v2Programs: [],
+    activeV2ProgramId: null,
+    v2ProgramRevisions: {},
+    movementRestrictions: {
+      movementIds: [],
+      movementFamilyIds: [],
+      guidance: null,
+    },
     ...overrides,
   };
 }
@@ -136,6 +144,56 @@ test("Supabase store loads and saves athlete state for the requested owner", asy
   assert.deepEqual(calls.find((call) => call.type === "upsert").options, {
     onConflict: "user_id",
   });
+});
+
+test("Supabase V2 store uses validated atomic RPCs and optimistic revisions", async () => {
+  const calls = [];
+  const program = {
+    engineVersion: "v2",
+    validation: { valid: true, issues: [] },
+  };
+  const client = {
+    async rpc(name, payload) {
+      calls.push({ name, payload });
+      if (name === "load_active_programming_engine_v2") {
+        return {
+          data: { program, revision: 4 },
+          error: null,
+        };
+      }
+      return {
+        data: { programId: "programme-1", revision: 5 },
+        error: null,
+      };
+    },
+  };
+  const store = createSupabaseStore(client);
+
+  assert.deepEqual(await store.loadActiveProgrammingEngineV2(), {
+    program,
+    revision: 4,
+  });
+  assert.deepEqual(await store.saveProgrammingEngineV2(program, 4), {
+    programId: "programme-1",
+    revision: 5,
+  });
+  assert.deepEqual(calls[1], {
+    name: "save_programming_engine_v2",
+    payload: { p_program: program, p_expected_revision: 4 },
+  });
+
+  await assert.rejects(
+    () =>
+      store.saveProgrammingEngineV2({
+        engineVersion: "v2",
+        validation: {
+          valid: false,
+          issues: [{ severity: "error", code: "MISSING_LOAD" }],
+        },
+      }),
+    /validated V2 programme is required/,
+  );
+  assert.equal(calls.length, 2);
 });
 
 test("Supabase sync helpers merge remote records without duplicates", () => {

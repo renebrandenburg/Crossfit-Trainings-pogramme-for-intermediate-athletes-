@@ -491,6 +491,9 @@ const EQUIPMENT_OPTIONS = {
   rings: "Gymnastics rings",
   rower: "Rowing machine",
   bike: "Bike erg",
+  skiErg: "Ski erg",
+  bands: "Resistance bands",
+  pvc: "PVC or dowel",
   running: "Running space",
 };
 const DEFAULT_EQUIPMENT = Object.keys(EQUIPMENT_OPTIONS);

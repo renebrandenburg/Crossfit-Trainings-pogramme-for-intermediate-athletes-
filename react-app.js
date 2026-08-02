@@ -6,6 +6,7 @@
   const syncApi = window.ForgeHourSync;
   const localStateApi = window.ForgeHourLocalState;
   const achievementApi = window.ForgeHourAchievements;
+  const v2Api = window.ForgeHourProgrammingV2 || null;
   const ReactRuntime = window.React;
   const ReactDOMRuntime = window.ReactDOM;
 
@@ -165,6 +166,10 @@
    * @property {any[]=} logs
    * @property {any[]=} prAttempts
    * @property {Object<string, any>=} prs
+   * @property {any[]} v2Programs
+   * @property {string|null} activeV2ProgramId
+   * @property {Object<string, number>} v2ProgramRevisions
+   * @property {any} movementRestrictions
    */
 
   /** @returns {AppState} */
@@ -225,6 +230,7 @@
   function saveState(state, previous = null) {
     try {
       validateGeneratedPlansForPersistence(state.plans);
+      validateV2ProgramsForPersistence(state.v2Programs);
       state.plans
         .filter((plan) => plan?.kind === "generated")
         .flatMap((plan) => plan.sessions || [])
@@ -240,6 +246,24 @@
       console.warn("Could not save state.", error);
       return false;
     }
+  }
+
+  function validateV2ProgramsForPersistence(programs) {
+    const values = Array.isArray(programs) ? programs : [];
+    if (values.length && !v2Api) {
+      throw new Error("Programming engine V2 is unavailable.");
+    }
+    values.forEach((program) => {
+      const validation = v2Api.validateProgram(program);
+      if (!validation.valid) {
+        throw new Error(
+          `Invalid V2 programme: ${validation.issues
+            .filter((item) => item.severity === "error")
+            .map((item) => item.code)
+            .join(", ")}`,
+        );
+      }
+    });
   }
 
   /** @returns {ScoreData} */
@@ -262,6 +286,14 @@
       selectedWeek: 1,
       cycleStartDate: startOfCoachWeek(),
       planSchemaVersion: PLAN_SCHEMA_VERSION,
+      v2Programs: [],
+      activeV2ProgramId: null,
+      v2ProgramRevisions: {},
+      movementRestrictions: {
+        movementIds: [],
+        movementFamilyIds: [],
+        guidance: null,
+      },
       updatedAt: new Date().toISOString(),
     };
   }
@@ -307,6 +339,38 @@
       selectedWeek: selection.selectedWeek,
       cycleStartDate: normalized.cycleStartDate,
       planSchemaVersion: PLAN_SCHEMA_VERSION,
+      v2Programs: Array.isArray(source.v2Programs)
+        ? source.v2Programs.filter(
+            (program) =>
+              program &&
+              typeof program === "object" &&
+              program.engineVersion === "v2",
+          )
+        : [],
+      activeV2ProgramId:
+        typeof source.activeV2ProgramId === "string"
+          ? source.activeV2ProgramId
+          : null,
+      v2ProgramRevisions:
+        source.v2ProgramRevisions &&
+        typeof source.v2ProgramRevisions === "object" &&
+        !Array.isArray(source.v2ProgramRevisions)
+          ? source.v2ProgramRevisions
+          : {},
+      movementRestrictions: {
+        movementIds: Array.isArray(source.movementRestrictions?.movementIds)
+          ? source.movementRestrictions.movementIds.map(String)
+          : [],
+        movementFamilyIds: Array.isArray(
+          source.movementRestrictions?.movementFamilyIds,
+        )
+          ? source.movementRestrictions.movementFamilyIds.map(String)
+          : [],
+        guidance:
+          typeof source.movementRestrictions?.guidance === "string"
+            ? source.movementRestrictions.guidance
+            : null,
+      },
       updatedAt:
         typeof source.updatedAt === "string"
           ? source.updatedAt
@@ -327,6 +391,14 @@
         state.cycleStartDate || startOfCoachWeek(),
       ),
       planSchemaVersion: PLAN_SCHEMA_VERSION,
+      v2Programs: state.v2Programs || [],
+      activeV2ProgramId: state.activeV2ProgramId || null,
+      v2ProgramRevisions: state.v2ProgramRevisions || {},
+      movementRestrictions: state.movementRestrictions || {
+        movementIds: [],
+        movementFamilyIds: [],
+        guidance: null,
+      },
       updatedAt,
     };
   }
@@ -339,6 +411,10 @@
       previous.selectedWeek !== next.selectedWeek ||
       previous.cycleStartDate !== next.cycleStartDate ||
       previous.planSchemaVersion !== next.planSchemaVersion ||
+      previous.v2Programs !== next.v2Programs ||
+      previous.activeV2ProgramId !== next.activeV2ProgramId ||
+      previous.v2ProgramRevisions !== next.v2ProgramRevisions ||
+      previous.movementRestrictions !== next.movementRestrictions ||
       previous.updatedAt !== next.updatedAt ||
       previous.activeScoreOwner !== next.activeScoreOwner
     );
@@ -360,14 +436,70 @@
     };
   }
 
+  function mergeHydratedV2State(localState, remoteState) {
+    const localPrograms = Array.isArray(localState?.v2Programs)
+      ? localState.v2Programs
+      : [];
+    const remotePrograms = Array.isArray(remoteState?.v2Programs)
+      ? remoteState.v2Programs
+      : [];
+    const mergedById = new Map(
+      remotePrograms.map((program) => [program.id, program]),
+    );
+    const localWins = new Set();
+    localPrograms.forEach((program) => {
+      const remoteProgram = mergedById.get(program.id);
+      const localTime = Date.parse(String(program.updatedAt || ""));
+      const remoteTime = Date.parse(String(remoteProgram?.updatedAt || ""));
+      if (
+        !remoteProgram ||
+        (Number.isFinite(localTime) &&
+          (!Number.isFinite(remoteTime) || localTime > remoteTime))
+      ) {
+        const validation = v2Api?.validateProgram(program);
+        if (validation?.valid) {
+          mergedById.set(program.id, program);
+          localWins.add(program.id);
+        }
+      }
+    });
+    const v2Programs = [...mergedById.values()];
+    const localActiveId = localState?.activeV2ProgramId;
+    const activeV2ProgramId =
+      localActiveId && localWins.has(localActiveId)
+        ? localActiveId
+        : remoteState?.activeV2ProgramId ||
+          (localActiveId && mergedById.has(localActiveId)
+            ? localActiveId
+            : null);
+    const v2ProgramRevisions = Object.fromEntries(
+      v2Programs.map((program) => [
+        program.id,
+        localWins.has(program.id)
+          ? Number(localState?.v2ProgramRevisions?.[program.id]) || 0
+          : Number(remoteState?.v2ProgramRevisions?.[program.id]) || 0,
+      ]),
+    );
+    return {
+      ...remoteState,
+      v2Programs,
+      activeV2ProgramId,
+      v2ProgramRevisions,
+    };
+  }
+
   function activateAthleteOwner(state, ownerId, providedState = null) {
     const resolvedOwner = ownerId || GUEST_SCORE_OWNER;
     const stashed = withActiveAthleteState(state);
-    const athleteState = normalizeAthleteState(
-      providedState ||
-        stashed.athleteStateByOwner?.[resolvedOwner] ||
-        defaultAthleteState(),
+    const localAthleteState = normalizeAthleteState(
+      stashed.athleteStateByOwner?.[resolvedOwner] || defaultAthleteState(),
     );
+    const remoteAthleteState = providedState
+      ? normalizeAthleteState(providedState)
+      : null;
+    const athleteState = remoteAthleteState
+      ? mergeHydratedV2State(localAthleteState, remoteAthleteState)
+      : localAthleteState;
     return {
       ...stashed,
       ...athleteState,
@@ -681,6 +813,31 @@
     return redirect.toString();
   }
 
+  function resolvedV2FeatureFlag(remoteEnabled = false) {
+    if (!v2Api) return { enabled: false, source: "disabled" };
+    return v2Api.resolveProgrammingFeatureFlag({
+      remoteEnabled,
+      hostname: window.location.hostname,
+    });
+  }
+
+  function emitV2GenerationLog(program, input) {
+    try {
+      if (
+        window.localStorage.getItem("forge-hour-v2-debug") !== "true" &&
+        window.ForgeHourV2Debug !== true
+      ) {
+        return;
+      }
+      console.info(
+        "[programming-engine-v2]",
+        v2Api.createGenerationLogRecord(program, input),
+      );
+    } catch (error) {
+      console.warn("Could not emit the optional V2 debug record.", error);
+    }
+  }
+
   function weekOptions() {
     return WEEK_META.map((week) =>
       h(
@@ -822,6 +979,9 @@
     const [systemTheme, setSystemTheme] = ReactRuntime.useState(getSystemTheme);
     const [remoteStore] = ReactRuntime.useState(createRemoteStore);
     const [remoteUser, setRemoteUser] = ReactRuntime.useState(null);
+    const [v2FeatureFlag, setV2FeatureFlag] = ReactRuntime.useState(() =>
+      resolvedV2FeatureFlag(false),
+    );
     const [localSaveError, setLocalSaveError] = ReactRuntime.useState("");
     const [syncStatus, setSyncStatus] = ReactRuntime.useState(() => ({
       state: remoteStore ? "signed-out" : "not-configured",
@@ -852,7 +1012,12 @@
       rxLevel: buildRxReadiness(appState.profile, scoreData.logs).rxLevel,
       now: new Date().toISOString(),
     });
-    const viewState = { ...appState, ...scoreData, achievementProgress };
+    const viewState = {
+      ...appState,
+      ...scoreData,
+      achievementProgress,
+      v2FeatureFlag,
+    };
 
     const updateAppState = ReactRuntime.useCallback((updater) => {
       const current = appStateRef.current;
@@ -863,6 +1028,7 @@
         : candidate;
       try {
         validateGeneratedPlansForPersistence(next.plans);
+        validateV2ProgramsForPersistence(next.v2Programs);
       } catch (error) {
         console.error(
           "State update rejected invalid generated programme.",
@@ -984,6 +1150,73 @@
               ownerId,
             ),
           );
+          let remoteFlag = { enabled: false, rolloutGroup: "disabled" };
+          try {
+            remoteFlag = await remoteStore.loadProgrammingEngineV2Flag(ownerId);
+          } catch (error) {
+            // V2 is an additive rollout. A missing migration, older test double,
+            // or temporarily unavailable flag endpoint must never break the V1
+            // account hydration path.
+            console.warn("Could not load the optional V2 feature flag.", error);
+          }
+          if (!isCurrentAuth(ownerId, authEpoch)) return;
+          const resolvedFlag = resolvedV2FeatureFlag(remoteFlag.enabled);
+          setV2FeatureFlag(resolvedFlag);
+          if (resolvedFlag.source === "supabase") {
+            const [remoteV2, restrictionRows] = await Promise.all([
+              remoteStore.loadActiveProgrammingEngineV2(),
+              remoteStore.loadMovementRestrictions(ownerId),
+            ]);
+            if (!isCurrentAuth(ownerId, authEpoch)) return;
+            updateAppState((current) => {
+              const remoteProgram = remoteV2?.program || null;
+              if (remoteProgram) {
+                const validation = v2Api?.validateProgram(remoteProgram);
+                if (!validation?.valid) {
+                  console.warn(
+                    "Remote V2 programme failed local validation and was not loaded.",
+                    validation?.issues,
+                  );
+                }
+              }
+              const validRemoteProgram =
+                remoteProgram && v2Api?.validateProgram(remoteProgram).valid
+                  ? remoteProgram
+                  : null;
+              const movementRestrictions = {
+                movementIds: restrictionRows
+                  .map((item) => item.movementId)
+                  .filter(Boolean),
+                movementFamilyIds: restrictionRows
+                  .map((item) => item.movementFamilyId)
+                  .filter(Boolean),
+                guidance:
+                  restrictionRows.find((item) => item.guidance)?.guidance ||
+                  current.movementRestrictions?.guidance ||
+                  null,
+              };
+              return {
+                ...current,
+                v2Programs: validRemoteProgram
+                  ? [
+                      validRemoteProgram,
+                      ...(current.v2Programs || []).filter(
+                        (item) => item.id !== validRemoteProgram.id,
+                      ),
+                    ]
+                  : current.v2Programs || [],
+                activeV2ProgramId:
+                  validRemoteProgram?.id || current.activeV2ProgramId || null,
+                v2ProgramRevisions: validRemoteProgram
+                  ? {
+                      ...(current.v2ProgramRevisions || {}),
+                      [validRemoteProgram.id]: remoteV2.revision,
+                    }
+                  : current.v2ProgramRevisions || {},
+                movementRestrictions,
+              };
+            });
+          }
           const hydrated = await hydrateRemoteScores(ownerId, authEpoch);
           if (!hydrated || !isCurrentAuth(ownerId, authEpoch)) return;
           loadedOwnerRef.current = authToken;
@@ -1020,6 +1253,7 @@
         skipAthleteSaveRef.current = null;
         window.clearTimeout(athleteSaveTimerRef.current);
         setRemoteUser(null);
+        setV2FeatureFlag(resolvedV2FeatureFlag(false));
         updateAppState((current) =>
           activateAthleteOwner(current, GUEST_SCORE_OWNER),
         );
@@ -1284,6 +1518,10 @@
       appState.activePlanId,
       appState.activeScoreOwner,
       appState.plans,
+      appState.v2Programs,
+      appState.activeV2ProgramId,
+      appState.v2ProgramRevisions,
+      appState.movementRestrictions,
       appState.profile,
       appState.selectedWeek,
       appState.cycleStartDate,
@@ -1417,6 +1655,264 @@
             ? `Regenerated ${sessions.length} sessions.`
             : `Generated ${sessions.length} sessions.`,
       );
+    }
+
+    function v2AvailableEquipment() {
+      const activePlan = selectActivePlan(appStateRef.current);
+      const selected = activePlan?.generatorOptions
+        ? normalizeGeneratorOptions(activePlan.generatorOptions)
+            .availableEquipment
+        : Object.keys(EQUIPMENT_OPTIONS);
+      const mapping = {
+        barbell: "barbell",
+        rack: "rack",
+        pullupBar: "pull-up bar",
+        dumbbells: "dumbbell",
+        kettlebells: "kettlebell",
+        box: "box",
+        rings: "rings",
+        rower: "rower",
+        bike: "bike",
+        skiErg: "ski erg",
+        bands: "band",
+        pvc: "PVC",
+      };
+      return [...new Set(selected.map((key) => mapping[key]).filter(Boolean))];
+    }
+
+    function storeV2ProgramLocally(program, revision = undefined) {
+      updateAppState((current) => ({
+        ...current,
+        v2Programs: [
+          program,
+          ...(current.v2Programs || []).filter(
+            (item) => item.id !== program.id,
+          ),
+        ],
+        activeV2ProgramId: program.id,
+        v2ProgramRevisions:
+          revision === undefined
+            ? current.v2ProgramRevisions || {}
+            : {
+                ...(current.v2ProgramRevisions || {}),
+                [program.id]: revision,
+              },
+      }));
+    }
+
+    async function syncV2Program(program, expectedRevision) {
+      const ownerId = remoteUser ? String(remoteUser.id || "") : "";
+      if (
+        !remoteStore ||
+        !ownerId ||
+        appStateRef.current.activeScoreOwner !== ownerId ||
+        v2FeatureFlag.source !== "supabase"
+      ) {
+        return null;
+      }
+      setSyncStatus({
+        state: "signed-in",
+        message: "Saving the periodized V2 programme...",
+      });
+      try {
+        const saved = await remoteStore.saveProgrammingEngineV2(
+          program,
+          expectedRevision,
+        );
+        storeV2ProgramLocally(program, Number(saved.revision));
+        setSyncStatus({
+          state: "signed-in",
+          message: "Periodized V2 programme synced.",
+        });
+        return saved;
+      } catch (error) {
+        console.warn("Could not sync the V2 programme.", error);
+        setSyncStatus({
+          state: "error",
+          message:
+            "The V2 programme is valid and saved locally, but database sync needs a retry.",
+        });
+        throw error;
+      }
+    }
+
+    async function handleGenerateV2Programme() {
+      if (!v2Api || !v2FeatureFlag.enabled) {
+        notify("Programming Engine V2 is not enabled for this account.");
+        return;
+      }
+      if (
+        v2FeatureFlag.source !== "local_development" &&
+        (!remoteUser || !String(remoteUser.id || ""))
+      ) {
+        notify("Sign in with an enabled account to generate a V2 block.");
+        return;
+      }
+      const now = new Date().toISOString();
+      const programId =
+        typeof window.crypto?.randomUUID === "function"
+          ? window.crypto.randomUUID()
+          : v2Api.stableUuid(createId(), now, "program-v2");
+      const profile = appStateRef.current.profile;
+      try {
+        const program = v2Api.generateMixedStrengthBlock({
+          programId,
+          ownerId: remoteUser ? String(remoteUser.id || "") : null,
+          generatedAt: now,
+          blockType: "mixed_strength",
+          seed: createGenerationSeed(),
+          athleteLevel: "intermediate",
+          maxes: {
+            front_squat: Number(profile.maxes?.frontSquat) || null,
+            back_squat: Number(profile.maxes?.backSquat) || null,
+            snatch: Number(profile.maxes?.snatch) || null,
+            clean_and_jerk: Number(profile.maxes?.cleanJerk) || null,
+            strict_press: Number(profile.maxes?.strictPress) || null,
+          },
+          equipment: v2AvailableEquipment(),
+          restrictions: appStateRef.current.movementRestrictions || {
+            movementIds: [],
+            movementFamilyIds: [],
+            guidance: null,
+          },
+          weightIncrementKg: 2.5,
+          roundingMode: "nearest",
+        });
+        const validation = v2Api.validateProgram(program);
+        if (!validation.valid) {
+          throw new Error(
+            `V2 validation failed: ${validation.issues
+              .filter((item) => item.severity === "error")
+              .map((item) => item.code)
+              .join(", ")}`,
+          );
+        }
+        emitV2GenerationLog(program, { event: "generated" });
+        storeV2ProgramLocally(program, 0);
+        try {
+          await syncV2Program(program, null);
+        } catch {
+          // The validated local mirror remains available for an explicit retry.
+        }
+        notify("Generated a connected six-week, two-session V2 block.");
+      } catch (error) {
+        console.error("V2 programme generation was rejected.", error);
+        notify(
+          "V2 generation could not satisfy equipment, restriction, duration, and validation rules. No programme was replaced.",
+        );
+      }
+    }
+
+    async function handleRegenerateV2Session(sessionId, scope) {
+      if (!v2Api) return;
+      const current = (appStateRef.current.v2Programs || []).find(
+        (program) => program.id === appStateRef.current.activeV2ProgramId,
+      );
+      if (!current) return;
+      try {
+        const regenerated = v2Api.regenerateSessionSection({
+          program: current,
+          sessionId,
+          scope,
+          seed: createGenerationSeed(),
+        });
+        emitV2GenerationLog(regenerated.program, {
+          event: "regenerated",
+          regenerationScope: scope,
+        });
+        storeV2ProgramLocally(regenerated.program);
+        const revision = appStateRef.current.v2ProgramRevisions?.[current.id];
+        if (v2FeatureFlag.source === "supabase" && !(revision > 0)) {
+          throw new Error(
+            "V2 programme needs a successful initial sync first.",
+          );
+        }
+        try {
+          await syncV2Program(
+            regenerated.program,
+            v2FeatureFlag.source === "supabase" ? revision : null,
+          );
+        } catch {
+          // Keep the validated local revision and surface sync state separately.
+        }
+        notify(
+          `Regenerated ${scope.replaceAll("_", " ")} within the current progression.`,
+        );
+      } catch (error) {
+        console.error("V2 regeneration was rejected.", error);
+        notify(
+          "Regeneration failed validation. The previous session remains unchanged.",
+        );
+      }
+    }
+
+    async function handleCompleteV2Session(sessionId, feedback) {
+      if (!v2Api) return;
+      const current = (appStateRef.current.v2Programs || []).find(
+        (program) => program.id === appStateRef.current.activeV2ProgramId,
+      );
+      const session = current ? v2Api.findSession(current, sessionId) : null;
+      if (!current || !session) return;
+      try {
+        const completion = v2Api.applySessionCompletion({
+          program: current,
+          sessionId,
+          expectedRevision: session.revision,
+          feedback,
+        });
+        emitV2GenerationLog(completion.program, { event: "completed" });
+        storeV2ProgramLocally(completion.program);
+        const revision = appStateRef.current.v2ProgramRevisions?.[current.id];
+        try {
+          await syncV2Program(
+            completion.program,
+            v2FeatureFlag.source === "supabase" ? revision : null,
+          );
+        } catch {
+          // The completion remains queued in the validated local mirror.
+        }
+        notify(
+          completion.pausedTrackIds.length
+            ? "Session saved. The affected progression is paused for review."
+            : "Session completed. Successful progression tracks advanced.",
+        );
+      } catch (error) {
+        console.error("V2 completion was rejected.", error);
+        notify(
+          "Completion could not be applied safely. No progression changed.",
+        );
+      }
+    }
+
+    async function handleSaveV2Restrictions(restrictions) {
+      updateAppState((current) => ({
+        ...current,
+        movementRestrictions: restrictions,
+      }));
+      if (remoteStore && remoteUser && v2FeatureFlag.source === "supabase") {
+        const rows = [
+          ...restrictions.movementIds.map((movementId) => ({
+            movementId,
+            movementFamilyId: null,
+            guidance: restrictions.guidance,
+          })),
+          ...restrictions.movementFamilyIds.map((movementFamilyId) => ({
+            movementId: null,
+            movementFamilyId,
+            guidance: restrictions.guidance,
+          })),
+        ];
+        try {
+          await remoteStore.replaceMovementRestrictions(rows);
+        } catch (error) {
+          console.warn("Could not sync movement restrictions.", error);
+          setSyncStatus({
+            state: "error",
+            message: "Movement restrictions are local and need a sync retry.",
+          });
+        }
+      }
+      notify("Movement restrictions saved for future V2 generation.");
     }
 
     /** @param {WorkoutSession} session @param {string|null} editingSessionId */
@@ -2130,6 +2626,11 @@
                 onDeleteSession: handleDeleteSession,
                 onLogSession: jumpToLog,
                 onTimerFinish: finishTimerToLog,
+                v2FeatureFlag,
+                onGenerateV2: handleGenerateV2Programme,
+                onRegenerateV2: handleRegenerateV2Session,
+                onCompleteV2: handleCompleteV2Session,
+                onSaveV2Restrictions: handleSaveV2Restrictions,
               })
             : null,
           visitedViews.has("learnView")
@@ -2907,6 +3408,14 @@
           selectedWeek: appState.selectedWeek,
           cycleStartDate: appState.cycleStartDate,
           planSchemaVersion: appState.planSchemaVersion,
+          v2Programs: appState.v2Programs || [],
+          activeV2ProgramId: appState.activeV2ProgramId || null,
+          v2ProgramRevisions: appState.v2ProgramRevisions || {},
+          movementRestrictions: appState.movementRestrictions || {
+            movementIds: [],
+            movementFamilyIds: [],
+            guidance: null,
+          },
         },
         scoreData: {
           logs: appState.logs,
@@ -3078,6 +3587,11 @@
             "p",
             { className: "muted-copy" },
             `Generation trace entries: ${window.__FORGE_HOUR_GENERATION_TRACE__?.length || 0}. Inspect window.__FORGE_HOUR_GENERATION_TRACE__ in developer tools for all nine strength-and-skill snapshots.`,
+          ),
+          h(
+            "p",
+            { className: "muted-copy", "data-testid": "v2-debug-version" },
+            `Programming engine: ${appState.v2Programs?.length ? "v2" : "v1"}; flag ${v2Api?.PROGRAMMING_ENGINE_V2_FEATURE_FLAG || "unavailable"} (${appState.v2FeatureFlag?.source || "disabled"}); template ${v2Api?.TEMPLATE_VERSION || "unavailable"}; catalog ${v2Api?.CATALOG_VERSION || "unavailable"}; validator ${v2Api?.VALIDATOR_VERSION || "unavailable"}.`,
           ),
         ),
         accountSyncPanel,
@@ -6460,6 +6974,572 @@
     );
   }
 
+  function V2RestrictionForm({ restrictions, onSave }) {
+    const familyOptions = [
+      ["front_squat", "Front squat"],
+      ["snatch", "Snatch"],
+      ["clean_and_jerk", "Clean and jerk"],
+      ["strict_pull", "Strict pulling"],
+      ["core", "Core and body-shape work"],
+    ];
+    return h(
+      "details",
+      { className: "v2-restrictions" },
+      h("summary", null, "Movement restrictions"),
+      h(
+        "form",
+        {
+          onSubmit: (event) => {
+            event.preventDefault();
+            const data = new FormData(event.currentTarget);
+            onSave({
+              movementFamilyIds: familyOptions
+                .map(([id]) => id)
+                .filter((id) => data.getAll("restrictedFamily").includes(id)),
+              movementIds: String(data.get("restrictedMovementIds") || "")
+                .split(",")
+                .map((item) => item.trim())
+                .filter(Boolean),
+              guidance:
+                String(data.get("restrictionGuidance") || "").trim() || null,
+            });
+          },
+        },
+        h(
+          "fieldset",
+          null,
+          h("legend", null, "Unavailable movement families"),
+          familyOptions.map(([id, label]) =>
+            h(
+              "label",
+              { className: "check-row", key: id },
+              h("input", {
+                type: "checkbox",
+                name: "restrictedFamily",
+                value: id,
+                defaultChecked: (restrictions.movementFamilyIds || []).includes(
+                  id,
+                ),
+              }),
+              label,
+            ),
+          ),
+        ),
+        h(
+          "label",
+          null,
+          "Unavailable movement IDs (comma separated)",
+          h("input", {
+            name: "restrictedMovementIds",
+            type: "text",
+            defaultValue: (restrictions.movementIds || []).join(", "),
+            placeholder: "strict_pull_up, box_step_up",
+          }),
+        ),
+        h(
+          "label",
+          null,
+          "Private guidance (not logged)",
+          h("input", {
+            name: "restrictionGuidance",
+            type: "text",
+            defaultValue: restrictions.guidance || "",
+            placeholder: "Use pain-free range only",
+          }),
+        ),
+        h(
+          "button",
+          { className: "ghost-button", type: "submit" },
+          "Save restrictions",
+        ),
+      ),
+    );
+  }
+
+  function V2ExerciseCard({ exercise }) {
+    return h(
+      "article",
+      { className: "v2-exercise-card", "data-testid": "v2-exercise-card" },
+      h("h5", null, exercise.title),
+      h("p", { className: "v2-prescription" }, exercise.prescription),
+      h(
+        "dl",
+        { className: "v2-prescription-grid" },
+        h("div", null, h("dt", null, "Load"), h("dd", null, exercise.load)),
+        exercise.referenceMax
+          ? h(
+              "div",
+              null,
+              h("dt", null, "Reference max"),
+              h("dd", null, exercise.referenceMax),
+            )
+          : null,
+        exercise.workingWeight
+          ? h(
+              "div",
+              null,
+              h("dt", null, "Working weight"),
+              h("dd", null, exercise.workingWeight),
+            )
+          : null,
+        h("div", null, h("dt", null, "Rest"), h("dd", null, exercise.rest)),
+        h(
+          "div",
+          null,
+          h("dt", null, "Estimated time"),
+          h("dd", null, exercise.estimatedTime),
+        ),
+      ),
+      h("p", null, h("strong", null, "Intent: "), exercise.intent),
+      exercise.coachingCues.length
+        ? h(
+            "ul",
+            { className: "compact-list" },
+            exercise.coachingCues.map((cue) => h("li", { key: cue }, cue)),
+          )
+        : null,
+      exercise.scaling.length
+        ? h(
+            "p",
+            { className: "muted-copy" },
+            h("strong", null, "Scaling: "),
+            exercise.scaling.join(" "),
+          )
+        : null,
+    );
+  }
+
+  function V2CompletionForm({ session, onComplete }) {
+    const progressionExercises = session.trackAssignments.map((assignment) =>
+      session.exercises.find(
+        (exercise) =>
+          exercise.progressionTrackId === assignment.progressionTrackId,
+      ),
+    );
+    return h(
+      "details",
+      { className: "v2-completion" },
+      h("summary", null, "Record completion and advance progression"),
+      h(
+        "form",
+        {
+          onSubmit: (event) => {
+            event.preventDefault();
+            const data = new FormData(event.currentTarget);
+            const painReported = data.get("painReported") === "on";
+            const results = session.trackAssignments.map(
+              (assignment, index) => {
+                const exercise = progressionExercises[index];
+                return {
+                  prescriptionId: exercise.id,
+                  progressionTrackId: assignment.progressionTrackId,
+                  completedSets: Number(
+                    data.get(
+                      `completedSets-${assignment.progressionTrackId}`,
+                    ) ||
+                      exercise.sets ||
+                      0,
+                  ),
+                  completedReps: Number(
+                    data.get(
+                      `completedReps-${assignment.progressionTrackId}`,
+                    ) ||
+                      exercise.reps ||
+                      exercise.repRangeMin ||
+                      0,
+                  ),
+                  loadKg:
+                    String(
+                      data.get(`loadKg-${assignment.progressionTrackId}`) || "",
+                    ).trim() === ""
+                      ? null
+                      : Number(
+                          data.get(`loadKg-${assignment.progressionTrackId}`),
+                        ),
+                  achievedRpe:
+                    String(
+                      data.get(`rpe-${assignment.progressionTrackId}`) || "",
+                    ).trim() === ""
+                      ? null
+                      : Number(
+                          data.get(`rpe-${assignment.progressionTrackId}`),
+                        ),
+                  successful:
+                    data.get(`successful-${assignment.progressionTrackId}`) ===
+                    "on",
+                  painReported,
+                };
+              },
+            );
+            onComplete({
+              sessionId: session.id,
+              completed: true,
+              sessionRpe: Number(data.get("sessionRpe") || 0) || null,
+              fatigue: Number(data.get("fatigue") || 0) || null,
+              painReported,
+              durationMinutesActual:
+                Number(data.get("durationMinutesActual") || 0) || null,
+              notes: String(data.get("notes") || "").trim() || null,
+              results,
+              completedAt: new Date().toISOString(),
+            });
+          },
+        },
+        progressionExercises.map((exercise, index) => {
+          const assignment = session.trackAssignments[index];
+          return h(
+            "fieldset",
+            { key: assignment.progressionTrackId },
+            h("legend", null, exercise.movementName),
+            h(
+              "div",
+              { className: "form-row" },
+              h(
+                "label",
+                null,
+                "Completed sets",
+                h("input", {
+                  type: "number",
+                  min: "0",
+                  name: `completedSets-${assignment.progressionTrackId}`,
+                  defaultValue: exercise.sets || 0,
+                  required: true,
+                }),
+              ),
+              h(
+                "label",
+                null,
+                "Completed reps per set",
+                h("input", {
+                  type: "number",
+                  min: "0",
+                  name: `completedReps-${assignment.progressionTrackId}`,
+                  defaultValue: exercise.reps || exercise.repRangeMin || 0,
+                  required: true,
+                }),
+              ),
+              h(
+                "label",
+                null,
+                "Load (kg)",
+                h("input", {
+                  type: "number",
+                  min: "0",
+                  step: "0.5",
+                  name: `loadKg-${assignment.progressionTrackId}`,
+                  defaultValue: exercise.loadKg || "",
+                }),
+              ),
+              h(
+                "label",
+                null,
+                "Exercise RPE",
+                h("input", {
+                  type: "number",
+                  min: "1",
+                  max: "10",
+                  step: "0.5",
+                  name: `rpe-${assignment.progressionTrackId}`,
+                }),
+              ),
+            ),
+            h(
+              "label",
+              { className: "check-row" },
+              h("input", {
+                type: "checkbox",
+                name: `successful-${assignment.progressionTrackId}`,
+                defaultChecked: true,
+              }),
+              "Completed successfully",
+            ),
+          );
+        }),
+        h(
+          "div",
+          { className: "form-row" },
+          h(
+            "label",
+            null,
+            "Session RPE",
+            h("input", {
+              type: "number",
+              min: "1",
+              max: "10",
+              step: "0.5",
+              name: "sessionRpe",
+            }),
+          ),
+          h(
+            "label",
+            null,
+            "Fatigue",
+            h("input", {
+              type: "number",
+              min: "1",
+              max: "10",
+              name: "fatigue",
+            }),
+          ),
+          h(
+            "label",
+            null,
+            "Actual duration (minutes)",
+            h("input", {
+              type: "number",
+              min: "1",
+              name: "durationMinutesActual",
+            }),
+          ),
+        ),
+        h(
+          "label",
+          { className: "check-row" },
+          h("input", { type: "checkbox", name: "painReported" }),
+          "Pain reported — pause affected tracks",
+        ),
+        h("label", null, "Notes", h("textarea", { name: "notes", rows: 2 })),
+        h(
+          "button",
+          { className: "primary-button", type: "submit" },
+          "Complete session",
+        ),
+      ),
+    );
+  }
+
+  function V2SessionCard({ session, onRegenerate, onComplete }) {
+    const rendered = v2Api.formatSessionForDisplay(session);
+    return h(
+      "article",
+      {
+        className: "panel v2-session-card",
+        "data-testid": "v2-session-card",
+      },
+      h(
+        "div",
+        { className: "panel-title" },
+        h(
+          "div",
+          null,
+          h("p", { className: "eyebrow" }, rendered.heading),
+          h("h4", null, rendered.objective),
+        ),
+        h("span", { className: "session-tag" }, rendered.estimatedTime),
+      ),
+      rendered.provisional
+        ? h(
+            "p",
+            { className: "notice", "data-testid": "v2-provisional" },
+            "Baseline preview — this section is rematerialized from progression state before it becomes actionable.",
+          )
+        : null,
+      session.status === "blocked"
+        ? h(
+            "p",
+            { className: "error-message" },
+            "This session is blocked because an affected progression is paused for pain review.",
+          )
+        : null,
+      h("p", null, h("strong", null, "Expected fatigue: "), rendered.fatigue),
+      h("p", { className: "muted-copy" }, rendered.communityWorkoutAdvice),
+      rendered.sections.map((section) =>
+        h(
+          "section",
+          { className: "v2-session-section", key: section.id },
+          h(
+            "div",
+            { className: "panel-title" },
+            h("h5", null, section.title),
+            h("span", { className: "muted-copy" }, section.estimatedTime),
+          ),
+          section.lines.map((line) => h("p", { key: line }, line)),
+          section.exercises.map((exercise) =>
+            h(V2ExerciseCard, { key: exercise.id, exercise }),
+          ),
+        ),
+      ),
+      session.status === "planned"
+        ? h(
+            "div",
+            { className: "v2-actions" },
+            h(
+              "button",
+              {
+                className: "ghost-button",
+                type: "button",
+                onClick: () => onRegenerate(session.id, "warmup"),
+              },
+              "Regenerate warm-up",
+            ),
+            h(
+              "button",
+              {
+                className: "ghost-button",
+                type: "button",
+                onClick: () => onRegenerate(session.id, "conditioning"),
+              },
+              "Regenerate conditioning",
+            ),
+            h(
+              "button",
+              {
+                className: "ghost-button",
+                type: "button",
+                onClick: () => onRegenerate(session.id, "accessory"),
+              },
+              "Regenerate accessory",
+            ),
+            h(
+              "button",
+              {
+                className: "ghost-button",
+                type: "button",
+                onClick: () => onRegenerate(session.id, "full_session"),
+              },
+              "Regenerate full session",
+            ),
+          )
+        : null,
+      session.status === "planned"
+        ? h(V2CompletionForm, {
+            session,
+            onComplete: (feedback) => onComplete(session.id, feedback),
+          })
+        : h(
+            "p",
+            { className: "notice" },
+            session.status === "completed"
+              ? "Completed — progression feedback has been applied."
+              : `Session status: ${session.status}`,
+          ),
+    );
+  }
+
+  function V2ProgramPanel({
+    program,
+    featureFlag,
+    restrictions,
+    onGenerate,
+    onRegenerate,
+    onComplete,
+    onSaveRestrictions,
+  }) {
+    const [selectedWeek, setSelectedWeek] = ReactRuntime.useState(1);
+    if (!featureFlag.enabled) {
+      return h(
+        "section",
+        { className: "panel v2-programme", "data-testid": "v2-disabled" },
+        h("p", { className: "eyebrow" }, "Programming Engine V2"),
+        h("h3", null, "Six-week periodized block"),
+        h(
+          "p",
+          { className: "muted-copy" },
+          "V2 is off for this account. Production access requires sign-in and an administrator-managed allowlist flag.",
+        ),
+      );
+    }
+    const validation = program ? v2Api.validateProgram(program) : null;
+    if (program && !validation.valid) {
+      return h(
+        "section",
+        { className: "panel v2-programme" },
+        h("h3", null, "V2 programme rejected"),
+        h(
+          "p",
+          { className: "error-message" },
+          "The loaded programme failed final validation. It will not be displayed or saved.",
+        ),
+        h(
+          "ul",
+          null,
+          validation.issues
+            .filter((item) => item.severity === "error")
+            .map((item) =>
+              h("li", { key: `${item.path}-${item.code}` }, item.code),
+            ),
+        ),
+      );
+    }
+    const block = program?.trainingBlocks?.[0] || null;
+    const week = block?.trainingWeeks?.find(
+      (item) => item.weekNumber === selectedWeek,
+    );
+    return h(
+      "section",
+      { className: "v2-programme", "data-testid": "v2-programme" },
+      h(
+        "section",
+        { className: "panel" },
+        h("p", { className: "eyebrow" }, "Programming Engine V2"),
+        h("h3", null, block?.name || "Six-week mixed-strength block"),
+        h(
+          "p",
+          null,
+          block?.goal ||
+            "Two connected sessions each week, calculated to fit approximately one hour.",
+        ),
+        h(
+          "p",
+          { className: "muted-copy" },
+          `Feature flag: ${featureFlag.source}. Template: ${program?.templateVersion || v2Api.TEMPLATE_VERSION}.`,
+        ),
+        h(V2RestrictionForm, { restrictions, onSave: onSaveRestrictions }),
+        h(
+          "button",
+          { className: "primary-button", type: "button", onClick: onGenerate },
+          program
+            ? "Generate a new future block"
+            : "Generate six-week V2 block",
+        ),
+      ),
+      block
+        ? h(
+            ReactRuntime.Fragment,
+            null,
+            h(
+              "nav",
+              { className: "week-tabs", "aria-label": "V2 training weeks" },
+              block.trainingWeeks.map((item) =>
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    key: item.id,
+                    className:
+                      item.weekNumber === selectedWeek ? "is-active" : "",
+                    onClick: () => setSelectedWeek(item.weekNumber),
+                  },
+                  `Week ${item.weekNumber}`,
+                ),
+              ),
+            ),
+            h(
+              "section",
+              { className: "panel v2-week-summary" },
+              h("p", { className: "eyebrow" }, `Week ${week.weekNumber}`),
+              h("h3", null, week.theme),
+              h(
+                "p",
+                { className: "muted-copy" },
+                week.weekNumber === 6
+                  ? "Planned deload: reduced volume and controlled technical work."
+                  : "Future work remains a baseline preview until prior progression feedback is applied.",
+              ),
+            ),
+            week.sessions.map((session) =>
+              h(V2SessionCard, {
+                key: session.id,
+                session,
+                onRegenerate,
+                onComplete,
+              }),
+            ),
+          )
+        : null,
+    );
+  }
+
   function BuilderView({
     appState,
     activeView,
@@ -6472,6 +7552,11 @@
     onDeleteSession,
     onLogSession,
     onTimerFinish,
+    v2FeatureFlag,
+    onGenerateV2,
+    onRegenerateV2,
+    onCompleteV2,
+    onSaveV2Restrictions,
   }) {
     const [customFormVersion, setCustomFormVersion] = ReactRuntime.useState(0);
     const [editingSessionId, setEditingSessionId] = ReactRuntime.useState(null);
@@ -6501,6 +7586,21 @@
           h("h2", { id: "builderTitle" }, "Programme builder"),
         ),
       ),
+      h(V2ProgramPanel, {
+        program: (appState.v2Programs || []).find(
+          (item) => item.id === appState.activeV2ProgramId,
+        ),
+        featureFlag: v2FeatureFlag,
+        restrictions: appState.movementRestrictions || {
+          movementIds: [],
+          movementFamilyIds: [],
+          guidance: null,
+        },
+        onGenerate: onGenerateV2,
+        onRegenerate: onRegenerateV2,
+        onComplete: onCompleteV2,
+        onSaveRestrictions: onSaveV2Restrictions,
+      }),
       h(GeneratorForm, {
         key: activePlan?.id || "new-generated-plan",
         profile: appState.profile,

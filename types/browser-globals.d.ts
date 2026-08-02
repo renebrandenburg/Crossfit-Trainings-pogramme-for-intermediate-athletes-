@@ -28,6 +28,8 @@ interface Window {
     ) => { state: any; newlyEarnedIds: string[] };
   };
   ForgeHour: any;
+  ForgeHourProgrammingV2?: typeof import("../src/programming-v2/index");
+  ForgeHourV2Debug?: boolean;
   ForgeHourSync: any;
   ForgeHourSupabaseConfig?: {
     url?: string;
