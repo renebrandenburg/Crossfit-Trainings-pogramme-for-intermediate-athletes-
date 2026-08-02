@@ -2107,14 +2107,18 @@ test("generated Olympic prescriptions resolve one coherent family", () => {
   assert.ok(
     sessions.some((session) =>
       session.strength.some((item) =>
-        /3 tall clean pulls \+ 20-second front-rack hold/.test(item),
+        /3 tall clean pulls \+ 20-sec front-rack hold at 35–45% of clean and jerk 1RM or RPE 5–6\. Rest 60–90 sec\./.test(
+          item,
+        ),
       ),
     ),
   );
   assert.ok(
     sessions.some((session) =>
       session.strength.some((item) =>
-        /3 tall snatch pulls \+ 20-second overhead hold/.test(item),
+        /3 tall snatch pulls \+ 20-sec overhead hold at 35–45% of snatch 1RM or RPE 5–6\. Rest 60–90 sec\./.test(
+          item,
+        ),
       ),
     ),
   );
@@ -2157,6 +2161,36 @@ test("the final persistence validator rejects the exact incomplete free-text blo
         },
       ]),
     /MISSING_LOAD/,
+  );
+});
+
+test("the final persistence validator rejects the exact gymnastics theme", () => {
+  const block =
+    "Gymnastics skill: hollow and arch control, strict pulling, and midline strength";
+  const sessions = buildGeneratedProgramme(
+    { goal: "balanced", weakness: "squat", daysPerWeek: 2, duration: 60 },
+    cloneDefaultProfile(),
+    (id) => id,
+    "vague-gymnastics-persistence-regression",
+  );
+  const invalidSessions = structuredClone(sessions);
+  invalidSessions[0].strength = [block];
+
+  assert.throws(
+    () =>
+      validateGeneratedPlansForPersistence([
+        {
+          kind: "generated",
+          generatorOptions: {
+            goal: "balanced",
+            weakness: "squat",
+            daysPerWeek: 2,
+            duration: 60,
+          },
+          sessions: invalidSessions,
+        },
+      ]),
+    /VAGUE_SKILL_BLOCK/,
   );
 });
 
