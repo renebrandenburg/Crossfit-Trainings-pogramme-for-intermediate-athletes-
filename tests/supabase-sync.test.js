@@ -231,6 +231,30 @@ test("Supabase V2 store uses validated atomic RPCs and optimistic revisions", as
   assert.equal(calls.length, 2);
 });
 
+test("Supabase V2 store uses the testing RPC for eight-week testing programmes", async () => {
+  const calls = [];
+  const client = {
+    async rpc(name, payload) {
+      calls.push({ name, payload });
+      return { data: { programId: "programme-1", revision: 2 }, error: null };
+    },
+  };
+  const store = createSupabaseStore(client);
+  const program = {
+    engineVersion: "v2",
+    validation: { valid: true, issues: [] },
+    trainingBlocks: [{ templateId: "mixed_strength_8w_testing" }],
+  };
+
+  await store.saveProgrammingEngineV2(program, 1);
+
+  assert.equal(calls[0].name, "save_programming_engine_v2_testing");
+  assert.deepEqual(calls[0].payload, {
+    p_program: program,
+    p_expected_revision: 1,
+  });
+});
+
 test("Supabase sync helpers merge remote records without duplicates", () => {
   const local = [
     { id: "local-only", createdAt: "2026-01-01T00:00:00.000Z", value: "local" },

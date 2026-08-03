@@ -4,6 +4,7 @@ export * from "./calendar";
 export * from "./duration";
 export * from "./engine";
 export * from "./format";
+export * from "./max-testing";
 export * from "./observability";
 export * from "./state";
 export * from "./template";

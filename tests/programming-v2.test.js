@@ -159,6 +159,7 @@ test("V2 generation preferences default safely and support explicit frequency me
       availableEquipment: ["barbell", "rower"],
       weightIncrementKg: 2.5,
       roundingMode: "nearest",
+      templateId: "mixed_strength_6w",
     },
   );
 });
@@ -168,6 +169,7 @@ test("V2 template registry covers supported goals and frequencies", () => {
     v2.V2_TEMPLATE_REGISTRY.map((template) => template.id),
     [
       "mixed_strength_6w",
+      "mixed_strength_8w_testing",
       "endurance_capacity_6w",
       "gymnastics_capacity_6w",
       "bar_muscle_up_6w",
@@ -508,4 +510,82 @@ test("structured generation logs include programming decisions but exclude athle
   assert.ok(record.selectedMovementFamilies.includes("clean_and_jerk"));
   assert.equal(record.regenerationScope, "conditioning");
   assert.equal(JSON.stringify(record).includes("notes"), false);
+});
+
+test("eight-week testing template creates explicit test sessions in week eight", () => {
+  const program = generate({ templateId: "mixed_strength_8w_testing" });
+  const block = program.trainingBlocks[0];
+  const testSessions = block.trainingWeeks[7].sessions;
+
+  assert.equal(block.durationWeeks, 8);
+  assert.equal(block.endsWithTest, true);
+  assert.equal(block.testWeekNumber, 8);
+  assert.deepEqual(
+    testSessions.map((session) => [
+      session.sessionType,
+      session.maxTestPrescription?.testType,
+    ]),
+    [
+      ["max_test", "true_1rm"],
+      ["max_test", "technical_1rm"],
+    ],
+  );
+  assert.ok(testSessions[0].maxTestPrescription.warmupSets.length >= 4);
+  assert.ok(testSessions[0].maxTestPrescription.stoppingRules.length >= 2);
+  assert.equal(v2.validateProgram(program).valid, true);
+});
+
+test("max-test calculations enforce estimates and the two-failure stopping rule", () => {
+  assert.equal(v2.calculateEstimatedOneRepMax(100, 5, "epley"), 116.7);
+  assert.equal(v2.calculateEstimatedOneRepMax(100, 5, "brzycki"), 112.5);
+  assert.throws(
+    () => v2.calculateEstimatedOneRepMax(100, 11),
+    /between 2 and 10/,
+  );
+
+  const prescription = v2.buildMaxTestPrescription({
+    id: "prescription-1",
+    sessionId: "session-1",
+    movementId: "front_squat",
+    testType: "true_1rm",
+    previousMaxKg: 125,
+    trainingMaxKg: 115,
+    athleteLevel: "intermediate",
+    eligibility: {
+      movementId: "front_squat",
+      eligible: true,
+      reasons: [],
+      completedPrerequisiteSessions: 6,
+      requiredPrerequisiteSessions: 6,
+      recentPainReported: false,
+      recentFailureCount: 0,
+      recentHeavySingleCompleted: true,
+      daysSinceLastTest: 100,
+      readinessScore: 100,
+    },
+    incrementKg: 2.5,
+    roundingMode: "nearest",
+  });
+  const failed = v2.applyMaxAttemptResult(prescription, {
+    attemptNumber: 1,
+    loadKg: 115,
+    result: "failure",
+    perceivedRpe: 10,
+    technicalQuality: "acceptable",
+    painReported: false,
+    notes: null,
+  });
+  const stopped = v2.applyMaxAttemptResult(failed, {
+    attemptNumber: 2,
+    loadKg: 115,
+    result: "failure",
+    perceivedRpe: 10,
+    technicalQuality: "acceptable",
+    painReported: false,
+    notes: null,
+  });
+  assert.equal(
+    v2.proposeMaxUpdate(stopped, new Date().toISOString()).accepted,
+    false,
+  );
 });

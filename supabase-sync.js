@@ -1423,11 +1423,12 @@
         };
       },
       async saveProgrammingEngineV2(program, expectedRevision = null) {
-        const payload = assertObject(
-          program,
-          "V2 programme",
-          "save_programming_engine_v2",
-        );
+        const rpcName = program?.trainingBlocks?.some?.(
+          (block) => block?.templateId === "mixed_strength_8w_testing",
+        )
+          ? "save_programming_engine_v2_testing"
+          : "save_programming_engine_v2";
+        const payload = assertObject(program, "V2 programme", rpcName);
         if (
           payload.engineVersion !== "v2" ||
           payload.validation?.valid !== true ||
@@ -1436,11 +1437,11 @@
           )
         ) {
           throw syncError(
-            "save_programming_engine_v2",
+            rpcName,
             new Error("A validated V2 programme is required"),
           );
         }
-        const result = await client.rpc("save_programming_engine_v2", {
+        const result = await client.rpc(rpcName, {
           p_program: payload,
           p_expected_revision:
             expectedRevision == null
@@ -1448,10 +1449,10 @@
               : requiredFiniteNumber(
                   expectedRevision,
                   "V2 programme revision",
-                  "save_programming_engine_v2",
+                  rpcName,
                 ),
         });
-        return assertNoError(result, "save_programming_engine_v2");
+        return assertNoError(result, rpcName);
       },
       async loadMovementRestrictions(userId) {
         const normalizedUserId = requiredString(

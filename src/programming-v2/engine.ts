@@ -8,6 +8,7 @@ import {
 } from "./duration";
 import {
   MIXED_STRENGTH_TEMPLATE,
+  TESTING_STRENGTH_TEMPLATE,
   TRACK_ORDER,
   getV2TemplateDefinition,
   type MixedStrengthWeekTemplate,
@@ -34,6 +35,12 @@ import type {
   WarmupExercise,
   WarmupPrescription,
 } from "./types";
+import {
+  buildMaxTestPrescription,
+  calculateMaxTestEligibility,
+  calculateTrainingMax,
+  defaultTestType,
+} from "./max-testing";
 import {
   CATALOG_VERSION,
   ENGINE_VERSION,
@@ -1006,12 +1013,13 @@ function adjustSessionToDuration(session: TrainingSession): TrainingSession {
 function trackMapForBlock(
   blockId: string,
   createdAt: string,
+  weekTemplates: ReadonlyArray<MixedStrengthWeekTemplate>,
 ): Map<ProgressionTrackType, ProgressionTrack> {
   const map = new Map<ProgressionTrackType, ProgressionTrack>();
   for (const trackType of TRACK_ORDER) {
-    const templateSteps = MIXED_STRENGTH_TEMPLATE.flatMap(
-      (week) => week.steps,
-    ).filter((item) => item.trackType === trackType);
+    const templateSteps = weekTemplates
+      .flatMap((week) => week.steps)
+      .filter((item) => item.trackType === trackType);
     if (!templateSteps.length) continue;
     const trackId = stableUuid(blockId, "track", trackType);
     const steps: ProgressionStep[] = templateSteps.map((item, index) => ({
@@ -1123,6 +1131,7 @@ function createSession(
     id: sessionId,
     trainingWeekId,
     sessionNumber,
+    sessionType: "normal",
     weekNumber: week.weekNumber,
     objective:
       sessionNumber === 1
@@ -1153,6 +1162,7 @@ function createSession(
     sections: [],
     stress,
     feedback: null,
+    maxTestPrescription: null,
     createdAt: input.generatedAt,
     updatedAt: input.generatedAt,
   };
@@ -1222,8 +1232,12 @@ export function generateMixedStrengthBlock(
   const template = getV2TemplateDefinition(input.templateId);
   const sessionCount = input.sessionCount ?? 2;
   const blockId = stableUuid(input.programId, template.id);
-  const tracks = trackMapForBlock(blockId, input.generatedAt);
-  const weeks: TrainingWeek[] = MIXED_STRENGTH_TEMPLATE.map((weekTemplate) => {
+  const weekTemplates =
+    template.id === "mixed_strength_8w_testing"
+      ? TESTING_STRENGTH_TEMPLATE
+      : MIXED_STRENGTH_TEMPLATE;
+  const tracks = trackMapForBlock(blockId, input.generatedAt, weekTemplates);
+  let weeks: TrainingWeek[] = weekTemplates.map((weekTemplate) => {
     const trainingWeekId = stableUuid(blockId, "week", weekTemplate.weekNumber);
     const coreSessions = [
       createSession(input, trainingWeekId, weekTemplate, 1, tracks),
@@ -1248,6 +1262,69 @@ export function generateMixedStrengthBlock(
       sessions,
     };
   });
+  if (template.id === "mixed_strength_8w_testing") {
+    const priorSessions = weeks
+      .flatMap((week) => week.sessions)
+      .filter((session) => session.weekNumber < 8);
+    weeks = weeks.map((week) => {
+      if (week.weekNumber !== 8) return week;
+      return {
+        ...week,
+        sessions: week.sessions.map((session) => {
+          const movementId =
+            session.sessionNumber === 1 ? "front_squat" : "snatch";
+          const testType = defaultTestType(movementId) ?? "heavy_single";
+          const storedMax = input.movementMaxes?.find(
+            (item) => item.movementId === movementId,
+          );
+          const previousMaxKg =
+            storedMax?.testedOneRepMaxKg ??
+            storedMax?.technicalOneRepMaxKg ??
+            (input.maxes as Record<string, number | null | undefined>)[
+              movementId
+            ] ??
+            null;
+          const trainingMaxKg =
+            storedMax?.trainingMaxKg ??
+            (previousMaxKg == null
+              ? null
+              : calculateTrainingMax(previousMaxKg, movementId));
+          const eligibility = calculateMaxTestEligibility({
+            movementId,
+            athleteLevel: input.athleteLevel,
+            sessions: priorSessions,
+            ...(input.allowBeginnerTrue1Rm == null
+              ? {}
+              : { allowBeginnerTrue1Rm: input.allowBeginnerTrue1Rm }),
+          });
+          const maxTestPrescription = buildMaxTestPrescription({
+            id: stableUuid(session.id, "max-test"),
+            sessionId: session.id,
+            movementId,
+            testType,
+            previousMaxKg,
+            trainingMaxKg,
+            eligibility,
+            athleteLevel: input.athleteLevel,
+            incrementKg: input.weightIncrementKg,
+            roundingMode: input.roundingMode,
+            fallbackTestType: "heavy_single",
+            fallbackPrescription:
+              "Complete a controlled single at RPE 8; stop before grinding.",
+          });
+          return {
+            ...session,
+            sessionType: "max_test",
+            objective: `Test ${maxTestPrescription.movementName} ${testType.replaceAll("_", " ")}`,
+            intendedStimulus:
+              "Planned testing session with full warm-up, controlled attempts, and explicit stopping rules.",
+            expectedFatigue: "high",
+            maxTestPrescription,
+          };
+        }),
+      };
+    });
+  }
   const block: TrainingBlock = {
     id: blockId,
     programId: input.programId,
@@ -1256,10 +1333,18 @@ export function generateMixedStrengthBlock(
     plannedSessionCount: sessionCount,
     name: template.name,
     goal: template.goal,
-    durationWeeks: 6,
+    durationWeeks: template.durationWeeks,
     currentWeek: 1,
     status: "active",
-    deloadWeek: 6,
+    deloadWeek: template.deloadWeek,
+    endsWithTest: template.id === "mixed_strength_8w_testing",
+    plannedTestMovementIds:
+      template.id === "mixed_strength_8w_testing"
+        ? ["front_squat", "snatch"]
+        : [],
+    testWeekNumber: template.id === "mixed_strength_8w_testing" ? 8 : null,
+    testStrategy:
+      template.id === "mixed_strength_8w_testing" ? "true_1rm" : "none",
     startedAt: input.generatedAt,
     completedAt: null,
     progressionTracks: [...tracks.values()],
@@ -1279,6 +1364,8 @@ export function generateMixedStrengthBlock(
     status: "active",
     activeTrainingBlockId: blockId,
     trainingBlocks: [block],
+    movementMaxes: input.movementMaxes ?? [],
+    personalRecords: [],
     validation: {
       valid: false,
       validatorVersion: VALIDATOR_VERSION,

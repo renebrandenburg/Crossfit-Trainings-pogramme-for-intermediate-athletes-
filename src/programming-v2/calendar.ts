@@ -156,6 +156,10 @@ export function normalizeV2GenerationPreferences(
     availableEquipment,
     weightIncrementKg,
     roundingMode,
+    templateId:
+      value?.templateId === "mixed_strength_8w_testing"
+        ? "mixed_strength_8w_testing"
+        : "mixed_strength_6w",
   };
 }
 

@@ -36,6 +36,7 @@ export interface V2GenerationPreferences {
   availableEquipment: string[];
   weightIncrementKg: 1 | 2 | 2.5 | 5;
   roundingMode: "nearest" | "down" | "up";
+  templateId?: string;
 }
 
 export type TrainingStimulus =
@@ -81,6 +82,146 @@ export type TrainingBlockType =
   | "aerobic_capacity"
   | "competition_preparation"
   | "deload";
+
+export type MaxTestType =
+  "true_1rm" | "technical_1rm" | "estimated_1rm" | "rep_max" | "heavy_single";
+
+export type TrainingSessionType =
+  "normal" | "deload" | "max_test" | "benchmark" | "recovery";
+
+export type MaxAttemptType =
+  | "opener"
+  | "second_attempt"
+  | "personal_record_attempt"
+  | "optional_final_attempt";
+
+export type MaxAttemptResultStatus = "success" | "failure" | "skipped";
+
+export type TechnicalQuality = "good" | "acceptable" | "poor" | "invalid";
+
+export interface TechnicalStandard {
+  movementId: string;
+  criteria: string[];
+  invalidationCriteria: string[];
+}
+
+export interface MaxTestWarmupSet {
+  percentage: number | null;
+  loadKg: number | null;
+  reps: number;
+  restSeconds: number;
+  purpose: string;
+}
+
+export interface PlannedMaxAttempt {
+  attemptNumber: number;
+  attemptType: MaxAttemptType;
+  percentageOfPreviousMax: number | null;
+  suggestedLoadKg: number | null;
+  restSeconds: number;
+  optional: boolean;
+}
+
+export interface MaxAttemptResult {
+  attemptNumber: number;
+  loadKg: number;
+  result: MaxAttemptResultStatus;
+  perceivedRpe: number | null;
+  technicalQuality: TechnicalQuality | null;
+  painReported: boolean;
+  notes: string | null;
+}
+
+export interface MaxTestEligibility {
+  movementId: string;
+  eligible: boolean;
+  reasons: string[];
+  completedPrerequisiteSessions: number;
+  requiredPrerequisiteSessions: number;
+  recentPainReported: boolean;
+  recentFailureCount: number;
+  recentHeavySingleCompleted: boolean;
+  daysSinceLastTest: number | null;
+  readinessScore: number;
+}
+
+export interface MaxUpdate {
+  accepted: boolean;
+  maxKg: number | null;
+  trainingMaxKg: number | null;
+  recordType: MaxTestType | null;
+  confirmedAt: string | null;
+}
+
+export interface MaxTestPrescription {
+  id: string;
+  sessionId: string;
+  movementId: string;
+  movementName: string;
+  athleteLevel: "beginner" | "intermediate" | "advanced";
+  testType: MaxTestType;
+  previousMaxKg: number | null;
+  trainingMaxKg: number | null;
+  estimatedCurrentMaxKg: number | null;
+  fallbackTestType: MaxTestType;
+  fallbackPrescription: string;
+  eligibility: MaxTestEligibility;
+  warmupSets: MaxTestWarmupSet[];
+  plannedAttempts: PlannedMaxAttempt[];
+  attemptResults: MaxAttemptResult[];
+  minimumRestSeconds: number;
+  maximumAttempts: number;
+  technicalStandards: TechnicalStandard | null;
+  stoppingRules: string[];
+  estimatedDurationMinutes: number;
+  maxUpdate: MaxUpdate | null;
+}
+
+export interface MaxAttemptInput {
+  program: ProgramV2;
+  sessionId: string;
+  result: MaxAttemptResult;
+}
+
+export interface MaxUpdateInput {
+  program: ProgramV2;
+  sessionId: string;
+  confirmedAt: string;
+  trainingMaxPercentage?: number;
+}
+
+export interface EstimatedOneRepMaxResult {
+  movementId: string;
+  loadKg: number;
+  reps: number;
+  achievedRpe: number | null;
+  formula: "epley" | "brzycki";
+  estimatedOneRepMaxKg: number;
+}
+
+export interface AthleteMovementMax {
+  athleteId: string | null;
+  movementId: string;
+  testedOneRepMaxKg: number | null;
+  technicalOneRepMaxKg: number | null;
+  estimatedOneRepMaxKg: number | null;
+  trainingMaxKg: number | null;
+  source:
+    "true_1rm_test" | "technical_1rm_test" | "estimated_1rm" | "manual_entry";
+  testedAt: string | null;
+  updatedAt: string;
+}
+
+export interface PersonalRecord {
+  id: string;
+  athleteId: string | null;
+  movementId: string;
+  recordType: "true_1rm" | "technical_1rm" | "estimated_1rm" | "3rm" | "5rm";
+  loadKg: number;
+  achievedAt: string;
+  sessionId: string | null;
+  previousRecordKg: number | null;
+}
 
 export type ProgressionTrackType =
   | "front_squat"
@@ -340,6 +481,7 @@ export interface TrainingSession {
   id: string;
   trainingWeekId: string;
   sessionNumber: number;
+  sessionType: TrainingSessionType;
   weekNumber: number;
   objective: string;
   intendedStimulus: string;
@@ -360,6 +502,7 @@ export interface TrainingSession {
   sections: SessionSection[];
   stress: SessionStress;
   feedback: SessionFeedback | null;
+  maxTestPrescription: MaxTestPrescription | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -422,6 +565,11 @@ export interface TrainingBlock {
   deloadWeek: number | null;
   startedAt: string | null;
   completedAt: string | null;
+  endsWithTest: boolean;
+  plannedTestMovementIds: string[];
+  testWeekNumber: number | null;
+  testStrategy:
+    "none" | "true_1rm" | "technical_1rm" | "rep_max" | "estimated_1rm";
   progressionTracks: ProgressionTrack[];
   trainingWeeks: TrainingWeek[];
   createdAt: string;
@@ -455,6 +603,8 @@ export interface ProgramV2 {
   status: "planned" | "active" | "completed";
   activeTrainingBlockId: string;
   trainingBlocks: TrainingBlock[];
+  movementMaxes: AthleteMovementMax[];
+  personalRecords: PersonalRecord[];
   validation: ValidationResult;
   createdAt: string;
   updatedAt: string;
@@ -489,6 +639,8 @@ export interface GenerateProgramInput {
   goal?: V2ProgrammingGoal;
   sessionCount?: 2 | 3 | 4;
   templateId?: string;
+  allowBeginnerTrue1Rm?: boolean;
+  movementMaxes?: AthleteMovementMax[];
 }
 
 export interface DurationEstimateInput {

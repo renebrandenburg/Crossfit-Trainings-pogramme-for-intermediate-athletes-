@@ -1906,7 +1906,10 @@
           mixed: "mixed_strength_6w",
         };
         const templateId =
-          templateByGoal[preferences.goal] || "mixed_strength_6w";
+          settings.templateId ||
+          rawPreferences?.templateId ||
+          templateByGoal[preferences.goal] ||
+          "mixed_strength_6w";
         const generator =
           v2Api.generateV2Program || v2Api.generateMixedStrengthBlock;
         const program = generator({
@@ -1951,7 +1954,10 @@
             },
           },
           movementRestrictions: restrictions,
-          v2GenerationPreferences: preferences,
+          v2GenerationPreferences: {
+            ...preferences,
+            templateId,
+          },
           v2Programs: [
             program,
             ...(current.v2Programs || []).filter(
@@ -1973,7 +1979,7 @@
           // The validated local mirror remains available for an explicit retry.
         }
         notify(
-          `Generated a connected six-week, ${preferences.frequency}-session V2 block.`,
+          `Generated a connected ${program.trainingBlocks[0].durationWeeks}-week, ${preferences.frequency}-session V2 block.`,
         );
         return program;
       } catch (error) {
@@ -2136,6 +2142,58 @@
         notify(
           "Completion could not be applied safely. No progression changed.",
         );
+      }
+    }
+
+    async function handleRecordV2MaxAttempt(sessionId, result) {
+      if (!v2Api?.recordMaxAttempt) return;
+      const current = (appStateRef.current.v2Programs || []).find(
+        (program) => program.id === appStateRef.current.activeV2ProgramId,
+      );
+      if (!current) return;
+      try {
+        const updated = v2Api.recordMaxAttempt({
+          program: current,
+          sessionId,
+          result,
+        });
+        storeV2ProgramLocally(updated);
+        await syncV2Program(
+          updated,
+          v2FeatureFlag.source === "supabase"
+            ? appStateRef.current.v2ProgramRevisions?.[current.id]
+            : null,
+        );
+        notify("Max-test attempt recorded. Review the next recommendation.");
+      } catch (error) {
+        console.error("Max-test attempt was rejected.", error);
+        notify("That attempt could not be recorded safely.");
+      }
+    }
+
+    async function handleConfirmV2MaxUpdate(sessionId) {
+      if (!v2Api?.confirmMaxUpdate) return;
+      const current = (appStateRef.current.v2Programs || []).find(
+        (program) => program.id === appStateRef.current.activeV2ProgramId,
+      );
+      if (!current) return;
+      try {
+        const updated = v2Api.confirmMaxUpdate({
+          program: current,
+          sessionId,
+          confirmedAt: new Date().toISOString(),
+        });
+        storeV2ProgramLocally(updated);
+        await syncV2Program(
+          updated,
+          v2FeatureFlag.source === "supabase"
+            ? appStateRef.current.v2ProgramRevisions?.[current.id]
+            : null,
+        );
+        notify("Max confirmed. Training max and PR history were updated.");
+      } catch (error) {
+        console.error("Max update was rejected.", error);
+        notify("The max update could not be confirmed safely.");
       }
     }
 
@@ -2693,6 +2751,8 @@
             onViewPlan: () => activateView("calendarView"),
             onRegenerateV2: handleRegenerateV2Session,
             onCompleteV2: handleCompleteV2Session,
+            onRecordMaxAttempt: handleRecordV2MaxAttempt,
+            onConfirmMaxUpdate: handleConfirmV2MaxUpdate,
             onActivate: activateView,
             onSaveTrainingEvent: handleSaveTrainingEvent,
             onSaveReadinessCheck: handleSaveReadinessCheck,
@@ -2970,6 +3030,8 @@
                 onDeleteTrainingEvent: handleDeleteTrainingEvent,
                 onRegenerateV2: handleRegenerateV2Session,
                 onCompleteV2: handleCompleteV2Session,
+                onRecordMaxAttempt: handleRecordV2MaxAttempt,
+                onConfirmMaxUpdate: handleConfirmV2MaxUpdate,
               })
             : null,
           visitedViews.has("builderView")
@@ -2994,6 +3056,8 @@
                 onRollbackV1: handleRollbackV1Programme,
                 onRegenerateV2: handleRegenerateV2Session,
                 onCompleteV2: handleCompleteV2Session,
+                onRecordMaxAttempt: handleRecordV2MaxAttempt,
+                onConfirmMaxUpdate: handleConfirmV2MaxUpdate,
               })
             : null,
           visitedViews.has("learnView")
@@ -3632,6 +3696,8 @@
     onViewPlan,
     onRegenerateV2,
     onCompleteV2,
+    onRecordMaxAttempt,
+    onConfirmMaxUpdate,
     onActivate,
     onSaveTrainingEvent,
     onSaveReadinessCheck,
@@ -4377,6 +4443,8 @@
                 session: recommendedSession.v2Session,
                 onRegenerate: onRegenerateV2,
                 onComplete: onCompleteV2,
+                onRecordMaxAttempt,
+                onConfirmMaxUpdate,
               })
             : h(
                 "section",
@@ -5296,6 +5364,8 @@
     onDeleteTrainingEvent,
     onRegenerateV2,
     onCompleteV2,
+    onRecordMaxAttempt,
+    onConfirmMaxUpdate,
   }) {
     const week = WEEK_META.find((item) => item.week === appState.selectedWeek);
     const programming = selectActiveProgrammingSessions(appState);
@@ -5481,6 +5551,8 @@
                       session: session.v2Session,
                       onRegenerate: onRegenerateV2,
                       onComplete: onCompleteV2,
+                      onRecordMaxAttempt,
+                      onConfirmMaxUpdate,
                     })
                   : session
                     ? h(
@@ -7458,6 +7530,9 @@
                 frequency: Number(data.get("v2Frequency") || 2),
                 goal: String(data.get("v2Goal") || "mixed"),
                 blockType: String(data.get("v2BlockType") || "mixed_strength"),
+                templateId: String(
+                  data.get("v2TemplateId") || "mixed_strength_6w",
+                ),
                 athleteLevel: String(
                   data.get("v2AthleteLevel") || "intermediate",
                 ),
@@ -7572,6 +7647,28 @@
               "Competition preparation",
             ),
             h("option", { value: "deload" }, "Deload"),
+          ),
+        ),
+        h(
+          "label",
+          null,
+          "Training template",
+          h(
+            "select",
+            {
+              name: "v2TemplateId",
+              defaultValue:
+                program?.trainingBlocks?.[0]?.templateId ===
+                "mixed_strength_8w_testing"
+                  ? "mixed_strength_8w_testing"
+                  : "mixed_strength_6w",
+            },
+            h("option", { value: "mixed_strength_6w" }, "Six-week progression"),
+            h(
+              "option",
+              { value: "mixed_strength_8w_testing" },
+              "Eight-week progression with planned testing",
+            ),
           ),
         ),
         h(
@@ -7989,7 +8086,167 @@
     );
   }
 
-  function V2SessionCard({ session, onRegenerate, onComplete }) {
+  function V2MaxTestForm({ session, onRecord, onConfirm }) {
+    const test = session.maxTestPrescription;
+    if (!test) return null;
+    const nextAttempt = test.plannedAttempts.find(
+      (attempt) =>
+        !test.attemptResults.some(
+          (result) => result.attemptNumber === attempt.attemptNumber,
+        ),
+    );
+    return h(
+      "details",
+      { className: "v2-completion v2-max-test" },
+      h("summary", null, "Record max-test attempt"),
+      h(
+        "p",
+        { className: test.eligibility.eligible ? "notice" : "error-message" },
+        test.eligibility.eligible
+          ? "Eligibility is confirmed. Keep the prescribed rest and stop rules."
+          : `Test is conditional. Fallback: ${test.fallbackPrescription}`,
+      ),
+      nextAttempt
+        ? h(
+            "p",
+            { className: "muted-copy" },
+            `Next planned attempt: ${nextAttempt.suggestedLoadKg ?? "safe load"} kg · rest ${nextAttempt.restSeconds} sec`,
+          )
+        : null,
+      h(
+        "form",
+        {
+          onSubmit: (event) => {
+            event.preventDefault();
+            const data = new FormData(event.currentTarget);
+            onRecord(session.id, {
+              attemptNumber: Number(data.get("maxAttemptNumber")),
+              loadKg: Number(data.get("maxAttemptLoad")),
+              result: String(data.get("maxAttemptResult")),
+              perceivedRpe: Number(data.get("maxAttemptRpe") || 0) || null,
+              technicalQuality: String(
+                data.get("maxAttemptQuality") || "acceptable",
+              ),
+              painReported: data.get("maxAttemptPain") === "on",
+              notes: String(data.get("maxAttemptNotes") || "").trim() || null,
+            });
+          },
+        },
+        h(
+          "div",
+          { className: "form-row" },
+          h(
+            "label",
+            null,
+            "Attempt",
+            h(
+              "select",
+              {
+                name: "maxAttemptNumber",
+                defaultValue: String(nextAttempt?.attemptNumber || 1),
+              },
+              test.plannedAttempts.map((attempt) =>
+                h(
+                  "option",
+                  { key: attempt.attemptNumber, value: attempt.attemptNumber },
+                  `Attempt ${attempt.attemptNumber}`,
+                ),
+              ),
+            ),
+          ),
+          h(
+            "label",
+            null,
+            "Load (kg)",
+            h("input", {
+              name: "maxAttemptLoad",
+              type: "number",
+              min: "1",
+              step: "0.5",
+              defaultValue: nextAttempt?.suggestedLoadKg || "",
+              required: true,
+            }),
+          ),
+          h(
+            "label",
+            null,
+            "Result",
+            h(
+              "select",
+              { name: "maxAttemptResult", defaultValue: "success" },
+              h("option", { value: "success" }, "Success"),
+              h("option", { value: "failure" }, "Failure"),
+              h("option", { value: "skipped" }, "Skipped"),
+            ),
+          ),
+          h(
+            "label",
+            null,
+            "Technical quality",
+            h(
+              "select",
+              { name: "maxAttemptQuality", defaultValue: "acceptable" },
+              h("option", { value: "good" }, "Good"),
+              h("option", { value: "acceptable" }, "Acceptable"),
+              h("option", { value: "poor" }, "Poor"),
+              h("option", { value: "invalid" }, "Invalid"),
+            ),
+          ),
+          h(
+            "label",
+            null,
+            "RPE",
+            h("input", {
+              name: "maxAttemptRpe",
+              type: "number",
+              min: "1",
+              max: "10",
+              step: "0.5",
+            }),
+          ),
+        ),
+        h(
+          "label",
+          null,
+          "Notes",
+          h("textarea", { name: "maxAttemptNotes", rows: 2 }),
+        ),
+        h(
+          "label",
+          { className: "check-row" },
+          h("input", { type: "checkbox", name: "maxAttemptPain" }),
+          "Pain reported — stop loaded testing",
+        ),
+        h(
+          "button",
+          { className: "primary-button", type: "submit" },
+          "Save attempt",
+        ),
+      ),
+      test.attemptResults.some(
+        (result) =>
+          result.result === "success" && result.technicalQuality !== "invalid",
+      )
+        ? h(
+            "button",
+            {
+              className: "ghost-button",
+              type: "button",
+              onClick: () => onConfirm(session.id),
+            },
+            "Confirm new max and update training max",
+          )
+        : null,
+    );
+  }
+
+  function V2SessionCard({
+    session,
+    onRegenerate,
+    onComplete,
+    onRecordMaxAttempt = () => {},
+    onConfirmMaxUpdate = () => {},
+  }) {
     const rendered = v2Api.formatSessionForDisplay(session);
     return h(
       "article",
@@ -8041,6 +8298,18 @@
         ),
       ),
       session.status === "planned"
+        ? session.sessionType === "max_test"
+          ? h(V2MaxTestForm, {
+              session,
+              onRecord: onRecordMaxAttempt,
+              onConfirm: onConfirmMaxUpdate,
+            })
+          : h(V2CompletionForm, {
+              session,
+              onComplete: (feedback) => onComplete(session.id, feedback),
+            })
+        : null,
+      session.status === "planned"
         ? h(
             "div",
             { className: "v2-actions" },
@@ -8083,10 +8352,7 @@
           )
         : null,
       session.status === "planned"
-        ? h(V2CompletionForm, {
-            session,
-            onComplete: (feedback) => onComplete(session.id, feedback),
-          })
+        ? null
         : h(
             "p",
             { className: "notice" },
@@ -8106,6 +8372,8 @@
     onGenerate,
     onRegenerate,
     onComplete,
+    onRecordMaxAttempt,
+    onConfirmMaxUpdate,
   }) {
     const [selectedWeek, setSelectedWeek] = ReactRuntime.useState(1);
     const [setupOpen, setSetupOpen] = ReactRuntime.useState(!program);
@@ -8234,6 +8502,8 @@
                 session,
                 onRegenerate,
                 onComplete,
+                onRecordMaxAttempt,
+                onConfirmMaxUpdate,
               }),
             ),
           )
@@ -8262,6 +8532,8 @@
     onRollbackV1,
     onRegenerateV2,
     onCompleteV2,
+    onRecordMaxAttempt,
+    onConfirmMaxUpdate,
   }) {
     const [customFormVersion, setCustomFormVersion] = ReactRuntime.useState(0);
     const [editingSessionId, setEditingSessionId] = ReactRuntime.useState(null);
@@ -8399,6 +8671,8 @@
             onGenerate: onGenerateV2,
             onRegenerate: onRegenerateV2,
             onComplete: onCompleteV2,
+            onRecordMaxAttempt,
+            onConfirmMaxUpdate,
           })
         : null,
       h(

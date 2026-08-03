@@ -10,6 +10,7 @@ import type {
   ValidationResult,
 } from "./types";
 import { VALIDATOR_VERSION } from "./types";
+import { validateMaxTestPrescription } from "./max-testing";
 
 const PROHIBITED_LANGUAGE = [
   "or similar",
@@ -596,6 +597,49 @@ export function validateSession(
   path = `sessions.${session.id}`,
 ): ValidationResult {
   const issues: ValidationIssue[] = [];
+  if (session.sessionType === "max_test") {
+    if (!session.maxTestPrescription) {
+      issues.push(
+        issue(
+          "MAX_TEST_MISSING_PRESCRIPTION",
+          "error",
+          `${path}.maxTestPrescription`,
+          "Max-test sessions require a structured test prescription.",
+        ),
+      );
+    } else {
+      issues.push(
+        ...validateMaxTestPrescription(session.maxTestPrescription).map(
+          (message) =>
+            issue(
+              "INVALID_MAX_TEST_PRESCRIPTION",
+              "error",
+              `${path}.maxTestPrescription`,
+              message,
+            ),
+        ),
+      );
+      if (!session.maxTestPrescription.eligibility.eligible) {
+        issues.push(
+          issue(
+            "MAX_TEST_PENDING_ELIGIBILITY",
+            "warning",
+            `${path}.maxTestPrescription.eligibility`,
+            "Max test remains conditional until prerequisite readiness is confirmed; use the defined fallback if it is still ineligible.",
+          ),
+        );
+      }
+    }
+  } else if (session.maxTestPrescription) {
+    issues.push(
+      issue(
+        "UNEXPECTED_MAX_TEST_PRESCRIPTION",
+        "error",
+        `${path}.maxTestPrescription`,
+        "Only max-test sessions may contain a max-test prescription.",
+      ),
+    );
+  }
   session.exercises.forEach((exercise, index) => {
     issues.push(
       ...validateExercisePrescription(exercise, `${path}.exercises.${index}`)
@@ -759,13 +803,18 @@ export function validateTrainingBlock(
   path = `blocks.${block.id}`,
 ): ValidationResult {
   const issues: ValidationIssue[] = [];
-  if (block.durationWeeks !== 6 || block.trainingWeeks.length !== 6) {
+  const expectedDuration =
+    block.templateId === "mixed_strength_8w_testing" ? 8 : 6;
+  if (
+    block.durationWeeks !== expectedDuration ||
+    block.trainingWeeks.length !== expectedDuration
+  ) {
     issues.push(
       issue(
         "INVALID_BLOCK_DURATION",
         "error",
         `${path}.durationWeeks`,
-        "The initial mixed-strength block requires six weeks.",
+        `The ${expectedDuration}-week V2 block requires exactly ${expectedDuration} weeks.`,
       ),
     );
   }

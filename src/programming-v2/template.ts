@@ -7,6 +7,7 @@ import type {
 
 export type V2TemplateId =
   | "mixed_strength_6w"
+  | "mixed_strength_8w_testing"
   | "endurance_capacity_6w"
   | "gymnastics_capacity_6w"
   | "bar_muscle_up_6w"
@@ -33,6 +34,15 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
       supportedFrequencies: [2, 3, 4],
       durationWeeks: 6,
       deloadWeek: 6,
+    },
+    {
+      id: "mixed_strength_8w_testing",
+      blockType: "mixed_strength",
+      name: "Eight-week strength testing block",
+      goal: "Build strength and technical consistency before a planned max assessment week.",
+      supportedFrequencies: [2, 3, 4],
+      durationWeeks: 8,
+      deloadWeek: 7,
     },
     {
       id: "endurance_capacity_6w",
@@ -677,6 +687,41 @@ export const TRACK_ORDER: ReadonlyArray<ProgressionTrackType> = Object.freeze([
   "strict_pull",
   "gymnastics_skill",
 ]);
+
+export const TESTING_STRENGTH_TEMPLATE: ReadonlyArray<MixedStrengthWeekTemplate> =
+  Object.freeze([
+    ...MIXED_STRENGTH_TEMPLATE.slice(0, 6),
+    ...[7, 8].map((weekNumber) => {
+      const source = MIXED_STRENGTH_TEMPLATE[weekNumber === 7 ? 4 : 5]!;
+      return {
+        weekNumber,
+        theme:
+          weekNumber === 7
+            ? "Taper and opener practice"
+            : "Planned strength and technical testing",
+        day1ConditioningMinutes: weekNumber === 7 ? 6 : 5,
+        day2ConditioningMinutes: weekNumber === 7 ? 7 : 5,
+        steps: source.steps.map((item) => ({
+          ...item,
+          weekNumber,
+          sets: weekNumber === 7 ? Math.min(item.sets, 3) : item.sets,
+          reps: weekNumber === 7 ? 1 : item.reps,
+          intensityMin:
+            weekNumber === 7
+              ? Math.min(item.intensityMin ?? 80, 90)
+              : item.intensityMin,
+          intensityMax:
+            weekNumber === 7
+              ? Math.min(item.intensityMax ?? 90, 92)
+              : item.intensityMax,
+          estimatedDurationMinutes:
+            weekNumber === 7
+              ? Math.max(4, Math.round(item.estimatedDurationMinutes * 0.7))
+              : item.estimatedDurationMinutes,
+        })),
+      };
+    }),
+  ]);
 
 export function templateStepFor(
   weekNumber: number,

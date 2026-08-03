@@ -207,6 +207,67 @@ function exerciseSection(
   };
 }
 
+function maxTestLines(session: TrainingSession): string[] {
+  const test = session.maxTestPrescription;
+  if (!test) return [];
+  const lines = [
+    `Test type: ${test.testType.replaceAll("_", " ")}`,
+    `Movement: ${test.movementName}`,
+    `Eligibility: ${test.eligibility.eligible ? "ready" : "conditional"} · readiness ${test.eligibility.readinessScore}/100`,
+  ];
+  if (test.previousMaxKg != null) {
+    lines.push(`Previous tested max: ${numberText(test.previousMaxKg)} kg`);
+  }
+  if (test.trainingMaxKg != null) {
+    lines.push(`Current training max: ${numberText(test.trainingMaxKg)} kg`);
+  }
+  if (!test.eligibility.eligible) {
+    lines.push(`Fallback: ${test.fallbackPrescription}`);
+    lines.push(`Eligibility reasons: ${test.eligibility.reasons.join(" ")}`);
+  }
+  lines.push("Warm-up and build-up:");
+  lines.push(
+    ...test.warmupSets.map(
+      (set) =>
+        `• ${set.reps} reps${set.loadKg == null ? "" : ` at ${numberText(set.loadKg)} kg`} · rest ${set.restSeconds} sec · ${set.purpose}`,
+    ),
+  );
+  lines.push("Planned attempts:");
+  lines.push(
+    ...test.plannedAttempts.map(
+      (attempt) =>
+        `• Attempt ${attempt.attemptNumber} (${attempt.attemptType.replaceAll("_", " ")}): ${attempt.suggestedLoadKg == null ? "choose a safe load" : `${numberText(attempt.suggestedLoadKg)} kg`} · rest ${attempt.restSeconds} sec${attempt.optional ? " · optional" : ""}`,
+    ),
+  );
+  lines.push(`Minimum rest: ${test.minimumRestSeconds} sec`);
+  lines.push(`Maximum heavy attempts: ${test.maximumAttempts}`);
+  if (test.technicalStandards) {
+    lines.push(
+      `Technical criteria: ${test.technicalStandards.criteria.join(" ")}`,
+    );
+    lines.push(
+      `Invalidation criteria: ${test.technicalStandards.invalidationCriteria.join(" ")}`,
+    );
+  }
+  lines.push(`Stopping rules: ${test.stoppingRules.join(" ")}`);
+  if (test.attemptResults.length) {
+    lines.push(
+      `Recorded attempts: ${test.attemptResults
+        .map(
+          (result) =>
+            `${result.attemptNumber} ${result.loadKg} kg ${result.result}`,
+        )
+        .join(", ")}`,
+    );
+  }
+  if (test.maxUpdate?.accepted) {
+    lines.push(
+      `Max update proposed: ${numberText(test.maxUpdate.maxKg ?? 0)} kg · training max ${numberText(test.maxUpdate.trainingMaxKg ?? 0)} kg`,
+    );
+  }
+  return lines;
+}
+
 export function formatSessionForDisplay(
   session: TrainingSession,
 ): RenderSession {
@@ -227,6 +288,15 @@ export function formatSessionForDisplay(
     exerciseSection(session, "primary", "Primary progression"),
     exerciseSection(session, "secondary", "Secondary progression"),
   ];
+  if (session.sessionType === "max_test" && session.maxTestPrescription) {
+    sections.push({
+      id: `${session.id}-max-test`,
+      title: "Max test",
+      estimatedTime: `${numberText(session.maxTestPrescription.estimatedDurationMinutes)} min`,
+      exercises: [],
+      lines: maxTestLines(session),
+    });
+  }
   if (conditioning) {
     sections.push({
       id: `${session.id}-conditioning`,

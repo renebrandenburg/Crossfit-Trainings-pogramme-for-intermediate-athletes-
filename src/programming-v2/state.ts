@@ -8,12 +8,21 @@ import type {
   CompletionInput,
   CompletionResult,
   ExercisePrescription,
+  MaxAttemptInput,
+  MaxUpdateInput,
+  PersonalRecord,
   ProgramV2,
   ProgressionTrack,
   RegenerationInput,
   RegenerationResult,
   TrainingSession,
 } from "./types";
+import {
+  applyMaxAttemptResult,
+  calculateMaxTestEligibility,
+  maxSourceForTest,
+  proposeMaxUpdate,
+} from "./max-testing";
 import { assertValidProgram, validateProgram } from "./validation";
 
 function cloneProgram(program: ProgramV2): ProgramV2 {
@@ -403,7 +412,10 @@ export function applySessionCompletion(
     const completedWeeks = block.trainingWeeks.filter((week) =>
       week.sessions.every((item) => item.status === "completed"),
     );
-    block.currentWeek = Math.min(6, completedWeeks.length + 1);
+    block.currentWeek = Math.min(
+      block.durationWeeks,
+      completedWeeks.length + 1,
+    );
     block.trainingWeeks = block.trainingWeeks.map((week) => ({
       ...week,
       status: week.sessions.every((item) => item.status === "completed")
@@ -430,6 +442,118 @@ export function applySessionCompletion(
     pausedTrackIds,
     repeatedTrackIds,
   };
+}
+
+export function recordMaxAttempt(input: MaxAttemptInput): ProgramV2 {
+  assertValidProgram(input.program);
+  const program = cloneProgram(input.program);
+  const session = findSession(program, input.sessionId);
+  if (!session?.maxTestPrescription) {
+    throw new Error("MAX_TEST_SESSION_REQUIRED");
+  }
+  if (session.status === "completed") {
+    throw new Error("Completed sessions cannot record attempts.");
+  }
+  const refreshedEligibility = calculateMaxTestEligibility({
+    movementId: session.maxTestPrescription.movementId,
+    athleteLevel: session.maxTestPrescription.athleteLevel,
+    sessions: allSessions(program),
+  });
+  const updatedSession = {
+    ...session,
+    revision: session.revision + 1,
+    maxTestPrescription: {
+      ...applyMaxAttemptResult(session.maxTestPrescription, input.result),
+      eligibility: refreshedEligibility,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+  const replacement = replaceSession(program, updatedSession);
+  const validation = validateProgram(replacement);
+  if (!validation.valid) throw new Error("MAX_TEST_ATTEMPT_FAILED_VALIDATION");
+  return { ...replacement, validation };
+}
+
+export function confirmMaxUpdate(input: MaxUpdateInput): ProgramV2 {
+  assertValidProgram(input.program);
+  const program = cloneProgram(input.program);
+  const session = findSession(program, input.sessionId);
+  const prescription = session?.maxTestPrescription;
+  if (!session || !prescription) throw new Error("MAX_TEST_SESSION_REQUIRED");
+  const update = proposeMaxUpdate(
+    prescription,
+    input.confirmedAt,
+    input.trainingMaxPercentage ?? 0.92,
+  );
+  if (!update.accepted || update.maxKg == null || !update.recordType) {
+    throw new Error("MAX_TEST_HAS_NO_VALID_RESULT");
+  }
+  const movementMaxes = program.movementMaxes ?? [];
+  const personalRecords = program.personalRecords ?? [];
+  const existing = movementMaxes.find(
+    (item) => item.movementId === prescription.movementId,
+  );
+  const nextMax = {
+    athleteId: existing?.athleteId ?? program.ownerId,
+    movementId: prescription.movementId,
+    testedOneRepMaxKg:
+      prescription.testType === "true_1rm"
+        ? Math.max(existing?.testedOneRepMaxKg ?? 0, update.maxKg)
+        : (existing?.testedOneRepMaxKg ?? null),
+    technicalOneRepMaxKg:
+      prescription.testType === "technical_1rm"
+        ? Math.max(existing?.technicalOneRepMaxKg ?? 0, update.maxKg)
+        : (existing?.technicalOneRepMaxKg ?? null),
+    estimatedOneRepMaxKg: existing?.estimatedOneRepMaxKg ?? null,
+    trainingMaxKg: update.trainingMaxKg,
+    source: maxSourceForTest(prescription.testType),
+    testedAt: input.confirmedAt,
+    updatedAt: input.confirmedAt,
+  };
+  program.movementMaxes = [
+    ...movementMaxes.filter(
+      (item) => item.movementId !== prescription.movementId,
+    ),
+    nextMax,
+  ];
+  const previousRecord = existing
+    ? prescription.testType === "technical_1rm"
+      ? existing.technicalOneRepMaxKg
+      : existing.testedOneRepMaxKg
+    : null;
+  if (previousRecord == null || update.maxKg > previousRecord) {
+    const record: PersonalRecord = {
+      id: stableUuid(program.id, prescription.movementId, input.confirmedAt),
+      athleteId: program.ownerId,
+      movementId: prescription.movementId,
+      recordType:
+        prescription.testType === "technical_1rm"
+          ? "technical_1rm"
+          : "true_1rm",
+      loadKg: update.maxKg,
+      achievedAt: input.confirmedAt,
+      sessionId: session.id,
+      previousRecordKg: previousRecord,
+    };
+    program.personalRecords = [...personalRecords, record];
+  }
+  const updatedSession = {
+    ...session,
+    revision: session.revision + 1,
+    maxTestPrescription: {
+      ...prescription,
+      maxUpdate: update,
+    },
+    updatedAt: input.confirmedAt,
+  };
+  program.trainingBlocks = replaceSession(
+    program,
+    updatedSession,
+  ).trainingBlocks;
+  program.updatedAt = input.confirmedAt;
+  const validation = validateProgram(program);
+  if (!validation.valid) throw new Error("MAX_UPDATE_FAILED_VALIDATION");
+  return { ...program, validation };
 }
 
 export function serializeValidatedProgram(program: ProgramV2): string {
