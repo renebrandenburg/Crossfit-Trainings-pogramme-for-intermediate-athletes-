@@ -2294,6 +2294,86 @@
       setPendingTimerResult(null);
     }
 
+    /** @param {string} programId @param {unknown} name */
+    function handleRenameV2Program(programId, name) {
+      const normalizedName = String(name || "").trim();
+      if (!normalizedName) {
+        notify("Add a name for the V2 programme.");
+        return;
+      }
+      const program = (appStateRef.current.v2Programs || []).find(
+        (item) => item.id === programId,
+      );
+      if (!program) return;
+      const updatedProgram = {
+        ...program,
+        name: normalizedName,
+        updatedAt: new Date().toISOString(),
+      };
+      updateAppState((current) => ({
+        ...current,
+        v2Programs: (current.v2Programs || []).map((item) =>
+          item.id === programId ? updatedProgram : item,
+        ),
+      }));
+      notify("V2 programme renamed.");
+    }
+
+    /** @param {string} programId */
+    function handleDeleteV2Program(programId) {
+      const current = appStateRef.current;
+      const program = (current.v2Programs || []).find(
+        (item) => item.id === programId,
+      );
+      if (!program || !window.confirm(`Remove V2 programme "${program.name}"?`))
+        return;
+      const remainingPrograms = (current.v2Programs || []).filter(
+        (item) => item.id !== programId,
+      );
+      const deletingActiveProgram = current.activeV2ProgramId === programId;
+      const nextProgram = deletingActiveProgram
+        ? remainingPrograms[0] || null
+        : null;
+      const deletedSessionIds = new Set(
+        (program.trainingBlocks || []).flatMap((block) =>
+          (block.trainingWeeks || []).flatMap((week) =>
+            (week.sessions || []).map((session) => session.id),
+          ),
+        ),
+      );
+      updateAppState((state) => {
+        const revisions = { ...(state.v2ProgramRevisions || {}) };
+        delete revisions[programId];
+        return {
+          ...state,
+          v2Programs: (state.v2Programs || []).filter(
+            (item) => item.id !== programId,
+          ),
+          v2ProgramRevisions: revisions,
+          activeV2ProgramId: deletingActiveProgram
+            ? nextProgram?.id || null
+            : state.activeV2ProgramId,
+          activeProgrammingEngine: deletingActiveProgram
+            ? nextProgram
+              ? "v2"
+              : "v1"
+            : state.activeProgrammingEngine,
+          selectedWeek: deletingActiveProgram ? 1 : state.selectedWeek,
+        };
+      });
+      if (
+        pendingTimerResult &&
+        deletedSessionIds.has(pendingTimerResult.dayId)
+      ) {
+        setPendingTimerResult(null);
+      }
+      notify(
+        nextProgram
+          ? "V2 programme removed. Switched to another saved V2 programme."
+          : "V2 programme removed.",
+      );
+    }
+
     /** @param {string} planId @param {unknown} title */
     function handleRenamePlan(planId, title) {
       const normalizedTitle = String(title || "").trim();
@@ -2901,6 +2981,8 @@
                 onSaveSession: handleSaveCustomSession,
                 onSelectPlan: handleSelectPlan,
                 onSelectV2Program: handleSelectV2Program,
+                onRenameV2Program: handleRenameV2Program,
+                onDeleteV2Program: handleDeleteV2Program,
                 onRenamePlan: handleRenamePlan,
                 onDeletePlan: handleDeletePlan,
                 onDeleteSession: handleDeleteSession,
@@ -7329,6 +7411,8 @@
     preferences,
     restrictions,
     onGenerate,
+    setupOpen,
+    onSetupToggle,
   }) {
     const familyOptions = [
       ["front_squat", "Front squat"],
@@ -7358,7 +7442,8 @@
       "details",
       {
         className: "v2-restrictions v2-programme-setup",
-        open: !program,
+        open: setupOpen,
+        onToggle: (event) => onSetupToggle(event.currentTarget.open),
       },
       h("summary", null, "Programme setup"),
       h(
@@ -8023,6 +8108,10 @@
     onComplete,
   }) {
     const [selectedWeek, setSelectedWeek] = ReactRuntime.useState(1);
+    const [setupOpen, setSetupOpen] = ReactRuntime.useState(!program);
+    ReactRuntime.useEffect(() => {
+      setSetupOpen(!program);
+    }, [program?.id]);
     if (!featureFlag.enabled) {
       return h(
         "section",
@@ -8084,12 +8173,25 @@
             ? `${programmeSummary.weeks} weeks · ${programmeSummary.sessions} sessions · ${programmeSummary.exercises} exercises`
             : "Choose two weekly training days, available equipment, and your current maxes.",
         ),
+        program
+          ? h(
+              "button",
+              {
+                className: "ghost-button",
+                type: "button",
+                onClick: () => setSetupOpen(true),
+              },
+              "Create new V2 programme",
+            )
+          : null,
         h(V2ProgrammeSetup, {
           program,
           profile,
           preferences,
           restrictions,
           onGenerate,
+          setupOpen,
+          onSetupToggle: setSetupOpen,
         }),
       ),
       block
@@ -8147,6 +8249,8 @@
     onSaveSession,
     onSelectPlan,
     onSelectV2Program,
+    onRenameV2Program,
+    onDeleteV2Program,
     onRenamePlan,
     onDeletePlan,
     onDeleteSession,
@@ -8219,7 +8323,7 @@
                   h(
                     "option",
                     { key: `v2:${program.id}`, value: `v2:${program.id}` },
-                    `V2 · ${program.trainingBlocks?.[0]?.name || "Six-week mixed-strength block"}`,
+                    `V2 · ${program.name || program.trainingBlocks?.[0]?.name || "Six-week mixed-strength block"}`,
                   ),
                 ),
                 h(
@@ -8236,6 +8340,49 @@
                 ),
               ),
             ),
+            appState.activeProgrammingEngine === "v2" && activeV2Program
+              ? h(
+                  "form",
+                  {
+                    className: "form-row",
+                    onSubmit: (event) => {
+                      event.preventDefault();
+                      const data = new FormData(event.currentTarget);
+                      onRenameV2Program(
+                        activeV2Program.id,
+                        data.get("v2ProgramName"),
+                      );
+                    },
+                  },
+                  h(
+                    "label",
+                    null,
+                    "V2 programme name",
+                    h("input", {
+                      key: activeV2Program.id,
+                      name: "v2ProgramName",
+                      type: "text",
+                      required: true,
+                      defaultValue:
+                        activeV2Program.name || "V2 training programme",
+                    }),
+                  ),
+                  h(
+                    "button",
+                    { className: "ghost-button", type: "submit" },
+                    "Save V2 programme name",
+                  ),
+                  h(
+                    "button",
+                    {
+                      className: "danger-button",
+                      type: "button",
+                      onClick: () => onDeleteV2Program(activeV2Program.id),
+                    },
+                    "Remove V2 programme",
+                  ),
+                )
+              : null,
           )
         : null,
       appState.activeProgrammingEngine === "v2" || !activeV2Program

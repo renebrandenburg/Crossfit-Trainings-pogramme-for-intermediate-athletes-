@@ -1130,6 +1130,114 @@ test("React renders complete V2 strength and skill prescriptions from the valida
   }
 });
 
+test("React creates and switches between multiple V2 programmes", async () => {
+  const mounted = mountApp();
+
+  try {
+    openMoreTool(mounted, "Build programme");
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", {
+        name: "Generate six-week V2 block",
+      }),
+    );
+
+    const selector = await mounted.ui.findByLabelText("Active programme");
+    const firstProgramId = mounted.readState().activeV2ProgramId;
+    assert.ok(firstProgramId);
+    assert.equal(
+      mounted.ui.queryByRole("button", {
+        name: "Create new V2 programme",
+      }) !== null,
+      true,
+    );
+
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Create new V2 programme" }),
+    );
+    assert.equal(document.querySelector(".v2-programme-setup").open, true);
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Programming goal"), {
+      target: { value: "strength" },
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", {
+        name: "Generate a new future block",
+      }),
+    );
+
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      assert.equal(state.v2Programs.length, 2);
+      assert.notEqual(state.activeV2ProgramId, firstProgramId);
+      assert.equal(state.activeProgrammingEngine, "v2");
+    });
+
+    const secondProgramId = mounted.readState().activeV2ProgramId;
+    assert.notEqual(secondProgramId, firstProgramId);
+    mounted.fireEvent.change(mounted.ui.getByLabelText("V2 programme name"), {
+      target: { value: "Strength foundation block" },
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Save V2 programme name" }),
+    );
+    await mounted.waitFor(() => {
+      const renamed = mounted
+        .readState()
+        .v2Programs.find((program) => program.id === secondProgramId);
+      assert.equal(renamed.name, "Strength foundation block");
+      assert.match(
+        selector.options[0].textContent,
+        /Strength foundation block/,
+      );
+    });
+    assert.equal(selector.options.length, 3);
+    assert.ok(
+      Array.from(selector.options).some(
+        (option) => option.value === `v2:${firstProgramId}`,
+      ),
+    );
+    assert.ok(
+      Array.from(selector.options).some(
+        (option) => option.value === `v2:${secondProgramId}`,
+      ),
+    );
+
+    mounted.fireEvent.change(selector, {
+      target: { value: `v2:${firstProgramId}` },
+    });
+    await mounted.waitFor(() => {
+      assert.equal(mounted.readState().activeV2ProgramId, firstProgramId);
+    });
+
+    mounted.fireEvent.change(selector, {
+      target: { value: `v2:${secondProgramId}` },
+    });
+    await mounted.waitFor(() => {
+      assert.equal(mounted.readState().activeV2ProgramId, secondProgramId);
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Remove V2 programme" }),
+    );
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      assert.equal(state.v2Programs.length, 1);
+      assert.equal(state.activeV2ProgramId, firstProgramId);
+      assert.equal(state.activeProgrammingEngine, "v2");
+    });
+
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Remove V2 programme" }),
+    );
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      assert.equal(state.v2Programs.length, 0);
+      assert.equal(state.activeV2ProgramId, null);
+      assert.equal(state.activeProgrammingEngine, "v1");
+    });
+  } finally {
+    mounted.cleanup();
+  }
+});
+
 test("React schedules V2 on the athlete's two days and renders structured sessions in Calendar and Today", async () => {
   const mounted = mountApp();
 
