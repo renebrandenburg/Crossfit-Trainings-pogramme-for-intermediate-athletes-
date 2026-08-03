@@ -431,6 +431,119 @@ export function validateConditioningPrescription(
       ),
     );
   }
+  if (conditioning.format === "emom") {
+    const stations = Array.isArray(conditioning.stations)
+      ? conditioning.stations
+      : [];
+    const hasExplicitStructure =
+      conditioning.executionMode != null && stations.length > 0;
+    if (!hasExplicitStructure) {
+      issues.push(
+        issue(
+          "EMOM_STRUCTURE_UNAVAILABLE",
+          "warning",
+          path,
+          "EMOM minute assignments are unavailable; confirm whether movements rotate or repeat every minute.",
+        ),
+      );
+    } else {
+      const executionMode = conditioning.executionMode;
+      const intervalSeconds = conditioning.intervalSeconds;
+      if (executionMode !== "rotate" && executionMode !== "all-every-minute") {
+        issues.push(
+          issue(
+            "EMOM_INVALID_EXECUTION_MODE",
+            "error",
+            `${path}.executionMode`,
+            "EMOM execution mode must be rotate or all-every-minute.",
+          ),
+        );
+      }
+      if (
+        !Number.isInteger(conditioning.intervalSeconds) ||
+        intervalSeconds == null ||
+        intervalSeconds <= 0
+      ) {
+        issues.push(
+          issue(
+            "EMOM_INVALID_INTERVAL",
+            "error",
+            `${path}.intervalSeconds`,
+            "EMOM interval must be a positive whole number of seconds.",
+          ),
+        );
+      }
+      const stationCount = stations.length;
+      stations.forEach((station, index) => {
+        if (station.minute !== index + 1) {
+          issues.push(
+            issue(
+              "EMOM_INVALID_MINUTE",
+              "error",
+              `${path}.stations.${index}.minute`,
+              "EMOM stations must use consecutive minute numbers starting at 1.",
+            ),
+          );
+        }
+        if (!station.movement) {
+          issues.push(
+            issue(
+              "EMOM_MISSING_STATION_MOVEMENT",
+              "error",
+              `${path}.stations.${index}.movement`,
+              "Every EMOM station requires a movement.",
+            ),
+          );
+        } else if (
+          conditioning.movements[index]?.movementId !==
+          station.movement.movementId
+        ) {
+          issues.push(
+            issue(
+              "EMOM_STATION_MOVEMENT_MISMATCH",
+              "error",
+              `${path}.stations.${index}.movement`,
+              "EMOM station order must match the conditioning movement order.",
+            ),
+          );
+        }
+      });
+      const totalIntervals =
+        conditioning.durationMinutes == null ||
+        !Number.isInteger(conditioning.intervalSeconds)
+          ? null
+          : (conditioning.durationMinutes * 60) / Number(intervalSeconds);
+      const expectedRounds =
+        totalIntervals == null
+          ? null
+          : conditioning.executionMode === "rotate"
+            ? totalIntervals / stationCount
+            : totalIntervals;
+      if (
+        totalIntervals == null ||
+        !Number.isInteger(totalIntervals) ||
+        (executionMode === "rotate" && !Number.isInteger(expectedRounds))
+      ) {
+        issues.push(
+          issue(
+            "EMOM_DURATION_NOT_COMPATIBLE",
+            "error",
+            `${path}.durationMinutes`,
+            "EMOM duration must resolve to complete minute intervals and rotations.",
+          ),
+        );
+      } else if (conditioning.rounds !== expectedRounds) {
+        issues.push(
+          issue(
+            "EMOM_ROUNDS_MISMATCH",
+            "error",
+            `${path}.rounds`,
+            `EMOM rounds must equal ${expectedRounds} for the duration and execution mode.`,
+          ),
+        );
+      }
+    }
+  }
   if (conditioning.format === "intervals" && conditioning.restSeconds == null) {
     issues.push(
       issue(

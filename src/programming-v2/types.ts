@@ -145,6 +145,8 @@ export type ExerciseSection = MovementContext;
 export type ConditioningFormat =
   "for_time" | "amrap" | "emom" | "intervals" | "rounds_for_quality" | "zone_2";
 
+export type EmomExecutionMode = "rotate" | "all-every-minute";
+
 export type DurationValidationStatus =
   "within_target" | "warning_short" | "warning_long" | "invalid_too_long";
 
@@ -231,6 +233,11 @@ export interface ConditioningMovement {
   equipment: string[];
 }
 
+export interface ConditioningEmomStation {
+  minute: number;
+  movement: ConditioningMovement;
+}
+
 export interface ConditioningPrescription {
   id: string;
   sessionId: string;
@@ -245,6 +252,9 @@ export interface ConditioningPrescription {
   targetDurationMax: number | null;
   targetRpe: number | null;
   movements: ConditioningMovement[];
+  intervalSeconds: number | null;
+  executionMode: EmomExecutionMode | null;
+  stations: ConditioningEmomStation[];
   scalingOptions: ScalingOption[];
   estimatedDurationMinutes: number;
 }

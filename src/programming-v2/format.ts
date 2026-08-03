@@ -112,16 +112,61 @@ function warmupTarget(exercise: WarmupExercise): string {
 }
 
 function conditioningTarget(movement: ConditioningMovement): string {
-  if (movement.reps != null) return `${movement.reps} ${movement.movementName}`;
+  const movementName = conditioningMovementName(movement);
+  if (movement.reps != null) return `${movement.reps} ${movementName}`;
   if (movement.calories != null)
-    return `${movement.calories} cal ${movement.movementName}`;
+    return `${movement.calories} cal ${movementName}`;
   if (movement.distanceMeters != null) {
-    return `${movement.distanceMeters} m ${movement.movementName}`;
+    return `${movement.distanceMeters} m ${movementName}`;
   }
   if (movement.durationSeconds != null) {
-    return `${movement.durationSeconds}-sec ${movement.movementName}`;
+    return `${movement.durationSeconds}-sec ${movementName}`;
   }
-  return movement.movementName;
+  return movementName;
+}
+
+function conditioningMovementName(movement: ConditioningMovement): string {
+  const titled = movement.movementName.replace(/\b\w/g, (character) =>
+    character.toUpperCase(),
+  );
+  return titled
+    .replace(/Push-(?:Up|Ups)$/i, "Push-ups")
+    .replace(/Step-(?:Up|Ups)$/i, "Step-ups");
+}
+
+function emomLines(conditioning: ConditioningPrescription): string[] {
+  const header = `${conditioning.durationMinutes}-minute EMOM`;
+  const stations = Array.isArray(conditioning.stations)
+    ? conditioning.stations
+    : [];
+  if (
+    !conditioning.executionMode ||
+    !stations.length ||
+    conditioning.intervalSeconds == null
+  ) {
+    return [
+      header,
+      "EMOM structure unavailable. Confirm whether movements rotate by minute or are all completed every minute.",
+      `Movements: ${conditioning.movements.map(conditioningTarget).join("; ")}`,
+    ];
+  }
+  if (conditioning.executionMode === "rotate") {
+    return [
+      header,
+      `${conditioning.rounds} rounds · one movement per minute`,
+      ...stations.map(
+        (station) =>
+          `Minute ${station.minute}: ${conditioningTarget(station.movement)}`,
+      ),
+      `Repeat until ${conditioning.durationMinutes} minutes are complete.`,
+    ];
+  }
+  return [
+    header,
+    `${conditioning.rounds} rounds · complete all movements every minute`,
+    "Every minute:",
+    ...stations.map((station) => `• ${conditioningTarget(station.movement)}`),
+  ];
 }
 
 function conditioningHeader(conditioning: ConditioningPrescription): string {
@@ -189,9 +234,13 @@ export function formatSessionForDisplay(
       estimatedTime: `${numberText(conditioning.estimatedDurationMinutes)} min`,
       exercises: [],
       lines: [
-        `${conditioningHeader(conditioning)}: ${conditioning.movements
-          .map(conditioningTarget)
-          .join(", ")}.`,
+        ...(conditioning.format === "emom"
+          ? emomLines(conditioning)
+          : [
+              `${conditioningHeader(conditioning)}: ${conditioning.movements
+                .map(conditioningTarget)
+                .join(", ")}.`,
+            ]),
         `Stimulus: ${conditioning.intendedStimulus}`,
         `Scaling: ${conditioning.scalingOptions
           .map(

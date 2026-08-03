@@ -315,6 +315,64 @@ test("rendered V2 prescriptions visibly include load, rest, gymnastics targets, 
   );
 });
 
+test("renders rotating EMOMs with explicit minute assignments", () => {
+  const program = generate();
+  const session = sessions(program).find(
+    (candidate) => candidate.weekNumber === 2 && candidate.sessionNumber === 1,
+  );
+  const conditioning = session.conditioning;
+  const rendered = JSON.stringify(v2.formatSessionForDisplay(session));
+
+  assert.equal(conditioning.executionMode, "rotate");
+  assert.equal(conditioning.intervalSeconds, 60);
+  assert.equal(conditioning.rounds, 3);
+  assert.deepEqual(
+    conditioning.stations.map((station) => station.minute),
+    [1, 2, 3],
+  );
+  assert.match(rendered, /9-minute EMOM/);
+  assert.match(rendered, /3 rounds · one movement per minute/);
+  assert.match(rendered, /Minute 1: \d+ (m|cal) /);
+  assert.match(rendered, /Minute 2: 8 Push-ups/);
+  assert.match(rendered, /Minute 3: 12 Box Step-ups/);
+  assert.doesNotMatch(rendered, /EMOM: .*?, .*?,/);
+});
+
+test("rejects rotating EMOMs whose duration cannot complete a round", () => {
+  const program = generate();
+  const session = sessions(program).find(
+    (candidate) => candidate.weekNumber === 2 && candidate.sessionNumber === 1,
+  );
+  const invalid = structuredClone(session.conditioning);
+  invalid.durationMinutes = 10;
+
+  const validation = v2.validateConditioningPrescription(invalid);
+
+  assert.equal(validation.valid, false);
+  assert.ok(
+    validation.issues.some(
+      (issue) => issue.code === "EMOM_DURATION_NOT_COMPATIBLE",
+    ),
+  );
+});
+
+test("labels all-every-minute EMOMs without implying rotation", () => {
+  const program = generate();
+  const session = sessions(program).find(
+    (candidate) => candidate.weekNumber === 2 && candidate.sessionNumber === 1,
+  );
+  const conditioning = structuredClone(session.conditioning);
+  conditioning.executionMode = "all-every-minute";
+  conditioning.rounds = 9;
+  const rendered = JSON.stringify(
+    v2.formatSessionForDisplay({ ...session, conditioning }),
+  );
+
+  assert.match(rendered, /complete all movements every minute/);
+  assert.match(rendered, /Every minute:/);
+  assert.doesNotMatch(rendered, /one movement per minute/);
+});
+
 test("regenerating conditioning preserves progression assignments and duration limits", () => {
   const program = generate();
   const session = sessions(program)[0];

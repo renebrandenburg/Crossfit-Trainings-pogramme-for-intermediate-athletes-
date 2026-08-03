@@ -528,16 +528,30 @@ function createConditioning(
   const base = {
     id,
     sessionId,
+    intervalSeconds: null,
+    executionMode: null,
+    stations: [],
     scalingOptions: measurableConditioningScaling(),
   };
 
   if (sessionNumber === 1) {
     if (week.weekNumber === 2) {
+      const movements = [
+        conditioningMovement(engineId, target(10)),
+        conditioningMovement("push_up", { reps: 8 }),
+        conditioningMovement(stepUpId, { reps: 12 }),
+      ];
       return {
         ...base,
         format: "emom",
         durationMinutes: 9,
         rounds: 3,
+        intervalSeconds: 60,
+        executionMode: "rotate",
+        stations: movements.map((movement, index) => ({
+          minute: index + 1,
+          movement,
+        })),
         timeCapMinutes: null,
         workSeconds: null,
         restSeconds: null,
@@ -546,11 +560,7 @@ function createConditioning(
         targetDurationMin: null,
         targetDurationMax: null,
         targetRpe: 7,
-        movements: [
-          conditioningMovement(engineId, target(10)),
-          conditioningMovement("push_up", { reps: 8 }),
-          conditioningMovement(stepUpId, { reps: 12 }),
-        ],
+        movements,
         estimatedDurationMinutes: 9,
       };
     }

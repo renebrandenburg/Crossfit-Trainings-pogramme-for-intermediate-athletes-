@@ -57,6 +57,7 @@ const {
   timerDisplaySeconds,
   trimNumber,
   renderWorkoutDescription,
+  renderWorkoutItems,
   validateWorkoutDefinition,
   validateGeneratedPlansForPersistence,
   validateGeneratedWeek,
@@ -2087,6 +2088,92 @@ test("semantic workout validator rejects contradictory and incomplete structures
       /Invalid workout/,
     );
   });
+});
+
+test("EMOM rendering names each minute and never uses ambiguous comma text", () => {
+  const definition = semanticWorkout({
+    format: {
+      type: "emom",
+      intervalSeconds: 60,
+      durationSeconds: 9 * 60,
+      executionMode: "rotate",
+      rounds: 3,
+      stations: [
+        {
+          type: "work",
+          exercises: [
+            {
+              id: "push-up",
+              movementId: "push-up",
+              movement: "push-up",
+              target: { type: "reps", value: 8 },
+            },
+          ],
+        },
+        {
+          type: "work",
+          exercises: [
+            {
+              id: "step-up",
+              movementId: "box-step-up",
+              movement: "box step-up",
+              target: { type: "reps", value: 12 },
+            },
+          ],
+        },
+        {
+          type: "work",
+          exercises: [
+            {
+              id: "row",
+              movementId: "row",
+              movement: "row",
+              target: { type: "calories", value: 10 },
+            },
+          ],
+        },
+      ],
+    },
+    exercises: [],
+  });
+
+  const rendered = renderWorkoutItems(definition)[0];
+
+  assert.match(rendered, /9-minute EMOM/);
+  assert.match(rendered, /3 rounds · one movement per minute/);
+  assert.match(rendered, /Minute 1: 8 Push-ups/);
+  assert.match(rendered, /Minute 2: 12 Box Step-ups/);
+  assert.match(rendered, /Minute 3: 10 cal Row/);
+  assert.doesNotMatch(rendered, /, .*?,/);
+});
+
+test("legacy EMOM rendering warns instead of inferring rotation", () => {
+  const definition = semanticWorkout({
+    format: {
+      type: "emom",
+      intervalSeconds: 60,
+      rounds: 3,
+      stations: [
+        {
+          type: "work",
+          exercises: [
+            {
+              id: "row",
+              movementId: "row",
+              movement: "row",
+              target: { type: "calories", value: 10 },
+            },
+          ],
+        },
+      ],
+    },
+    exercises: [],
+  });
+
+  const rendered = renderWorkoutItems(definition)[0];
+
+  assert.match(rendered, /structure unavailable/i);
+  assert.doesNotMatch(rendered, /one movement per minute/);
 });
 
 test("generated Olympic prescriptions resolve one coherent family", () => {

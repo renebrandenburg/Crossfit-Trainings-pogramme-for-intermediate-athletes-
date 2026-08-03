@@ -1623,6 +1623,12 @@ function workoutDefinitionErrors(definition) {
     if (format.type === "emom") {
       requirePositiveInteger(format.rounds, "EMOM round count", errors);
       requirePositiveFinite(format.intervalSeconds, "EMOM interval", errors);
+      if (
+        format.executionMode != null &&
+        !["rotate", "all-every-minute"].includes(format.executionMode)
+      ) {
+        errors.push("EMOM execution mode is invalid");
+      }
       if (!Array.isArray(format.stations) || !format.stations.length) {
         errors.push("EMOM requires at least one station");
       } else {
@@ -1636,6 +1642,16 @@ function workoutDefinitionErrors(definition) {
             errors.push(`EMOM station ${index + 1} requires exercises`);
           }
         });
+        if (format.executionMode === "rotate") {
+          const cycleSeconds =
+            Number(format.intervalSeconds) * format.stations.length;
+          if (
+            format.durationSeconds != null &&
+            format.durationSeconds !== format.rounds * cycleSeconds
+          ) {
+            errors.push("Rotating EMOM duration must match complete rounds");
+          }
+        }
       }
     }
   }
@@ -2412,11 +2428,78 @@ function validateExerciseTarget(target, id, errors) {
 
 function renderWorkoutItems(definition) {
   validateWorkoutDefinition(definition);
+  const descriptionItems =
+    definition.format.type === "emom"
+      ? renderEmomDescriptionLines(definition)
+      : [renderWorkoutDescription(definition)];
   return [
-    renderWorkoutDescription(definition),
+    descriptionItems.join("\n"),
     `Stimulus: ${definition.stimulus}`,
     `Score: ${definition.score}.`,
     `Scaling: ${definition.scaling}`,
+  ];
+}
+
+function displayEmomMovementName(movement) {
+  const name = String(movement || "").trim();
+  const titled = name.replace(/\b\w/g, (character) => character.toUpperCase());
+  return titled
+    .replace(/Push-(?:Up|Ups)$/i, "Push-ups")
+    .replace(/Step-(?:Up|Ups)$/i, "Step-ups");
+}
+
+function renderEmomExercise(exercise) {
+  return renderExercise({
+    ...exercise,
+    movement: displayEmomMovementName(exercise.movement),
+  });
+}
+
+function renderEmomStation(station, index) {
+  if (station.type === "rest") return `Minute ${index + 1}: Rest`;
+  return `Minute ${index + 1}: ${arrayOrEmpty(station.exercises)
+    .map(renderEmomExercise)
+    .join(" and ")}`;
+}
+
+function renderEmomDescriptionLines(definition) {
+  const format = definition.format;
+  const stations = arrayOrEmpty(format.stations);
+  const knownDuration =
+    Number(format.durationSeconds) ||
+    Number(format.rounds) * Number(format.intervalSeconds) * stations.length;
+  const header = `${formatDurationMinutes(knownDuration)}-minute EMOM`;
+  if (!format.executionMode) {
+    return [
+      header,
+      "EMOM structure unavailable. Confirm whether movements rotate by minute or are all completed every minute.",
+      `Movements: ${stations
+        .filter((station) => station.type === "work")
+        .flatMap((station) =>
+          arrayOrEmpty(station.exercises).map(renderEmomExercise),
+        )
+        .join("; ")}`,
+    ];
+  }
+  if (format.executionMode === "rotate") {
+    return [
+      header,
+      `${format.rounds} rounds · one movement per minute`,
+      ...stations.map(renderEmomStation),
+      `Repeat until ${formatDurationMinutes(knownDuration)} minutes are complete.`,
+    ];
+  }
+  return [
+    header,
+    `${format.rounds} rounds · complete all movements every minute`,
+    "Every minute:",
+    ...stations
+      .filter((station) => station.type === "work")
+      .flatMap((station) =>
+        arrayOrEmpty(station.exercises).map(
+          (exercise) => `• ${renderEmomExercise(exercise)}`,
+        ),
+      ),
   ];
 }
 
@@ -2450,16 +2533,7 @@ function renderWorkoutDescription(definition) {
       : "";
     description = `${format.sets} sets${cap}, rest ${formatClock(format.restSeconds)} between sets: ${main}`;
   } else if (format.type === "emom") {
-    const stationText = format.stations
-      .map((station, index) =>
-        station.type === "rest"
-          ? `min ${index + 1} rest`
-          : `min ${index + 1} ${renderExerciseList(station.exercises)}`,
-      )
-      .join(", ");
-    const totalSeconds =
-      format.rounds * format.intervalSeconds * format.stations.length;
-    description = `EMOM ${formatDurationMinutes(totalSeconds)}: ${stationText}`;
+    description = renderEmomDescriptionLines(definition).join("\n");
   } else {
     const rounds = format.rounds ? `${format.rounds} rounds: ` : "";
     description = `Benchmark ${format.name}, ${formatDurationMinutes(format.durationSeconds)} min cap: ${rounds}${main}`;
@@ -2628,10 +2702,11 @@ function timeDomainContains(timeDomain, seconds) {
 function workoutExpectedDurationSeconds(definition) {
   const format = definition?.format || {};
   if (format.type === "emom") {
+    const stationCount = arrayOrEmpty(format.stations).length;
+    const intervalsPerRound =
+      format.executionMode === "all-every-minute" ? 1 : stationCount;
     return (
-      Number(format.rounds) *
-      Number(format.intervalSeconds) *
-      arrayOrEmpty(format.stations).length
+      Number(format.rounds) * Number(format.intervalSeconds) * intervalsPerRound
     );
   }
   if (format.type === "intervals") {
@@ -2662,6 +2737,7 @@ function applyTimeDomainDuration(definition, timeDomain, requestedMinutes) {
       cycleSeconds,
       range,
     );
+    format.durationSeconds = workoutExpectedDurationSeconds({ format });
   } else if (format.type === "repeat_sets") {
     format.durationSeconds = requestedSeconds;
   } else {
@@ -4908,6 +4984,8 @@ function buildWodPattern(week, goal, day, cap, movement, variation, phase) {
         type: "emom",
         intervalSeconds: 60,
         rounds: Math.max(1, Math.floor(cap / 4)),
+        executionMode: "rotate",
+        durationSeconds: Math.max(1, Math.floor(cap / 4)) * 60 * 4,
         stations: [
           { type: "work", exercises: [movement.weakness] },
           { type: "work", exercises: [movement.easyMono] },
@@ -5037,11 +5115,14 @@ function timerConfigFromWorkoutDefinition(definition) {
     });
   }
   if (format.type === "emom") {
-    const rounds = format.rounds * format.stations.length;
-    return timerConfig("emom", workout, rounds * format.intervalSeconds, {
-      rounds,
+    const intervalsPerRound =
+      format.executionMode === "all-every-minute" ? 1 : format.stations.length;
+    const totalSeconds =
+      format.rounds * intervalsPerRound * format.intervalSeconds;
+    return timerConfig("emom", workout, totalSeconds, {
+      rounds: format.rounds,
       intervalSeconds: format.intervalSeconds,
-      label: `EMOM ${formatSecondsForLabel(rounds * format.intervalSeconds)}`,
+      label: `EMOM ${formatSecondsForLabel(totalSeconds)}`,
     });
   }
   if (format.type === "intervals") {
@@ -6379,6 +6460,8 @@ function mastersRxPattern(week, day, pool) {
         type: "emom",
         intervalSeconds: 60,
         rounds: 4,
+        executionMode: "rotate",
+        durationSeconds: 4 * 60 * 4,
         stations: [
           { type: "work", exercises: [pool.primary] },
           { type: "work", exercises: [pool.secondary] },
