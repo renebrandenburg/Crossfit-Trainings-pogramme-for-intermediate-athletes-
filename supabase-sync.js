@@ -305,9 +305,12 @@
       preferredDays:
         requestedDays.length === frequency
           ? requestedDays
-          : (frequency === 2
-              ? ["tuesday", "saturday"]
-              : ["monday", "tuesday", "wednesday", "thursday"].slice(0, frequency)),
+          : frequency === 2
+            ? ["tuesday", "saturday"]
+            : ["monday", "tuesday", "wednesday", "thursday"].slice(
+                0,
+                frequency,
+              ),
       frequency,
       goal: goals.includes(source.goal) ? source.goal : "mixed",
       blockType: blockTypes.includes(source.blockType)
@@ -407,15 +410,35 @@
       v1Migration:
         state.v1Migration && typeof state.v1Migration === "object"
           ? {
-              status: ["not_started", "offered", "migrated", "rolled_back"].includes(state.v1Migration.status)
+              status: [
+                "not_started",
+                "offered",
+                "migrated",
+                "rolled_back",
+              ].includes(state.v1Migration.status)
                 ? state.v1Migration.status
                 : "not_started",
-              sourcePlanId: typeof state.v1Migration.sourcePlanId === "string" ? state.v1Migration.sourcePlanId : null,
-              migratedProgramId: typeof state.v1Migration.migratedProgramId === "string" ? state.v1Migration.migratedProgramId : null,
+              sourcePlanId:
+                typeof state.v1Migration.sourcePlanId === "string"
+                  ? state.v1Migration.sourcePlanId
+                  : null,
+              migratedProgramId:
+                typeof state.v1Migration.migratedProgramId === "string"
+                  ? state.v1Migration.migratedProgramId
+                  : null,
               rollbackAvailable: Boolean(state.v1Migration.rollbackAvailable),
-              updatedAt: typeof state.v1Migration.updatedAt === "string" ? state.v1Migration.updatedAt : null,
+              updatedAt:
+                typeof state.v1Migration.updatedAt === "string"
+                  ? state.v1Migration.updatedAt
+                  : null,
             }
-          : { status: "not_started", sourcePlanId: null, migratedProgramId: null, rollbackAvailable: false, updatedAt: null },
+          : {
+              status: "not_started",
+              sourcePlanId: null,
+              migratedProgramId: null,
+              rollbackAvailable: false,
+              updatedAt: null,
+            },
       v2GenerationPreferences: normalizeV2GenerationPreferences(
         state.v2GenerationPreferences,
       ),

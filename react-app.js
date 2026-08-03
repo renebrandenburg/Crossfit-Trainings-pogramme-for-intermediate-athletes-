@@ -1871,11 +1871,15 @@
       const preferredDays = Array.isArray(rawPreferences?.preferredDays)
         ? [...new Set(rawPreferences.preferredDays.map(String))]
         : [];
-      const requestedFrequency = [2, 3, 4].includes(Number(rawPreferences?.frequency))
+      const requestedFrequency = [2, 3, 4].includes(
+        Number(rawPreferences?.frequency),
+      )
         ? Number(rawPreferences.frequency)
         : 2;
       if (preferredDays.length !== requestedFrequency) {
-        notify(`Select exactly ${requestedFrequency} different app training days.`);
+        notify(
+          `Select exactly ${requestedFrequency} different app training days.`,
+        );
         return;
       }
       const preferences =
@@ -1901,8 +1905,10 @@
           masters_open: "masters_open_6w",
           mixed: "mixed_strength_6w",
         };
-        const templateId = templateByGoal[preferences.goal] || "mixed_strength_6w";
-        const generator = v2Api.generateV2Program || v2Api.generateMixedStrengthBlock;
+        const templateId =
+          templateByGoal[preferences.goal] || "mixed_strength_6w";
+        const generator =
+          v2Api.generateV2Program || v2Api.generateMixedStrengthBlock;
         const program = generator({
           programId,
           ownerId: remoteUser ? String(remoteUser.id || "") : null,
@@ -1966,7 +1972,9 @@
         } catch {
           // The validated local mirror remains available for an explicit retry.
         }
-        notify(`Generated a connected six-week, ${preferences.frequency}-session V2 block.`);
+        notify(
+          `Generated a connected six-week, ${preferences.frequency}-session V2 block.`,
+        );
         return program;
       } catch (error) {
         console.error("V2 programme generation was rejected.", error);
@@ -1978,12 +1986,19 @@
     }
 
     async function handleMigrateV1Programme(plan) {
-      if (!plan || !window.confirm("Create a new V2 programme and keep this V1 plan as a read-only rollback copy?")) return;
+      if (
+        !plan ||
+        !window.confirm(
+          "Create a new V2 programme and keep this V1 plan as a read-only rollback copy?",
+        )
+      )
+        return;
       const options = plan.generatorOptions || {};
       const frequency = [2, 3, 4].includes(Number(options.programDaysPerWeek))
         ? Number(options.programDaysPerWeek)
         : 2;
-      const goalText = `${options.primaryGoal || ""} ${options.secondaryGoal || ""}`.toLowerCase();
+      const goalText =
+        `${options.primaryGoal || ""} ${options.secondaryGoal || ""}`.toLowerCase();
       const goal = goalText.includes("muscle")
         ? "bar_muscle_up"
         : goalText.includes("gymnast")
@@ -1995,9 +2010,14 @@
               : goalText.includes("strength")
                 ? "strength"
                 : "mixed";
-      const preferredDays = Array.isArray(options.preferredProgramDays) && options.preferredProgramDays.length
-        ? options.preferredProgramDays
-        : (appStateRef.current.v2GenerationPreferences?.preferredDays || ["tuesday", "saturday"]);
+      const preferredDays =
+        Array.isArray(options.preferredProgramDays) &&
+        options.preferredProgramDays.length
+          ? options.preferredProgramDays
+          : appStateRef.current.v2GenerationPreferences?.preferredDays || [
+              "tuesday",
+              "saturday",
+            ];
       const generated = await handleGenerateV2Programme({
         preferences: {
           ...appStateRef.current.v2GenerationPreferences,
@@ -2017,7 +2037,9 @@
           updatedAt: new Date().toISOString(),
         },
       }));
-      notify("V2 programme created. The original V1 programme remains available for rollback.");
+      notify(
+        "V2 programme created. The original V1 programme remains available for rollback.",
+      );
     }
 
     function handleRollbackV1Programme() {
@@ -2027,7 +2049,11 @@
         ...current,
         activePlanId: migration.sourcePlanId,
         activeProgrammingEngine: "v1",
-        v1Migration: { ...migration, status: "rolled_back", updatedAt: new Date().toISOString() },
+        v1Migration: {
+          ...migration,
+          status: "rolled_back",
+          updatedAt: new Date().toISOString(),
+        },
       }));
       notify("Rolled back to the original V1 programme. Nothing was deleted.");
     }
@@ -3678,7 +3704,8 @@
           activeV2ProgramId: appState.activeV2ProgramId || null,
           v2ProgramRevisions: appState.v2ProgramRevisions || {},
           activeProgrammingEngine: appState.activeProgrammingEngine || "v1",
-          v1Migration: appState.v1Migration || defaultAthleteState().v1Migration,
+          v1Migration:
+            appState.v1Migration || defaultAthleteState().v1Migration,
           v2GenerationPreferences:
             v2Api?.normalizeV2GenerationPreferences?.(
               appState.v2GenerationPreferences,
@@ -7379,7 +7406,11 @@
         h(
           "fieldset",
           null,
-          h("legend", null, `Preferred app days — select ${normalizedPreferences.frequency}`),
+          h(
+            "legend",
+            null,
+            `Preferred app days — select ${normalizedPreferences.frequency}`,
+          ),
           DAY_OF_WEEK_OPTIONS.map((day) =>
             h(
               "label",
@@ -7401,7 +7432,10 @@
           "Weekly app sessions",
           h(
             "select",
-            { name: "v2Frequency", defaultValue: String(normalizedPreferences.frequency) },
+            {
+              name: "v2Frequency",
+              defaultValue: String(normalizedPreferences.frequency),
+            },
             h("option", { value: "2" }, "2 sessions"),
             h("option", { value: "3" }, "3 sessions"),
             h("option", { value: "4" }, "4 sessions"),
@@ -7418,8 +7452,16 @@
             h("option", { value: "strength" }, "Strength"),
             h("option", { value: "endurance" }, "Endurance / aerobic capacity"),
             h("option", { value: "gymnastics" }, "Gymnastics capacity"),
-            h("option", { value: "bar_muscle_up" }, "Bar muscle-up progression"),
-            h("option", { value: "masters_open" }, "Masters / Open preparation"),
+            h(
+              "option",
+              { value: "bar_muscle_up" },
+              "Bar muscle-up progression",
+            ),
+            h(
+              "option",
+              { value: "masters_open" },
+              "Masters / Open preparation",
+            ),
           ),
         ),
         h(
@@ -7428,11 +7470,22 @@
           "Training block",
           h(
             "select",
-            { name: "v2BlockType", defaultValue: normalizedPreferences.blockType },
+            {
+              name: "v2BlockType",
+              defaultValue: normalizedPreferences.blockType,
+            },
             h("option", { value: "mixed_strength" }, "Mixed strength"),
             h("option", { value: "aerobic_capacity" }, "Aerobic capacity"),
-            h("option", { value: "gymnastics_capacity" }, "Gymnastics capacity"),
-            h("option", { value: "competition_preparation" }, "Competition preparation"),
+            h(
+              "option",
+              { value: "gymnastics_capacity" },
+              "Gymnastics capacity",
+            ),
+            h(
+              "option",
+              { value: "competition_preparation" },
+              "Competition preparation",
+            ),
             h("option", { value: "deload" }, "Deload"),
           ),
         ),
@@ -8216,14 +8269,22 @@
         activePlan
           ? h(
               "button",
-              { type: "button", className: "primary-button", onClick: () => onMigrateV1(activePlan) },
+              {
+                type: "button",
+                className: "primary-button",
+                onClick: () => onMigrateV1(activePlan),
+              },
               "Create V2 replacement",
             )
           : null,
         appState.v1Migration?.rollbackAvailable
           ? h(
               "button",
-              { type: "button", className: "ghost-button", onClick: onRollbackV1 },
+              {
+                type: "button",
+                className: "ghost-button",
+                onClick: onRollbackV1,
+              },
               "Rollback to original V1 programme",
             )
           : null,

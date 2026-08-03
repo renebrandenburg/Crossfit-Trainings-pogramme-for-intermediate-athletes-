@@ -1259,10 +1259,13 @@ test("React keeps V2 disabled on production without an allowlist flag", () => {
 });
 
 test("React Testing Library generates a level-aware bar muscle-up programme", async () => {
-  const { cleanup, fireEvent, ui, waitFor } = mountApp();
+  const { cleanup, fireEvent, ui, waitFor } = mountApp({
+    storedState: canonicalPlanState({ kind: "generated" }),
+  });
 
   try {
     openMoreTool({ fireEvent, ui }, "Build programme");
+    fireEvent.click(ui.getByText("V1 compatibility (read-only)"));
     fireEvent.change(ui.getByLabelText("Main goal"), {
       target: { value: "barMuscleUp" },
     });
@@ -1275,7 +1278,9 @@ test("React Testing Library generates a level-aware bar muscle-up programme", as
     assert.equal(athleteLevel.value, "intermediate");
     fireEvent.change(athleteLevel, { target: { value: "rxPlus" } });
     fireEvent.click(
-      ui.getByRole("button", { name: "Generate 8-week programme" }),
+      ui.getByRole("button", {
+        name: /(?:Generate|Regenerate) 8-week programme/,
+      }),
     );
 
     await waitFor(() =>
@@ -1326,10 +1331,13 @@ test("React Testing Library generates a level-aware bar muscle-up programme", as
 });
 
 test("React Testing Library creates a two-day plan and counts a box workout separately", async () => {
-  const { cleanup, fireEvent, ui, waitFor } = mountApp();
+  const { cleanup, fireEvent, ui, waitFor } = mountApp({
+    storedState: canonicalPlanState({ kind: "generated" }),
+  });
 
   try {
     openMoreTool({ fireEvent, ui }, "Build programme");
+    fireEvent.click(ui.getByText("V1 compatibility (read-only)"));
     fireEvent.change(ui.getByLabelText("App-programmed sessions"), {
       target: { value: "2" },
     });
@@ -1337,7 +1345,9 @@ test("React Testing Library creates a two-day plan and counts a box workout sepa
       ui.getByLabelText("I also follow workouts at a CrossFit box"),
     );
     fireEvent.click(
-      ui.getByRole("button", { name: "Generate 8-week programme" }),
+      ui.getByRole("button", {
+        name: /(?:Generate|Regenerate) 8-week programme/,
+      }),
     );
 
     await waitFor(() => {
@@ -1389,10 +1399,13 @@ test("React Testing Library creates a two-day plan and counts a box workout sepa
 });
 
 test("React renders complete strength and skill prescriptions", async () => {
-  const { cleanup, dom, fireEvent, readState, ui, waitFor } = mountApp();
+  const { cleanup, dom, fireEvent, readState, ui, waitFor } = mountApp({
+    storedState: canonicalPlanState({ kind: "generated" }),
+  });
 
   try {
     openMoreTool({ fireEvent, ui }, "Build programme");
+    fireEvent.click(ui.getByText("V1 compatibility (read-only)"));
     fireEvent.change(ui.getByLabelText("Main goal"), {
       target: { value: "balanced" },
     });
@@ -1412,7 +1425,9 @@ test("React renders complete strength and skill prescriptions", async () => {
       target: { value: "olympic" },
     });
     fireEvent.click(
-      ui.getByRole("button", { name: "Generate 8-week programme" }),
+      ui.getByRole("button", {
+        name: /(?:Generate|Regenerate) 8-week programme/,
+      }),
     );
 
     await waitFor(() => {
@@ -1551,11 +1566,14 @@ test("React Testing Library marks a logged custom session complete without doubl
 });
 
 test("React Testing Library generates a Masters 35-39 RX Open prep programme", async () => {
-  const { cleanup, fireEvent, ui, waitFor } = mountApp();
+  const { cleanup, fireEvent, ui, waitFor } = mountApp({
+    storedState: canonicalPlanState({ kind: "generated" }),
+  });
 
   try {
     openMoreTool({ fireEvent, ui }, "Build programme");
     assert.ok(await ui.findByRole("heading", { name: "Programme builder" }));
+    fireEvent.click(ui.getByText("V1 compatibility (read-only)"));
 
     fireEvent.change(ui.getByLabelText("Main goal"), {
       target: { value: "mastersRxOpen" },
@@ -1564,7 +1582,9 @@ test("React Testing Library generates a Masters 35-39 RX Open prep programme", a
       target: { value: "runningBodyweight" },
     });
     fireEvent.click(
-      ui.getByRole("button", { name: "Generate 8-week programme" }),
+      ui.getByRole("button", {
+        name: /(?:Generate|Regenerate) 8-week programme/,
+      }),
     );
 
     await waitFor(() =>

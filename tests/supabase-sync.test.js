@@ -39,8 +39,18 @@ function athleteState(overrides = {}) {
     activeV2ProgramId: null,
     v2ProgramRevisions: {},
     activeProgrammingEngine: "v1",
+    v1Migration: {
+      status: "not_started",
+      sourcePlanId: null,
+      migratedProgramId: null,
+      rollbackAvailable: false,
+      updatedAt: null,
+    },
     v2GenerationPreferences: {
       preferredDays: ["wednesday", "sunday"],
+      frequency: 2,
+      goal: "mixed",
+      blockType: "mixed_strength",
       athleteLevel: "advanced",
       availableEquipment: ["barbell", "rack", "pull-up bar", "rower"],
       weightIncrementKg: 1,

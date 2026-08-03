@@ -107,9 +107,17 @@ export function normalizeV2GenerationPreferences(
     ? (requestedFrequency as V2GenerationPreferences["frequency"])
     : Array.isArray(value?.preferredDays) &&
         [3, 4].includes(
-          new Set(value.preferredDays.map(String).filter((day) => WEEKDAYS.includes(day as Weekday))).size,
+          new Set(
+            value.preferredDays
+              .map(String)
+              .filter((day) => WEEKDAYS.includes(day as Weekday)),
+          ).size,
         )
-      ? (new Set(value.preferredDays.map(String).filter((day) => WEEKDAYS.includes(day as Weekday))).size as V2GenerationPreferences["frequency"])
+      ? (new Set(
+          value.preferredDays
+            .map(String)
+            .filter((day) => WEEKDAYS.includes(day as Weekday)),
+        ).size as V2GenerationPreferences["frequency"])
       : DEFAULT_V2_GENERATION_PREFERENCES.frequency;
   const goal = [
     "strength",
