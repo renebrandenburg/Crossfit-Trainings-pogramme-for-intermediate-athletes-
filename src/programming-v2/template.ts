@@ -2,7 +2,93 @@ import type {
   IntensityMethod,
   MovementFamilyId,
   ProgressionTrackType,
+  TrainingBlockType,
 } from "./types";
+
+export type V2TemplateId =
+  | "mixed_strength_6w"
+  | "endurance_capacity_6w"
+  | "gymnastics_capacity_6w"
+  | "bar_muscle_up_6w"
+  | "masters_open_6w"
+  | "deload_1w";
+
+export interface V2TemplateDefinition {
+  id: V2TemplateId;
+  blockType: TrainingBlockType;
+  name: string;
+  goal: string;
+  supportedFrequencies: ReadonlyArray<2 | 3 | 4>;
+  durationWeeks: number;
+  deloadWeek: number | null;
+}
+
+export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
+  Object.freeze([
+    {
+      id: "mixed_strength_6w",
+      blockType: "mixed_strength",
+      name: "Six-week mixed-strength block",
+      goal: "Progress squat strength, Olympic lifting, gymnastics, and engine work.",
+      supportedFrequencies: [2, 3, 4],
+      durationWeeks: 6,
+      deloadWeek: 6,
+    },
+    {
+      id: "endurance_capacity_6w",
+      blockType: "aerobic_capacity",
+      name: "Six-week aerobic-capacity block",
+      goal: "Build repeatable aerobic work while preserving strength quality.",
+      supportedFrequencies: [2, 3, 4],
+      durationWeeks: 6,
+      deloadWeek: 6,
+    },
+    {
+      id: "gymnastics_capacity_6w",
+      blockType: "gymnastics_capacity",
+      name: "Six-week gymnastics-capacity block",
+      goal: "Build measurable strict pulling, midline, and gymnastics capacity.",
+      supportedFrequencies: [2, 3, 4],
+      durationWeeks: 6,
+      deloadWeek: 6,
+    },
+    {
+      id: "bar_muscle_up_6w",
+      blockType: "gymnastics_capacity",
+      name: "Six-week bar-muscle-up block",
+      goal: "Progress strict pulling, transition strength, and bar-muscle-up skill.",
+      supportedFrequencies: [2, 3, 4],
+      durationWeeks: 6,
+      deloadWeek: 6,
+    },
+    {
+      id: "masters_open_6w",
+      blockType: "competition_preparation",
+      name: "Six-week Masters/Open preparation block",
+      goal: "Build durable strength, engine, and competition-specific capacity.",
+      supportedFrequencies: [2, 3, 4],
+      durationWeeks: 6,
+      deloadWeek: 6,
+    },
+    {
+      id: "deload_1w",
+      blockType: "deload",
+      name: "One-week deload block",
+      goal: "Reduce training stress while preserving movement quality.",
+      supportedFrequencies: [2, 3, 4],
+      durationWeeks: 6,
+      deloadWeek: 6,
+    },
+  ]);
+
+export function getV2TemplateDefinition(
+  id: string | null | undefined,
+): V2TemplateDefinition {
+  return (
+    V2_TEMPLATE_REGISTRY.find((template) => template.id === id) ??
+    V2_TEMPLATE_REGISTRY[0]!
+  );
+}
 
 export interface TemplateProgressionStep {
   weekNumber: number;

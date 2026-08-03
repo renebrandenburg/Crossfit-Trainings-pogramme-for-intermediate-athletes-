@@ -19,8 +19,19 @@ export type Weekday =
   | "saturday"
   | "sunday";
 
+export type V2ProgrammingGoal =
+  | "strength"
+  | "endurance"
+  | "gymnastics"
+  | "bar_muscle_up"
+  | "masters_open"
+  | "mixed";
+
 export interface V2GenerationPreferences {
-  preferredDays: [Weekday, Weekday];
+  preferredDays: Weekday[];
+  frequency: 2 | 3 | 4;
+  goal: V2ProgrammingGoal;
+  blockType: TrainingBlockType;
   athleteLevel: "beginner" | "intermediate" | "advanced";
   availableEquipment: string[];
   weightIncrementKg: 1 | 2 | 2.5 | 5;
@@ -349,6 +360,7 @@ export interface TrainingWeek {
   weekNumber: number;
   theme: string;
   status: "planned" | "active" | "completed";
+  plannedSessionCount?: 2 | 3 | 4;
   sessions: TrainingSession[];
 }
 
@@ -404,6 +416,8 @@ export interface TrainingBlock {
   trainingWeeks: TrainingWeek[];
   createdAt: string;
   updatedAt: string;
+  templateId?: string;
+  plannedSessionCount?: 2 | 3 | 4;
 }
 
 export interface ValidationIssue {
@@ -462,6 +476,9 @@ export interface GenerateProgramInput {
   restrictions: MovementRestrictions;
   weightIncrementKg: 1 | 2 | 2.5 | 5;
   roundingMode: "nearest" | "down" | "up";
+  goal?: V2ProgrammingGoal;
+  sessionCount?: 2 | 3 | 4;
+  templateId?: string;
 }
 
 export interface DurationEstimateInput {

@@ -609,13 +609,14 @@ export function validateTrainingWeek(
   path = `weeks.${week.weekNumber}`,
 ): ValidationResult {
   const issues: ValidationIssue[] = [];
-  if (week.sessions.length !== 2) {
+  const expectedSessionCount = week.plannedSessionCount ?? 2;
+  if (week.sessions.length !== expectedSessionCount) {
     issues.push(
       issue(
         "INVALID_WEEK_SESSION_COUNT",
         "error",
         `${path}.sessions`,
-        "A V2 training week requires exactly two app sessions.",
+        `A V2 training week requires exactly ${expectedSessionCount} app sessions.`,
       ),
     );
   }
@@ -625,7 +626,7 @@ export function validateTrainingWeek(
     );
   });
   if (
-    week.sessions.length === 2 &&
+    week.sessions.length >= 2 &&
     week.sessions.every((session) => session.stress.lowerBodyVolumeScore >= 7)
   ) {
     issues.push(

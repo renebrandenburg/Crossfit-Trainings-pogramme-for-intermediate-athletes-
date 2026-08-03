@@ -141,7 +141,7 @@ test("calendar adapter schedules all twelve V2 sessions on the athlete's two pre
   });
 });
 
-test("V2 generation preferences default safely and require a two-day tuple", () => {
+test("V2 generation preferences default safely and support explicit frequency metadata", () => {
   assert.deepEqual(
     v2.normalizeV2GenerationPreferences({
       preferredDays: ["tuesday", "tuesday", "noday"],
@@ -152,12 +152,42 @@ test("V2 generation preferences default safely and require a two-day tuple", () 
     }),
     {
       preferredDays: ["tuesday", "saturday"],
+      frequency: 2,
+      goal: "mixed",
+      blockType: "mixed_strength",
       athleteLevel: "intermediate",
       availableEquipment: ["barbell", "rower"],
       weightIncrementKg: 2.5,
       roundingMode: "nearest",
     },
   );
+});
+
+test("V2 template registry covers supported goals and frequencies", () => {
+  assert.deepEqual(
+    v2.V2_TEMPLATE_REGISTRY.map((template) => template.id),
+    [
+      "mixed_strength_6w",
+      "endurance_capacity_6w",
+      "gymnastics_capacity_6w",
+      "bar_muscle_up_6w",
+      "masters_open_6w",
+      "deload_1w",
+    ],
+  );
+  for (const frequency of [2, 3, 4]) {
+    const program = generate({
+      sessionCount: frequency,
+      templateId: "endurance_capacity_6w",
+      blockType: "aerobic_capacity",
+    });
+    assert.ok(v2.validateProgram(program).valid);
+    assert.ok(
+      program.trainingBlocks[0].trainingWeeks.every(
+        (week) => week.sessions.length === frequency,
+      ),
+    );
+  }
 });
 
 test("front squat, snatch, and clean-and-jerk steps progress and deload", () => {

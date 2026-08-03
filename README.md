@@ -29,6 +29,11 @@ A phone-first, box-aware CrossFit coach and progression tracker for intermediate
   [the V2 architecture guide](docs/programming-engine-v2.md).
 - Local-first storage in the browser with JSON backup/restore, workout-log and PR-history CSV exports, a PWA manifest, and an offline cache.
 
+New programmes use V2 only, with deterministic 2-, 3-, or 4-session templates
+for mixed strength, endurance, gymnastics, Masters/Open preparation, and
+deloads. Existing V1 plans remain readable and can be explicitly migrated or
+rolled back without inventing structured prescriptions from legacy free text.
+
 The primary navigation is **Today**, **Calendar**, **Log**, **Progress**, and
 **More**. Programme building, the movement library, Competition Proof, profile,
 theme, data ownership, and account synchronization live under More so the daily

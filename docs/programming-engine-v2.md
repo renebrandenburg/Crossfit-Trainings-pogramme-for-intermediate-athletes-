@@ -26,7 +26,7 @@ Programme
 └── Training block
     ├── Progression tracks and immutable steps
     └── Six training weeks
-        └── Two sessions
+        └── Two, three, or four sessions
             ├── Warm-up
             ├── Primary progression
             ├── Secondary progression
@@ -79,6 +79,20 @@ movement-family restrictions are applied before materialization.
 The engine validates the exact final graph after all sections are assembled.
 Invalid graphs are neither returned by the persistence gate nor rendered by the
 V2 React panel.
+
+## New-programme policy and compatibility
+
+V2 is now the only generator for newly created programmes. The template registry
+selects frequency and goal-specific deterministic blocks (mixed strength,
+endurance, gymnastics/bar muscle-up, Masters/Open, and deload metadata) without
+moving business logic into React. V1 generation is retired, but existing V1
+plans remain read-only compatible, including their logs, calendar events,
+feedback, and free-text sessions. Athletes can create a validated V2 replacement
+from the Builder and roll back to the original V1 plan during rollout. Ambiguous
+V1 text is never invented as structured V2 exercise data.
+
+V2 appears in Today and Calendar as well as Builder. Debug information reports
+the active engine, template, migration status, and V1 compatibility mode.
 
 ## Regeneration and completion
 
@@ -197,13 +211,10 @@ V1 rather than breaking account hydration.
 
 ## Known limitations and next improvements
 
-- Only the six-week mixed-strength template is enabled; the other declared block
-  types need reviewed templates before exposure.
+- Goal-specific templates currently share the validated six-week materialization
+  fallback while their movement-specific variations are reviewed incrementally.
 - Controlled AI warm-up/conditioning/cue adapters are not enabled. Deterministic
   fallbacks are used exclusively in V2's first rollout.
-- V2 lives in the Builder during the allowlist rollout; dedicated Today and
-  Calendar projections can follow after the completion model has production
-  feedback.
 - Actual-duration discrepancies are stored but not yet used to tune coefficients.
 - Community workouts remain unknown by design; the engine provides placement
   advice and fatigue warnings rather than predicting affiliate programming.

@@ -10,6 +10,9 @@ import type {
 
 export const DEFAULT_V2_GENERATION_PREFERENCES: V2GenerationPreferences = {
   preferredDays: ["tuesday", "saturday"],
+  frequency: 2,
+  goal: "mixed",
+  blockType: "mixed_strength",
   athleteLevel: "intermediate",
   availableEquipment: [
     "barbell",
@@ -63,19 +66,23 @@ const FAMILY_STIMULI: Partial<Record<MovementFamilyId, TrainingStimulus[]>> = {
   burpee: ["horizontal_push"],
 };
 
-function normalizedPreferredDays(value: unknown): [Weekday, Weekday] {
+function normalizedPreferredDays(
+  value: unknown,
+  frequency: 2 | 3 | 4,
+): Weekday[] {
   const requested = Array.isArray(value)
     ? [...new Set(value.map(String))].filter((day): day is Weekday =>
         WEEKDAYS.includes(day as Weekday),
       )
     : [];
-  if (requested.length !== 2) {
-    return [...DEFAULT_V2_GENERATION_PREFERENCES.preferredDays];
+  if (requested.length !== frequency) {
+    const defaults = DEFAULT_V2_GENERATION_PREFERENCES.preferredDays;
+    return frequency === 2 ? [...defaults] : WEEKDAYS.slice(0, frequency);
   }
   requested.sort(
     (left, right) => WEEKDAYS.indexOf(left) - WEEKDAYS.indexOf(right),
   );
-  return requested as [Weekday, Weekday];
+  return requested;
 }
 
 export function normalizeV2GenerationPreferences(
@@ -95,11 +102,48 @@ export function normalizeV2GenerationPreferences(
   )
     ? (value?.roundingMode as V2GenerationPreferences["roundingMode"])
     : DEFAULT_V2_GENERATION_PREFERENCES.roundingMode;
+  const requestedFrequency = Number(value?.frequency);
+  const frequency = [2, 3, 4].includes(requestedFrequency)
+    ? (requestedFrequency as V2GenerationPreferences["frequency"])
+    : Array.isArray(value?.preferredDays) &&
+        [3, 4].includes(
+          new Set(value.preferredDays.map(String).filter((day) => WEEKDAYS.includes(day as Weekday))).size,
+        )
+      ? (new Set(value.preferredDays.map(String).filter((day) => WEEKDAYS.includes(day as Weekday))).size as V2GenerationPreferences["frequency"])
+      : DEFAULT_V2_GENERATION_PREFERENCES.frequency;
+  const goal = [
+    "strength",
+    "endurance",
+    "gymnastics",
+    "bar_muscle_up",
+    "masters_open",
+    "mixed",
+  ].includes(String(value?.goal))
+    ? (value?.goal as V2GenerationPreferences["goal"])
+    : DEFAULT_V2_GENERATION_PREFERENCES.goal;
+  const blockTypes = [
+    "mixed_strength",
+    "front_squat_accumulation",
+    "back_squat_strength",
+    "olympic_lifting_development",
+    "snatch_development",
+    "clean_and_jerk_development",
+    "gymnastics_capacity",
+    "aerobic_capacity",
+    "competition_preparation",
+    "deload",
+  ];
+  const blockType = blockTypes.includes(String(value?.blockType))
+    ? (value?.blockType as V2GenerationPreferences["blockType"])
+    : DEFAULT_V2_GENERATION_PREFERENCES.blockType;
   const availableEquipment = Array.isArray(value?.availableEquipment)
     ? [...new Set(value.availableEquipment.map(String).filter(Boolean))]
     : [...DEFAULT_V2_GENERATION_PREFERENCES.availableEquipment];
   return {
-    preferredDays: normalizedPreferredDays(value?.preferredDays),
+    preferredDays: normalizedPreferredDays(value?.preferredDays, frequency),
+    frequency,
+    goal,
+    blockType,
     athleteLevel,
     availableEquipment,
     weightIncrementKg,
@@ -154,7 +198,8 @@ export function adaptV2ProgramToCalendarSessions(
   return flattenV2ProgramSessions(program).map((session) => {
     const preferredDay =
       normalized.preferredDays[Math.max(0, session.sessionNumber - 1)] ??
-      normalized.preferredDays[0];
+      normalized.preferredDays[0] ??
+      "monday";
     return {
       id: session.id,
       engineVersion: "v2",

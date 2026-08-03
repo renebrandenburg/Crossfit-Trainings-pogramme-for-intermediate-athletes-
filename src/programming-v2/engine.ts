@@ -9,6 +9,7 @@ import {
 import {
   MIXED_STRENGTH_TEMPLATE,
   TRACK_ORDER,
+  getV2TemplateDefinition,
   type MixedStrengthWeekTemplate,
   type TemplateProgressionStep,
 } from "./template";
@@ -1148,37 +1149,103 @@ function createSession(
   return adjustSessionToDuration(base);
 }
 
+function createSupplementalSession(
+  base: TrainingSession,
+  trainingWeekId: string,
+  sessionNumber: number,
+): TrainingSession {
+  const sessionId = stableUuid(trainingWeekId, "session", sessionNumber);
+  return {
+    ...base,
+    id: sessionId,
+    trainingWeekId,
+    sessionNumber,
+    objective:
+      sessionNumber === 3
+        ? "Engine capacity and accessory strength"
+        : "Gymnastics capacity and aerobic quality",
+    intendedStimulus:
+      sessionNumber === 3
+        ? "Moderate mixed-modal conditioning with repeatable accessory strength."
+        : "Measurable gymnastics volume followed by controlled aerobic work.",
+    expectedFatigue: "moderate",
+    fatigueFocus: sessionNumber === 3 ? "mixed" : "upper_body",
+    trackAssignments: [],
+    provisional: true,
+    status: "planned",
+    revision: 1,
+    feedback: null,
+    warmup: {
+      ...base.warmup,
+      id: stableUuid(sessionId, "warmup"),
+      sessionId,
+    },
+    exercises: base.exercises.map((exercise, index) => ({
+      ...exercise,
+      id: stableUuid(sessionId, "exercise", index),
+      sessionId,
+    })),
+    conditioning: base.conditioning
+      ? {
+          ...base.conditioning,
+          id: stableUuid(sessionId, "conditioning"),
+          sessionId,
+        }
+      : null,
+    sections: base.sections.map((section) => ({
+      ...section,
+      id: stableUuid(sessionId, "section", section.order),
+      sessionId,
+    })),
+    equipmentTransitions: base.equipmentTransitions.map((transition) => ({
+      ...transition,
+    })),
+  };
+}
+
 export function generateMixedStrengthBlock(
   input: GenerateProgramInput,
 ): ProgramV2 {
-  if (input.blockType && input.blockType !== "mixed_strength") {
-    throw new Error(`UNSUPPORTED_BLOCK_TYPE: ${input.blockType}`);
-  }
   if (!input.programId || !input.generatedAt) {
     throw new Error("programId and generatedAt are required.");
   }
-  const blockId = stableUuid(input.programId, "mixed-strength-block");
+  const template = getV2TemplateDefinition(input.templateId);
+  const sessionCount = input.sessionCount ?? 2;
+  const blockId = stableUuid(input.programId, template.id);
   const tracks = trackMapForBlock(blockId, input.generatedAt);
   const weeks: TrainingWeek[] = MIXED_STRENGTH_TEMPLATE.map((weekTemplate) => {
     const trainingWeekId = stableUuid(blockId, "week", weekTemplate.weekNumber);
+    const coreSessions = [
+      createSession(input, trainingWeekId, weekTemplate, 1, tracks),
+      createSession(input, trainingWeekId, weekTemplate, 2, tracks),
+    ];
+    const sessions = Array.from({ length: sessionCount }, (_, index) =>
+      index < 2
+        ? coreSessions[index]!
+        : createSupplementalSession(
+            coreSessions[index % 2]!,
+            trainingWeekId,
+            index + 1,
+          ),
+    ).filter((session): session is TrainingSession => Boolean(session));
     return {
       id: trainingWeekId,
       trainingBlockId: blockId,
       weekNumber: weekTemplate.weekNumber,
       theme: weekTemplate.theme,
       status: weekTemplate.weekNumber === 1 ? "active" : "planned",
-      sessions: [
-        createSession(input, trainingWeekId, weekTemplate, 1, tracks),
-        createSession(input, trainingWeekId, weekTemplate, 2, tracks),
-      ],
+      plannedSessionCount: sessionCount,
+      sessions,
     };
   });
   const block: TrainingBlock = {
     id: blockId,
     programId: input.programId,
-    blockType: "mixed_strength",
-    name: "Six-week mixed-strength block",
-    goal: "Progress front-squat strength, snatch technique, clean-and-jerk skill, strict gymnastics, and engine work across two weekly sessions.",
+    blockType: input.blockType ?? template.blockType,
+    templateId: template.id,
+    plannedSessionCount: sessionCount,
+    name: template.name,
+    goal: template.goal,
     durationWeeks: 6,
     currentWeek: 1,
     status: "active",
@@ -1198,7 +1265,7 @@ export function generateMixedStrengthBlock(
     validatorVersion: VALIDATOR_VERSION,
     id: input.programId,
     ownerId: input.ownerId,
-    name: "Six-week mixed-strength programme",
+    name: template.name,
     status: "active",
     activeTrainingBlockId: blockId,
     trainingBlocks: [block],
@@ -1212,6 +1279,10 @@ export function generateMixedStrengthBlock(
   };
   const validation = validateProgram(draft);
   return assertValidProgram({ ...draft, validation });
+}
+
+export function generateV2Program(input: GenerateProgramInput): ProgramV2 {
+  return generateMixedStrengthBlock(input);
 }
 
 export function findSession(

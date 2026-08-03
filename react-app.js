@@ -171,6 +171,7 @@
    * @property {Object<string, number>} v2ProgramRevisions
    * @property {"v1"|"v2"} activeProgrammingEngine
    * @property {any} v2GenerationPreferences
+   * @property {any} v1Migration
    * @property {any} movementRestrictions
    */
 
@@ -292,10 +293,20 @@
       activeV2ProgramId: null,
       v2ProgramRevisions: {},
       activeProgrammingEngine: /** @type {"v1"|"v2"} */ ("v1"),
+      v1Migration: {
+        status: "not_started",
+        sourcePlanId: null,
+        migratedProgramId: null,
+        rollbackAvailable: false,
+        updatedAt: null,
+      },
       v2GenerationPreferences: v2Api?.normalizeV2GenerationPreferences?.(
         null,
       ) || {
         preferredDays: ["tuesday", "saturday"],
+        frequency: 2,
+        goal: "mixed",
+        blockType: "mixed_strength",
         athleteLevel: "intermediate",
         availableEquipment: [
           "barbell",
@@ -397,6 +408,26 @@
           ? source.v2ProgramRevisions
           : {},
       activeProgrammingEngine,
+      v1Migration: {
+        status: ["not_started", "offered", "migrated", "rolled_back"].includes(
+          source.v1Migration?.status,
+        )
+          ? source.v1Migration.status
+          : "not_started",
+        sourcePlanId:
+          typeof source.v1Migration?.sourcePlanId === "string"
+            ? source.v1Migration.sourcePlanId
+            : null,
+        migratedProgramId:
+          typeof source.v1Migration?.migratedProgramId === "string"
+            ? source.v1Migration.migratedProgramId
+            : null,
+        rollbackAvailable: Boolean(source.v1Migration?.rollbackAvailable),
+        updatedAt:
+          typeof source.v1Migration?.updatedAt === "string"
+            ? source.v1Migration.updatedAt
+            : null,
+      },
       v2GenerationPreferences:
         v2Api?.normalizeV2GenerationPreferences?.(
           source.v2GenerationPreferences,
@@ -439,6 +470,7 @@
       activeV2ProgramId: state.activeV2ProgramId || null,
       v2ProgramRevisions: state.v2ProgramRevisions || {},
       activeProgrammingEngine: state.activeProgrammingEngine || "v1",
+      v1Migration: state.v1Migration || defaultAthleteState().v1Migration,
       v2GenerationPreferences:
         v2Api?.normalizeV2GenerationPreferences?.(
           state.v2GenerationPreferences,
@@ -464,6 +496,7 @@
       previous.activeV2ProgramId !== next.activeV2ProgramId ||
       previous.v2ProgramRevisions !== next.v2ProgramRevisions ||
       previous.activeProgrammingEngine !== next.activeProgrammingEngine ||
+      previous.v1Migration !== next.v1Migration ||
       previous.v2GenerationPreferences !== next.v2GenerationPreferences ||
       previous.movementRestrictions !== next.movementRestrictions ||
       previous.updatedAt !== next.updatedAt ||
@@ -1838,8 +1871,11 @@
       const preferredDays = Array.isArray(rawPreferences?.preferredDays)
         ? [...new Set(rawPreferences.preferredDays.map(String))]
         : [];
-      if (preferredDays.length !== 2) {
-        notify("Select exactly two different app training days.");
+      const requestedFrequency = [2, 3, 4].includes(Number(rawPreferences?.frequency))
+        ? Number(rawPreferences.frequency)
+        : 2;
+      if (preferredDays.length !== requestedFrequency) {
+        notify(`Select exactly ${requestedFrequency} different app training days.`);
         return;
       }
       const preferences =
@@ -1857,11 +1893,24 @@
           ? window.crypto.randomUUID()
           : v2Api.stableUuid(createId(), now, "program-v2");
       try {
-        const program = v2Api.generateMixedStrengthBlock({
+        const templateByGoal = {
+          strength: "mixed_strength_6w",
+          endurance: "endurance_capacity_6w",
+          gymnastics: "gymnastics_capacity_6w",
+          bar_muscle_up: "bar_muscle_up_6w",
+          masters_open: "masters_open_6w",
+          mixed: "mixed_strength_6w",
+        };
+        const templateId = templateByGoal[preferences.goal] || "mixed_strength_6w";
+        const generator = v2Api.generateV2Program || v2Api.generateMixedStrengthBlock;
+        const program = generator({
           programId,
           ownerId: remoteUser ? String(remoteUser.id || "") : null,
           generatedAt: now,
-          blockType: "mixed_strength",
+          blockType: preferences.blockType,
+          goal: preferences.goal,
+          sessionCount: preferences.frequency,
+          templateId,
           seed: createGenerationSeed(),
           athleteLevel: preferences.athleteLevel,
           maxes: {
@@ -1917,13 +1966,70 @@
         } catch {
           // The validated local mirror remains available for an explicit retry.
         }
-        notify("Generated a connected six-week, two-session V2 block.");
+        notify(`Generated a connected six-week, ${preferences.frequency}-session V2 block.`);
+        return program;
       } catch (error) {
         console.error("V2 programme generation was rejected.", error);
         notify(
           "V2 generation could not satisfy equipment, restriction, duration, and validation rules. No programme was replaced.",
         );
+        return null;
       }
+    }
+
+    async function handleMigrateV1Programme(plan) {
+      if (!plan || !window.confirm("Create a new V2 programme and keep this V1 plan as a read-only rollback copy?")) return;
+      const options = plan.generatorOptions || {};
+      const frequency = [2, 3, 4].includes(Number(options.programDaysPerWeek))
+        ? Number(options.programDaysPerWeek)
+        : 2;
+      const goalText = `${options.primaryGoal || ""} ${options.secondaryGoal || ""}`.toLowerCase();
+      const goal = goalText.includes("muscle")
+        ? "bar_muscle_up"
+        : goalText.includes("gymnast")
+          ? "gymnastics"
+          : goalText.includes("endurance") || goalText.includes("running")
+            ? "endurance"
+            : goalText.includes("master") || goalText.includes("open")
+              ? "masters_open"
+              : goalText.includes("strength")
+                ? "strength"
+                : "mixed";
+      const preferredDays = Array.isArray(options.preferredProgramDays) && options.preferredProgramDays.length
+        ? options.preferredProgramDays
+        : (appStateRef.current.v2GenerationPreferences?.preferredDays || ["tuesday", "saturday"]);
+      const generated = await handleGenerateV2Programme({
+        preferences: {
+          ...appStateRef.current.v2GenerationPreferences,
+          frequency,
+          goal,
+          preferredDays,
+        },
+      });
+      if (!generated) return;
+      updateAppState((current) => ({
+        ...current,
+        v1Migration: {
+          status: "migrated",
+          sourcePlanId: plan.id,
+          migratedProgramId: generated.id,
+          rollbackAvailable: true,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
+      notify("V2 programme created. The original V1 programme remains available for rollback.");
+    }
+
+    function handleRollbackV1Programme() {
+      const migration = appStateRef.current.v1Migration;
+      if (!migration?.rollbackAvailable || !migration.sourcePlanId) return;
+      updateAppState((current) => ({
+        ...current,
+        activePlanId: migration.sourcePlanId,
+        activeProgrammingEngine: "v1",
+        v1Migration: { ...migration, status: "rolled_back", updatedAt: new Date().toISOString() },
+      }));
+      notify("Rolled back to the original V1 programme. Nothing was deleted.");
     }
 
     async function handleRegenerateV2Session(sessionId, scope) {
@@ -2776,6 +2882,8 @@
                 onTimerFinish: finishTimerToLog,
                 v2FeatureFlag,
                 onGenerateV2: handleGenerateV2Programme,
+                onMigrateV1: handleMigrateV1Programme,
+                onRollbackV1: handleRollbackV1Programme,
                 onRegenerateV2: handleRegenerateV2Session,
                 onCompleteV2: handleCompleteV2Session,
               })
@@ -3570,6 +3678,7 @@
           activeV2ProgramId: appState.activeV2ProgramId || null,
           v2ProgramRevisions: appState.v2ProgramRevisions || {},
           activeProgrammingEngine: appState.activeProgrammingEngine || "v1",
+          v1Migration: appState.v1Migration || defaultAthleteState().v1Migration,
           v2GenerationPreferences:
             v2Api?.normalizeV2GenerationPreferences?.(
               appState.v2GenerationPreferences,
@@ -3754,7 +3863,7 @@
           h(
             "p",
             { className: "muted-copy", "data-testid": "v2-debug-version" },
-            `Programming engine: ${appState.activeProgrammingEngine || "v1"}; flag ${v2Api?.PROGRAMMING_ENGINE_V2_FEATURE_FLAG || "unavailable"} (${appState.v2FeatureFlag?.source || "disabled"}); template ${v2Api?.TEMPLATE_VERSION || "unavailable"}; catalog ${v2Api?.CATALOG_VERSION || "unavailable"}; validator ${v2Api?.VALIDATOR_VERSION || "unavailable"}.`,
+            `Active engine: ${appState.activeProgrammingEngine || "v1"}; template ${appState.v2Programs?.find((item) => item.id === appState.activeV2ProgramId)?.trainingBlocks?.[0]?.templateId || "legacy-v1"}; migration ${appState.v1Migration?.status || "not_started"}; V1 compatibility ${appState.activeProgrammingEngine === "v1" ? "on" : "available"}; flag ${v2Api?.PROGRAMMING_ENGINE_V2_FEATURE_FLAG || "unavailable"} (${appState.v2FeatureFlag?.source || "disabled"}); validator ${v2Api?.VALIDATOR_VERSION || "unavailable"}.`,
           ),
         ),
         accountSyncPanel,
@@ -7234,6 +7343,9 @@
             onGenerate({
               preferences: {
                 preferredDays: data.getAll("v2PreferredDay").map(String),
+                frequency: Number(data.get("v2Frequency") || 2),
+                goal: String(data.get("v2Goal") || "mixed"),
+                blockType: String(data.get("v2BlockType") || "mixed_strength"),
                 athleteLevel: String(
                   data.get("v2AthleteLevel") || "intermediate",
                 ),
@@ -7267,7 +7379,7 @@
         h(
           "fieldset",
           null,
-          h("legend", null, "Preferred app days — select two"),
+          h("legend", null, `Preferred app days — select ${normalizedPreferences.frequency}`),
           DAY_OF_WEEK_OPTIONS.map((day) =>
             h(
               "label",
@@ -7281,6 +7393,47 @@
               }),
               day[0].toUpperCase() + day.slice(1),
             ),
+          ),
+        ),
+        h(
+          "label",
+          null,
+          "Weekly app sessions",
+          h(
+            "select",
+            { name: "v2Frequency", defaultValue: String(normalizedPreferences.frequency) },
+            h("option", { value: "2" }, "2 sessions"),
+            h("option", { value: "3" }, "3 sessions"),
+            h("option", { value: "4" }, "4 sessions"),
+          ),
+        ),
+        h(
+          "label",
+          null,
+          "Programming goal",
+          h(
+            "select",
+            { name: "v2Goal", defaultValue: normalizedPreferences.goal },
+            h("option", { value: "mixed" }, "Mixed strength"),
+            h("option", { value: "strength" }, "Strength"),
+            h("option", { value: "endurance" }, "Endurance / aerobic capacity"),
+            h("option", { value: "gymnastics" }, "Gymnastics capacity"),
+            h("option", { value: "bar_muscle_up" }, "Bar muscle-up progression"),
+            h("option", { value: "masters_open" }, "Masters / Open preparation"),
+          ),
+        ),
+        h(
+          "label",
+          null,
+          "Training block",
+          h(
+            "select",
+            { name: "v2BlockType", defaultValue: normalizedPreferences.blockType },
+            h("option", { value: "mixed_strength" }, "Mixed strength"),
+            h("option", { value: "aerobic_capacity" }, "Aerobic capacity"),
+            h("option", { value: "gymnastics_capacity" }, "Gymnastics capacity"),
+            h("option", { value: "competition_preparation" }, "Competition preparation"),
+            h("option", { value: "deload" }, "Deload"),
           ),
         ),
         h(
@@ -7948,6 +8101,8 @@
     onTimerFinish,
     v2FeatureFlag,
     onGenerateV2,
+    onMigrateV1,
+    onRollbackV1,
     onRegenerateV2,
     onCompleteV2,
   }) {
@@ -8050,20 +8205,54 @@
         "details",
         {
           className: "legacy-generator",
-          open: appState.activeProgrammingEngine !== "v2",
+          open: false,
         },
-        h("summary", null, "Legacy V1 generator"),
-        h(GeneratorForm, {
-          key: activePlan?.id || "new-generated-plan",
-          profile: appState.profile,
-          onGenerate,
-          regenerating: activePlan?.kind === "generated",
-          initialOptions:
-            activePlan?.kind === "generated"
-              ? activePlan.generatorOptions
-              : null,
-          onNotify,
-        }),
+        h("summary", null, "V1 compatibility (read-only)"),
+        h(
+          "p",
+          null,
+          "V1 generation is retired for new programmes. Existing V1 plans, logs, calendar events, and feedback remain readable here.",
+        ),
+        activePlan
+          ? h(
+              "button",
+              { type: "button", className: "primary-button", onClick: () => onMigrateV1(activePlan) },
+              "Create V2 replacement",
+            )
+          : null,
+        appState.v1Migration?.rollbackAvailable
+          ? h(
+              "button",
+              { type: "button", className: "ghost-button", onClick: onRollbackV1 },
+              "Rollback to original V1 programme",
+            )
+          : null,
+        activePlan
+          ? h(
+              ReactRuntime.Fragment,
+              null,
+              h(
+                "p",
+                { className: "muted" },
+                `Legacy plan: ${activePlan.title || "saved V1 programme"}. Editing and regeneration remain available for compatibility; new programmes use V2.`,
+              ),
+              h(GeneratorForm, {
+                key: activePlan.id,
+                profile: appState.profile,
+                onGenerate,
+                regenerating: activePlan.kind === "generated",
+                initialOptions:
+                  activePlan.kind === "generated"
+                    ? activePlan.generatorOptions
+                    : null,
+                onNotify,
+              }),
+            )
+          : h(
+              "p",
+              { className: "muted" },
+              "Create a new validated V2 programme from the Programme setup above.",
+            ),
       ),
       appState.plans.length && appState.activeProgrammingEngine !== "v2"
         ? h(

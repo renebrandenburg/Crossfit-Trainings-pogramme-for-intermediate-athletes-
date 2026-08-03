@@ -276,9 +276,43 @@
       (left, right) => weekdays.indexOf(left) - weekdays.indexOf(right),
     );
     const increment = Number(source.weightIncrementKg);
+    const frequency = [2, 3, 4].includes(Number(source.frequency))
+      ? Number(source.frequency)
+      : [3, 4].includes(requestedDays.length)
+        ? requestedDays.length
+        : 2;
+    const goals = [
+      "strength",
+      "endurance",
+      "gymnastics",
+      "bar_muscle_up",
+      "masters_open",
+      "mixed",
+    ];
+    const blockTypes = [
+      "mixed_strength",
+      "front_squat_accumulation",
+      "back_squat_strength",
+      "olympic_lifting_development",
+      "snatch_development",
+      "clean_and_jerk_development",
+      "gymnastics_capacity",
+      "aerobic_capacity",
+      "competition_preparation",
+      "deload",
+    ];
     return {
       preferredDays:
-        requestedDays.length === 2 ? requestedDays : ["tuesday", "saturday"],
+        requestedDays.length === frequency
+          ? requestedDays
+          : (frequency === 2
+              ? ["tuesday", "saturday"]
+              : ["monday", "tuesday", "wednesday", "thursday"].slice(0, frequency)),
+      frequency,
+      goal: goals.includes(source.goal) ? source.goal : "mixed",
+      blockType: blockTypes.includes(source.blockType)
+        ? source.blockType
+        : "mixed_strength",
       athleteLevel: ["beginner", "intermediate", "advanced"].includes(
         source.athleteLevel,
       )
@@ -370,6 +404,18 @@
         : typeof state.activeV2ProgramId === "string"
           ? "v2"
           : "v1",
+      v1Migration:
+        state.v1Migration && typeof state.v1Migration === "object"
+          ? {
+              status: ["not_started", "offered", "migrated", "rolled_back"].includes(state.v1Migration.status)
+                ? state.v1Migration.status
+                : "not_started",
+              sourcePlanId: typeof state.v1Migration.sourcePlanId === "string" ? state.v1Migration.sourcePlanId : null,
+              migratedProgramId: typeof state.v1Migration.migratedProgramId === "string" ? state.v1Migration.migratedProgramId : null,
+              rollbackAvailable: Boolean(state.v1Migration.rollbackAvailable),
+              updatedAt: typeof state.v1Migration.updatedAt === "string" ? state.v1Migration.updatedAt : null,
+            }
+          : { status: "not_started", sourcePlanId: null, migratedProgramId: null, rollbackAvailable: false, updatedAt: null },
       v2GenerationPreferences: normalizeV2GenerationPreferences(
         state.v2GenerationPreferences,
       ),
