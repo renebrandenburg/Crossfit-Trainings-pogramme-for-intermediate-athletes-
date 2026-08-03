@@ -169,6 +169,8 @@
    * @property {any[]} v2Programs
    * @property {string|null} activeV2ProgramId
    * @property {Object<string, number>} v2ProgramRevisions
+   * @property {"v1"|"v2"} activeProgrammingEngine
+   * @property {any} v2GenerationPreferences
    * @property {any} movementRestrictions
    */
 
@@ -176,7 +178,7 @@
   function fallbackState() {
     const guestAthleteState = defaultAthleteState();
     return {
-      schemaVersion: 6,
+      schemaVersion: 7,
       planSchemaVersion: PLAN_SCHEMA_VERSION,
       ...guestAthleteState,
       athleteStateByOwner: {
@@ -289,6 +291,29 @@
       v2Programs: [],
       activeV2ProgramId: null,
       v2ProgramRevisions: {},
+      activeProgrammingEngine: /** @type {"v1"|"v2"} */ ("v1"),
+      v2GenerationPreferences: v2Api?.normalizeV2GenerationPreferences?.(
+        null,
+      ) || {
+        preferredDays: ["tuesday", "saturday"],
+        athleteLevel: "intermediate",
+        availableEquipment: [
+          "barbell",
+          "rack",
+          "pull-up bar",
+          "dumbbell",
+          "kettlebell",
+          "box",
+          "rings",
+          "rower",
+          "bike",
+          "ski erg",
+          "band",
+          "PVC",
+        ],
+        weightIncrementKg: 2.5,
+        roundingMode: "nearest",
+      },
       movementRestrictions: {
         movementIds: [],
         movementFamilyIds: [],
@@ -332,6 +357,30 @@
     const selection = activePlan
       ? resolvePlanTransition(activePlan, normalized.selectedWeek)
       : { selectedWeek: normalized.selectedWeek };
+    const v2Programs = Array.isArray(source.v2Programs)
+      ? source.v2Programs.filter(
+          (program) =>
+            program &&
+            typeof program === "object" &&
+            program.engineVersion === "v2",
+        )
+      : [];
+    const requestedV2Id =
+      typeof source.activeV2ProgramId === "string"
+        ? source.activeV2ProgramId
+        : null;
+    const activeV2ProgramId = v2Programs.some(
+      (program) => program.id === requestedV2Id,
+    )
+      ? requestedV2Id
+      : null;
+    const activeProgrammingEngine = ["v1", "v2"].includes(
+      source.activeProgrammingEngine,
+    )
+      ? source.activeProgrammingEngine
+      : activeV2ProgramId
+        ? "v2"
+        : "v1";
     return {
       profile: normalized.profile,
       plans: normalized.plans,
@@ -339,24 +388,19 @@
       selectedWeek: selection.selectedWeek,
       cycleStartDate: normalized.cycleStartDate,
       planSchemaVersion: PLAN_SCHEMA_VERSION,
-      v2Programs: Array.isArray(source.v2Programs)
-        ? source.v2Programs.filter(
-            (program) =>
-              program &&
-              typeof program === "object" &&
-              program.engineVersion === "v2",
-          )
-        : [],
-      activeV2ProgramId:
-        typeof source.activeV2ProgramId === "string"
-          ? source.activeV2ProgramId
-          : null,
+      v2Programs,
+      activeV2ProgramId,
       v2ProgramRevisions:
         source.v2ProgramRevisions &&
         typeof source.v2ProgramRevisions === "object" &&
         !Array.isArray(source.v2ProgramRevisions)
           ? source.v2ProgramRevisions
           : {},
+      activeProgrammingEngine,
+      v2GenerationPreferences:
+        v2Api?.normalizeV2GenerationPreferences?.(
+          source.v2GenerationPreferences,
+        ) || fallback.v2GenerationPreferences,
       movementRestrictions: {
         movementIds: Array.isArray(source.movementRestrictions?.movementIds)
           ? source.movementRestrictions.movementIds.map(String)
@@ -394,6 +438,11 @@
       v2Programs: state.v2Programs || [],
       activeV2ProgramId: state.activeV2ProgramId || null,
       v2ProgramRevisions: state.v2ProgramRevisions || {},
+      activeProgrammingEngine: state.activeProgrammingEngine || "v1",
+      v2GenerationPreferences:
+        v2Api?.normalizeV2GenerationPreferences?.(
+          state.v2GenerationPreferences,
+        ) || defaultAthleteState().v2GenerationPreferences,
       movementRestrictions: state.movementRestrictions || {
         movementIds: [],
         movementFamilyIds: [],
@@ -414,6 +463,8 @@
       previous.v2Programs !== next.v2Programs ||
       previous.activeV2ProgramId !== next.activeV2ProgramId ||
       previous.v2ProgramRevisions !== next.v2ProgramRevisions ||
+      previous.activeProgrammingEngine !== next.activeProgrammingEngine ||
+      previous.v2GenerationPreferences !== next.v2GenerationPreferences ||
       previous.movementRestrictions !== next.movementRestrictions ||
       previous.updatedAt !== next.updatedAt ||
       previous.activeScoreOwner !== next.activeScoreOwner
@@ -428,7 +479,7 @@
     );
     return {
       ...state,
-      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 6),
+      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 7),
       athleteStateByOwner: {
         ...(state.athleteStateByOwner || {}),
         [ownerId]: athleteState,
@@ -480,11 +531,25 @@
           : Number(remoteState?.v2ProgramRevisions?.[program.id]) || 0,
       ]),
     );
+    const localStateTime = Date.parse(String(localState?.updatedAt || ""));
+    const remoteStateTime = Date.parse(String(remoteState?.updatedAt || ""));
+    const localStateWins =
+      Number.isFinite(localStateTime) &&
+      (!Number.isFinite(remoteStateTime) || localStateTime > remoteStateTime);
+    const activeProgrammingEngine = localStateWins
+      ? localState?.activeProgrammingEngine
+      : remoteState?.activeProgrammingEngine;
     return {
       ...remoteState,
       v2Programs,
       activeV2ProgramId,
       v2ProgramRevisions,
+      activeProgrammingEngine:
+        activeProgrammingEngine === "v2" && activeV2ProgramId ? "v2" : "v1",
+      v2GenerationPreferences: localStateWins
+        ? localState?.v2GenerationPreferences
+        : remoteState?.v2GenerationPreferences,
+      updatedAt: localStateWins ? localState.updatedAt : remoteState.updatedAt,
     };
   }
 
@@ -533,7 +598,7 @@
     }
     return {
       ...state,
-      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 6),
+      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 7),
       athleteStateByOwner,
     };
   }
@@ -639,7 +704,7 @@
 
     const next = {
       ...state,
-      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 6),
+      schemaVersion: Math.max(Number(state.schemaVersion) || 0, 7),
       scoreDataByOwner,
       activeScoreOwner,
     };
@@ -838,14 +903,45 @@
     }
   }
 
-  function weekOptions() {
-    return WEEK_META.map((week) =>
+  function weekOptions(maxWeeks = 8) {
+    return WEEK_META.filter((week) => week.week <= maxWeeks).map((week) =>
       h(
         "option",
         { key: week.week, value: String(week.week) },
         `Week ${week.week}`,
       ),
     );
+  }
+
+  function selectActiveV2Program(state) {
+    if (state?.activeProgrammingEngine !== "v2") return null;
+    return (state.v2Programs || []).find(
+      (program) => program.id === state.activeV2ProgramId,
+    );
+  }
+
+  function selectActiveProgrammingSessions(state) {
+    const v2Program = selectActiveV2Program(state);
+    if (v2Program && v2Api?.adaptV2ProgramToCalendarSessions) {
+      return {
+        engine: "v2",
+        program: v2Program,
+        sessions: v2Api.adaptV2ProgramToCalendarSessions(
+          v2Program,
+          state.v2GenerationPreferences,
+        ),
+        maxWeeks: 6,
+      };
+    }
+    const activePlan = selectActivePlan(state);
+    return {
+      engine: "v1",
+      program: activePlan,
+      sessions: activePlan
+        ? activePlan.sessions.map(customPlanToSession)
+        : builtInCycleSessions(state.profile),
+      maxWeeks: 8,
+    };
   }
 
   function viewClass(viewId, activeView) {
@@ -1024,7 +1120,7 @@
       const candidate =
         typeof updater === "function" ? updater(current) : updater;
       const next = athleteStateChanged(current, candidate)
-        ? withActiveAthleteState(candidate)
+        ? withActiveAthleteState(candidate, new Date().toISOString())
         : candidate;
       try {
         validateGeneratedPlansForPersistence(next.plans);
@@ -1521,6 +1617,8 @@
       appState.v2Programs,
       appState.activeV2ProgramId,
       appState.v2ProgramRevisions,
+      appState.activeProgrammingEngine,
+      appState.v2GenerationPreferences,
       appState.movementRestrictions,
       appState.profile,
       appState.selectedWeek,
@@ -1638,6 +1736,7 @@
               )
             : [nextPlan, ...current.plans],
         activePlanId: planId,
+        activeProgrammingEngine: "v1",
         selectedWeek: frequencyChanged ? current.selectedWeek : 1,
       }));
       const selectionWeek = frequencyChanged ? appState.selectedWeek : 1;
@@ -1657,30 +1756,11 @@
       );
     }
 
-    function v2AvailableEquipment() {
-      const activePlan = selectActivePlan(appStateRef.current);
-      const selected = activePlan?.generatorOptions
-        ? normalizeGeneratorOptions(activePlan.generatorOptions)
-            .availableEquipment
-        : Object.keys(EQUIPMENT_OPTIONS);
-      const mapping = {
-        barbell: "barbell",
-        rack: "rack",
-        pullupBar: "pull-up bar",
-        dumbbells: "dumbbell",
-        kettlebells: "kettlebell",
-        box: "box",
-        rings: "rings",
-        rower: "rower",
-        bike: "bike",
-        skiErg: "ski erg",
-        bands: "band",
-        pvc: "PVC",
-      };
-      return [...new Set(selected.map((key) => mapping[key]).filter(Boolean))];
-    }
-
-    function storeV2ProgramLocally(program, revision = undefined) {
+    function storeV2ProgramLocally(
+      program,
+      revision = undefined,
+      activate = false,
+    ) {
       updateAppState((current) => ({
         ...current,
         v2Programs: [
@@ -1690,6 +1770,10 @@
           ),
         ],
         activeV2ProgramId: program.id,
+        activeProgrammingEngine: activate
+          ? "v2"
+          : current.activeProgrammingEngine,
+        selectedWeek: activate ? 1 : current.selectedWeek,
         v2ProgramRevisions:
           revision === undefined
             ? current.v2ProgramRevisions || {}
@@ -1736,7 +1820,7 @@
       }
     }
 
-    async function handleGenerateV2Programme() {
+    async function handleGenerateV2Programme(settings = {}) {
       if (!v2Api || !v2FeatureFlag.enabled) {
         notify("Programming Engine V2 is not enabled for this account.");
         return;
@@ -1748,12 +1832,30 @@
         notify("Sign in with an enabled account to generate a V2 block.");
         return;
       }
+      const currentState = appStateRef.current;
+      const rawPreferences =
+        settings.preferences || currentState.v2GenerationPreferences;
+      const preferredDays = Array.isArray(rawPreferences?.preferredDays)
+        ? [...new Set(rawPreferences.preferredDays.map(String))]
+        : [];
+      if (preferredDays.length !== 2) {
+        notify("Select exactly two different app training days.");
+        return;
+      }
+      const preferences =
+        v2Api.normalizeV2GenerationPreferences(rawPreferences);
+      const submittedMaxes = settings.maxes || currentState.profile.maxes || {};
+      const restrictions = settings.restrictions ||
+        currentState.movementRestrictions || {
+          movementIds: [],
+          movementFamilyIds: [],
+          guidance: null,
+        };
       const now = new Date().toISOString();
       const programId =
         typeof window.crypto?.randomUUID === "function"
           ? window.crypto.randomUUID()
           : v2Api.stableUuid(createId(), now, "program-v2");
-      const profile = appStateRef.current.profile;
       try {
         const program = v2Api.generateMixedStrengthBlock({
           programId,
@@ -1761,22 +1863,18 @@
           generatedAt: now,
           blockType: "mixed_strength",
           seed: createGenerationSeed(),
-          athleteLevel: "intermediate",
+          athleteLevel: preferences.athleteLevel,
           maxes: {
-            front_squat: Number(profile.maxes?.frontSquat) || null,
-            back_squat: Number(profile.maxes?.backSquat) || null,
-            snatch: Number(profile.maxes?.snatch) || null,
-            clean_and_jerk: Number(profile.maxes?.cleanJerk) || null,
-            strict_press: Number(profile.maxes?.strictPress) || null,
+            front_squat: Number(submittedMaxes.frontSquat) || null,
+            back_squat: Number(submittedMaxes.backSquat) || null,
+            snatch: Number(submittedMaxes.snatch) || null,
+            clean_and_jerk: Number(submittedMaxes.cleanJerk) || null,
+            strict_press: Number(submittedMaxes.strictPress) || null,
           },
-          equipment: v2AvailableEquipment(),
-          restrictions: appStateRef.current.movementRestrictions || {
-            movementIds: [],
-            movementFamilyIds: [],
-            guidance: null,
-          },
-          weightIncrementKg: 2.5,
-          roundingMode: "nearest",
+          equipment: preferences.availableEquipment,
+          restrictions,
+          weightIncrementKg: preferences.weightIncrementKg,
+          roundingMode: preferences.roundingMode,
         });
         const validation = v2Api.validateProgram(program);
         if (!validation.valid) {
@@ -1788,7 +1886,32 @@
           );
         }
         emitV2GenerationLog(program, { event: "generated" });
-        storeV2ProgramLocally(program, 0);
+        updateAppState((current) => ({
+          ...current,
+          profile: {
+            ...current.profile,
+            maxes: {
+              ...current.profile.maxes,
+              ...submittedMaxes,
+            },
+          },
+          movementRestrictions: restrictions,
+          v2GenerationPreferences: preferences,
+          v2Programs: [
+            program,
+            ...(current.v2Programs || []).filter(
+              (item) => item.id !== program.id,
+            ),
+          ],
+          activeV2ProgramId: program.id,
+          activeProgrammingEngine: "v2",
+          selectedWeek: 1,
+          v2ProgramRevisions: {
+            ...(current.v2ProgramRevisions || {}),
+            [program.id]: 0,
+          },
+        }));
+        await syncV2Restrictions(restrictions);
         try {
           await syncV2Program(program, null);
         } catch {
@@ -1884,11 +2007,7 @@
       }
     }
 
-    async function handleSaveV2Restrictions(restrictions) {
-      updateAppState((current) => ({
-        ...current,
-        movementRestrictions: restrictions,
-      }));
+    async function syncV2Restrictions(restrictions) {
       if (remoteStore && remoteUser && v2FeatureFlag.source === "supabase") {
         const rows = [
           ...restrictions.movementIds.map((movementId) => ({
@@ -1912,7 +2031,6 @@
           });
         }
       }
-      notify("Movement restrictions saved for future V2 generation.");
     }
 
     /** @param {WorkoutSession} session @param {string|null} editingSessionId */
@@ -2007,15 +2125,40 @@
 
     /** @param {string} planId */
     function handleSelectPlan(planId) {
+      if (planId === "built-in") {
+        updateAppState((current) => ({
+          ...current,
+          activePlanId: null,
+          activeProgrammingEngine: "v1",
+          selectedWeek: clamp(Number(current.selectedWeek) || 1, 1, 8),
+        }));
+        setPendingTimerResult(null);
+        return;
+      }
       const plan = appState.plans.find((item) => item.id === planId);
       if (!plan) return;
       const selection = resolvePlanTransition(plan, appState.selectedWeek);
       updateAppState((current) => ({
         ...current,
         activePlanId: plan.id,
+        activeProgrammingEngine: "v1",
         selectedWeek: selection.selectedWeek,
       }));
       setLogSelection({ dayId: selection.dayId });
+      setPendingTimerResult(null);
+    }
+
+    function handleSelectV2Program(programId) {
+      const program = (appStateRef.current.v2Programs || []).find(
+        (item) => item.id === programId,
+      );
+      if (!program) return;
+      updateAppState((current) => ({
+        ...current,
+        activeV2ProgramId: program.id,
+        activeProgrammingEngine: "v2",
+        selectedWeek: clamp(Number(current.selectedWeek) || 1, 1, 6),
+      }));
       setPendingTimerResult(null);
     }
 
@@ -2336,6 +2479,8 @@
             onJumpLog: jumpToLog,
             onTimerFinish: finishTimerToLog,
             onViewPlan: () => activateView("calendarView"),
+            onRegenerateV2: handleRegenerateV2Session,
+            onCompleteV2: handleCompleteV2Session,
             onActivate: activateView,
             onSaveTrainingEvent: handleSaveTrainingEvent,
             onSaveReadinessCheck: handleSaveReadinessCheck,
@@ -2611,6 +2756,8 @@
                   })),
                 onSaveTrainingEvent: handleSaveTrainingEvent,
                 onDeleteTrainingEvent: handleDeleteTrainingEvent,
+                onRegenerateV2: handleRegenerateV2Session,
+                onCompleteV2: handleCompleteV2Session,
               })
             : null,
           visitedViews.has("builderView")
@@ -2621,6 +2768,7 @@
                 onGenerate: handleGenerateProgramme,
                 onSaveSession: handleSaveCustomSession,
                 onSelectPlan: handleSelectPlan,
+                onSelectV2Program: handleSelectV2Program,
                 onRenamePlan: handleRenamePlan,
                 onDeletePlan: handleDeletePlan,
                 onDeleteSession: handleDeleteSession,
@@ -2630,7 +2778,6 @@
                 onGenerateV2: handleGenerateV2Programme,
                 onRegenerateV2: handleRegenerateV2Session,
                 onCompleteV2: handleCompleteV2Session,
-                onSaveV2Restrictions: handleSaveV2Restrictions,
               })
             : null,
           visitedViews.has("learnView")
@@ -3081,7 +3228,7 @@
     );
   }
 
-  function WeekSelect({ id, label, value, onChange }) {
+  function WeekSelect({ id, label, value, onChange, maxWeeks = 8 }) {
     return h(
       "select",
       {
@@ -3091,7 +3238,7 @@
         onChange: (event) =>
           onChange(/** @type {HTMLSelectElement} */ (event.target).value),
       },
-      weekOptions(),
+      weekOptions(maxWeeks),
     );
   }
 
@@ -3267,6 +3414,8 @@
     onJumpLog,
     onTimerFinish,
     onViewPlan,
+    onRegenerateV2,
+    onCompleteV2,
     onActivate,
     onSaveTrainingEvent,
     onSaveReadinessCheck,
@@ -3276,10 +3425,10 @@
     accountSyncPanel,
     themeControl,
   }) {
+    const programming = selectActiveProgrammingSessions(appState);
+    const isV2 = programming.engine === "v2";
     const activePlan = selectActivePlan(appState);
-    const allSessions = activePlan
-      ? activePlan.sessions.map(customPlanToSession)
-      : builtInCycleSessions(appState.profile);
+    const allSessions = programming.sessions;
     const weekSessions = allSessions.filter(
       (session) => Number(session.week) === Number(appState.selectedWeek),
     );
@@ -3290,16 +3439,25 @@
       (session) => session.logDayId || session.id,
     );
     const completedDayIds = new Set(
-      logsThisWeek
-        .filter((log) => mainDayIds.includes(log.dayId))
-        .map((log) => log.dayId),
+      isV2
+        ? weekSessions
+            .filter((session) => session.status === "completed")
+            .map((session) => session.id)
+        : logsThisWeek
+            .filter((log) => mainDayIds.includes(log.dayId))
+            .map((log) => log.dayId),
     );
     const completedDays = completedDayIds.size;
     const latestRpe = appState.logs.find((log) => String(log.rpe || "").trim());
     const latestPr = appState.prAttempts.find((attempt) => attempt.isPr);
-    const trainingProgress = activePlan
-      ? weeklyTrainingProgress(activePlan, appState.logs, appState.selectedWeek)
-      : null;
+    const trainingProgress =
+      !isV2 && activePlan
+        ? weeklyTrainingProgress(
+            activePlan,
+            appState.logs,
+            appState.selectedWeek,
+          )
+        : null;
     const weekSessionCount =
       trainingProgress?.programTarget || weekSessions.length;
     const completedProgression =
@@ -3411,6 +3569,11 @@
           v2Programs: appState.v2Programs || [],
           activeV2ProgramId: appState.activeV2ProgramId || null,
           v2ProgramRevisions: appState.v2ProgramRevisions || {},
+          activeProgrammingEngine: appState.activeProgrammingEngine || "v1",
+          v2GenerationPreferences:
+            v2Api?.normalizeV2GenerationPreferences?.(
+              appState.v2GenerationPreferences,
+            ) || defaultAthleteState().v2GenerationPreferences,
           movementRestrictions: appState.movementRestrictions || {
             movementIds: [],
             movementFamilyIds: [],
@@ -3591,7 +3754,7 @@
           h(
             "p",
             { className: "muted-copy", "data-testid": "v2-debug-version" },
-            `Programming engine: ${appState.v2Programs?.length ? "v2" : "v1"}; flag ${v2Api?.PROGRAMMING_ENGINE_V2_FEATURE_FLAG || "unavailable"} (${appState.v2FeatureFlag?.source || "disabled"}); template ${v2Api?.TEMPLATE_VERSION || "unavailable"}; catalog ${v2Api?.CATALOG_VERSION || "unavailable"}; validator ${v2Api?.VALIDATOR_VERSION || "unavailable"}.`,
+            `Programming engine: ${appState.activeProgrammingEngine || "v1"}; flag ${v2Api?.PROGRAMMING_ENGINE_V2_FEATURE_FLAG || "unavailable"} (${appState.v2FeatureFlag?.source || "disabled"}); template ${v2Api?.TEMPLATE_VERSION || "unavailable"}; catalog ${v2Api?.CATALOG_VERSION || "unavailable"}; validator ${v2Api?.VALIDATOR_VERSION || "unavailable"}.`,
           ),
         ),
         accountSyncPanel,
@@ -3619,6 +3782,7 @@
           label: "Dashboard week",
           value: appState.selectedWeek,
           onChange: onWeekChange,
+          maxWeeks: programming.maxWeeks,
         }),
       ),
       h(
@@ -3649,22 +3813,30 @@
                 {
                   className: "primary-button",
                   type: "button",
-                  onClick: () =>
-                    onJumpLog(
-                      recommendedSession.logDayId || recommendedSession.id,
-                      recommendedSession.week,
-                      {
-                        workoutSource: boxWorkout ? "box" : "app",
-                        boxWorkoutTitle: boxWorkout ? "CrossFit box WOD" : null,
-                        trainingEventId: boxWorkout
-                          ? todaysBoxEvent?.id || null
-                          : currentEvent?.id || null,
-                        readinessCheckId: todaysCheckin?.id || null,
-                        recommendationSnapshot: recommendation,
-                      },
-                    ),
+                  onClick: isV2
+                    ? onViewPlan
+                    : () =>
+                        onJumpLog(
+                          recommendedSession.logDayId || recommendedSession.id,
+                          recommendedSession.week,
+                          {
+                            workoutSource: boxWorkout ? "box" : "app",
+                            boxWorkoutTitle: boxWorkout
+                              ? "CrossFit box WOD"
+                              : null,
+                            trainingEventId: boxWorkout
+                              ? todaysBoxEvent?.id || null
+                              : currentEvent?.id || null,
+                            readinessCheckId: todaysCheckin?.id || null,
+                            recommendationSnapshot: recommendation,
+                          },
+                        ),
                 },
-                boxWorkout ? "Log box workout" : "Start and log workout",
+                isV2
+                  ? "Open structured workout"
+                  : boxWorkout
+                    ? "Log box workout"
+                    : "Start and log workout",
               )
             : null,
           h(
@@ -3679,8 +3851,9 @@
         { className: "stats-grid", id: "statsGrid" },
         h(StatCard, {
           value: `${completedProgression}/${weekSessionCount}`,
-          label:
-            activePlan?.kind === "generated"
+          label: isV2
+            ? "V2 progression"
+            : activePlan?.kind === "generated"
               ? "App progression"
               : "Sessions logged",
         }),
@@ -3981,84 +4154,90 @@
         "div",
         { id: "nextSession" },
         recommendedSession && recommendation.action !== "rest"
-          ? h(
-              "section",
-              { className: "panel" },
-              h(
-                "div",
-                { className: "session-topline" },
+          ? isV2
+            ? h(V2SessionCard, {
+                session: recommendedSession.v2Session,
+                onRegenerate: onRegenerateV2,
+                onComplete: onCompleteV2,
+              })
+            : h(
+                "section",
+                { className: "panel" },
                 h(
                   "div",
-                  null,
+                  { className: "session-topline" },
                   h(
-                    "p",
-                    { className: "eyebrow" },
-                    boxWorkout ? "Protected progression" : "Priority session",
-                  ),
-                  h(
-                    "h3",
+                    "div",
                     null,
-                    `${recommendedSession.weekday || `Week ${recommendedSession.week}`} - ${recommendedSession.shortTitle}`,
+                    h(
+                      "p",
+                      { className: "eyebrow" },
+                      boxWorkout ? "Protected progression" : "Priority session",
+                    ),
+                    h(
+                      "h3",
+                      null,
+                      `${recommendedSession.weekday || `Week ${recommendedSession.week}`} - ${recommendedSession.shortTitle}`,
+                    ),
                   ),
+                  h(
+                    "span",
+                    { className: "metric-pill" },
+                    `${recommendedSession.duration || 60} min`,
+                  ),
+                ),
+                h("p", { className: "muted-copy" }, recommendedSession.focus),
+                h(MovementGuides, { session: recommendedSession }),
+                h(
+                  "div",
+                  {
+                    className: "completion-bar",
+                    "aria-label": "Week completion",
+                  },
+                  h("span", { style: { width: `${weekPercent}%` } }),
                 ),
                 h(
-                  "span",
-                  { className: "metric-pill" },
-                  `${recommendedSession.duration || 60} min`,
+                  "div",
+                  { className: "quick-actions" },
+                  boxWorkout
+                    ? null
+                    : h(
+                        "button",
+                        {
+                          className: "primary-button",
+                          type: "button",
+                          onClick: () =>
+                            onJumpLog(
+                              recommendedSession.logDayId ||
+                                recommendedSession.id,
+                              recommendedSession.week,
+                              {
+                                workoutSource: "app",
+                                trainingEventId: currentEvent?.id || null,
+                                readinessCheckId: todaysCheckin?.id || null,
+                                recommendationSnapshot: recommendation,
+                              },
+                            ),
+                        },
+                        "Log workout",
+                      ),
+                  h(
+                    "button",
+                    {
+                      className: "ghost-button",
+                      type: "button",
+                      onClick: onViewPlan,
+                    },
+                    "View plan",
+                  ),
                 ),
-              ),
-              h("p", { className: "muted-copy" }, recommendedSession.focus),
-              h(MovementGuides, { session: recommendedSession }),
-              h(
-                "div",
-                {
-                  className: "completion-bar",
-                  "aria-label": "Week completion",
-                },
-                h("span", { style: { width: `${weekPercent}%` } }),
-              ),
-              h(
-                "div",
-                { className: "quick-actions" },
                 boxWorkout
                   ? null
-                  : h(
-                      "button",
-                      {
-                        className: "primary-button",
-                        type: "button",
-                        onClick: () =>
-                          onJumpLog(
-                            recommendedSession.logDayId ||
-                              recommendedSession.id,
-                            recommendedSession.week,
-                            {
-                              workoutSource: "app",
-                              trainingEventId: currentEvent?.id || null,
-                              readinessCheckId: todaysCheckin?.id || null,
-                              recommendationSnapshot: recommendation,
-                            },
-                          ),
-                      },
-                      "Log workout",
-                    ),
-                h(
-                  "button",
-                  {
-                    className: "ghost-button",
-                    type: "button",
-                    onClick: onViewPlan,
-                  },
-                  "View plan",
-                ),
-              ),
-              boxWorkout
-                ? null
-                : h(WorkoutTimer, {
-                    session: recommendedSession,
-                    onFinish: onTimerFinish,
-                  }),
-            )
+                  : h(WorkoutTimer, {
+                      session: recommendedSession,
+                      onFinish: onTimerFinish,
+                    }),
+              )
           : h(
               "div",
               { className: "empty-state" },
@@ -4897,12 +5076,14 @@
     onCycleStartChange,
     onSaveTrainingEvent,
     onDeleteTrainingEvent,
+    onRegenerateV2,
+    onCompleteV2,
   }) {
     const week = WEEK_META.find((item) => item.week === appState.selectedWeek);
-    const activePlan = selectActivePlan(appState);
-    const programmeSessions = activePlan
-      ? activePlan.sessions.map(customPlanToSession)
-      : builtInCycleSessions(appState.profile);
+    const programming = selectActiveProgrammingSessions(appState);
+    const activePlan = programming.program;
+    const isV2 = programming.engine === "v2";
+    const programmeSessions = programming.sessions;
     const schedule = buildTrainingSchedule({
       sessions: programmeSessions,
       trainingEvents: appState.trainingEvents,
@@ -4988,7 +5169,11 @@
           h(
             "p",
             { className: "eyebrow" },
-            activePlan ? "Active saved programme" : "Dated eight-week cycle",
+            isV2
+              ? "Active periodized V2 programme"
+              : activePlan
+                ? "Active saved programme"
+                : "Dated eight-week cycle",
           ),
           h("h2", { id: "calendarTitle" }, "Calendar"),
         ),
@@ -4997,6 +5182,7 @@
           label: "Programme week",
           value: appState.selectedWeek,
           onChange: onWeekChange,
+          maxWeeks: programming.maxWeeks,
         }),
       ),
       h(
@@ -5017,14 +5203,25 @@
           ? h(
               "div",
               null,
-              h("h3", null, activePlan.title),
+              h(
+                "h3",
+                null,
+                isV2
+                  ? activePlan.trainingBlocks?.[0]?.name ||
+                      "Six-week mixed-strength block"
+                  : activePlan.title || activePlan.name,
+              ),
               h(
                 "p",
                 { className: "muted-copy" },
                 `${selectedSessions.length} progression session${selectedSessions.length === 1 ? "" : "s"} this week.`,
               ),
             )
-          : h("p", { className: "muted-copy" }, `${week.title}. ${week.note}`),
+          : h(
+              "p",
+              { className: "muted-copy" },
+              `${week?.title || `Week ${appState.selectedWeek}`}. ${week?.note || ""}`,
+            ),
       ),
       h(
         "div",
@@ -5061,33 +5258,43 @@
                   : event.rawBoxText
                     ? h("p", { className: "muted-copy" }, event.rawBoxText)
                     : null,
-                session
-                  ? h(
-                      "details",
-                      { className: "calendar-session-details" },
-                      h("summary", null, "Workout details and coaching intent"),
-                      h(SessionCard, {
-                        session,
-                        tag: locked
-                          ? "Logged"
-                          : `${session.duration || 60} min`,
-                        meta: null,
-                        onLog: () =>
-                          onLogSession(
-                            session.logDayId || session.id,
-                            session.week,
-                            {
-                              workoutSource: "app",
-                              logDate: event.date,
-                              trainingEventId: event.generated
-                                ? null
-                                : event.id,
-                            },
-                          ),
-                        onTimerFinish,
-                      }),
-                    )
-                  : null,
+                session?.engineVersion === "v2"
+                  ? h(V2SessionCard, {
+                      session: session.v2Session,
+                      onRegenerate: onRegenerateV2,
+                      onComplete: onCompleteV2,
+                    })
+                  : session
+                    ? h(
+                        "details",
+                        { className: "calendar-session-details" },
+                        h(
+                          "summary",
+                          null,
+                          "Workout details and coaching intent",
+                        ),
+                        h(SessionCard, {
+                          session,
+                          tag: locked
+                            ? "Logged"
+                            : `${session.duration || 60} min`,
+                          meta: null,
+                          onLog: () =>
+                            onLogSession(
+                              session.logDayId || session.id,
+                              session.week,
+                              {
+                                workoutSource: "app",
+                                logDate: event.date,
+                                trainingEventId: event.generated
+                                  ? null
+                                  : event.id,
+                              },
+                            ),
+                          onTimerFinish,
+                        }),
+                      )
+                    : null,
                 !locked
                   ? h(
                       "div",
@@ -5154,7 +5361,9 @@
                               },
                               "Delete",
                             ),
-                      event.kind === "app" && session
+                      event.kind === "app" &&
+                        session &&
+                        session.engineVersion !== "v2"
                         ? h(
                             "button",
                             {
@@ -5191,27 +5400,31 @@
                               },
                               "Mark complete / log",
                             )
-                          : h(
-                              "button",
-                              {
-                                className: "primary-button",
-                                type: "button",
-                                onClick: () =>
-                                  onSaveTrainingEvent(
-                                    toStoredEvent(event, {
-                                      status: "completed",
-                                    }),
-                                  ),
-                              },
-                              "Mark complete",
-                            ),
+                          : event.kind === "rest"
+                            ? h(
+                                "button",
+                                {
+                                  className: "primary-button",
+                                  type: "button",
+                                  onClick: () =>
+                                    onSaveTrainingEvent(
+                                      toStoredEvent(event, {
+                                        status: "completed",
+                                      }),
+                                    ),
+                                },
+                                "Mark complete",
+                              )
+                            : null,
                     )
                   : h(
                       "p",
                       { className: "completed-lock" },
                       "Completed sessions are locked to protect training history.",
                     ),
-                session && event.status !== "skipped"
+                session &&
+                  session.engineVersion !== "v2" &&
+                  event.status !== "skipped"
                   ? h(WorkoutTimer, { session, onFinish: onTimerFinish })
                   : null,
               );
@@ -6974,7 +7187,13 @@
     );
   }
 
-  function V2RestrictionForm({ restrictions, onSave }) {
+  function V2ProgrammeSetup({
+    program,
+    profile,
+    preferences,
+    restrictions,
+    onGenerate,
+  }) {
     const familyOptions = [
       ["front_squat", "Front squat"],
       ["snatch", "Snatch"],
@@ -6982,29 +7201,160 @@
       ["strict_pull", "Strict pulling"],
       ["core", "Core and body-shape work"],
     ];
+    /** @type {Array<[string, string, boolean]>} */
+    const equipmentOptions = [
+      ["barbell", "Barbell", true],
+      ["rack", "Rack", true],
+      ["pull-up bar", "Pull-up bar", true],
+      ["dumbbell", "Dumbbells", false],
+      ["kettlebell", "Kettlebells", false],
+      ["box", "Box", false],
+      ["rings", "Rings", false],
+      ["rower", "Rower", false],
+      ["bike", "Bike", false],
+      ["ski erg", "Ski erg", false],
+      ["band", "Bands", false],
+      ["PVC", "PVC", false],
+    ];
+    const normalizedPreferences =
+      v2Api.normalizeV2GenerationPreferences(preferences);
     return h(
       "details",
-      { className: "v2-restrictions" },
-      h("summary", null, "Movement restrictions"),
+      {
+        className: "v2-restrictions v2-programme-setup",
+        open: !program,
+      },
+      h("summary", null, "Programme setup"),
       h(
         "form",
         {
           onSubmit: (event) => {
             event.preventDefault();
             const data = new FormData(event.currentTarget);
-            onSave({
-              movementFamilyIds: familyOptions
-                .map(([id]) => id)
-                .filter((id) => data.getAll("restrictedFamily").includes(id)),
-              movementIds: String(data.get("restrictedMovementIds") || "")
-                .split(",")
-                .map((item) => item.trim())
-                .filter(Boolean),
-              guidance:
-                String(data.get("restrictionGuidance") || "").trim() || null,
+            onGenerate({
+              preferences: {
+                preferredDays: data.getAll("v2PreferredDay").map(String),
+                athleteLevel: String(
+                  data.get("v2AthleteLevel") || "intermediate",
+                ),
+                availableEquipment: data
+                  .getAll("v2AvailableEquipment")
+                  .map(String),
+                weightIncrementKg: Number(data.get("v2WeightIncrement") || 2.5),
+                roundingMode: String(data.get("v2RoundingMode") || "nearest"),
+              },
+              maxes: {
+                frontSquat: Number(data.get("v2FrontSquatMax")) || null,
+                backSquat: Number(data.get("v2BackSquatMax")) || null,
+                snatch: Number(data.get("v2SnatchMax")) || null,
+                cleanJerk: Number(data.get("v2CleanJerkMax")) || null,
+                strictPress: Number(data.get("v2StrictPressMax")) || null,
+              },
+              restrictions: {
+                movementFamilyIds: familyOptions
+                  .map(([id]) => id)
+                  .filter((id) => data.getAll("restrictedFamily").includes(id)),
+                movementIds: String(data.get("restrictedMovementIds") || "")
+                  .split(",")
+                  .map((item) => item.trim())
+                  .filter(Boolean),
+                guidance:
+                  String(data.get("restrictionGuidance") || "").trim() || null,
+              },
             });
           },
         },
+        h(
+          "fieldset",
+          null,
+          h("legend", null, "Preferred app days — select two"),
+          DAY_OF_WEEK_OPTIONS.map((day) =>
+            h(
+              "label",
+              { className: "check-row", key: day },
+              h("input", {
+                type: "checkbox",
+                name: "v2PreferredDay",
+                value: day,
+                defaultChecked:
+                  normalizedPreferences.preferredDays.includes(day),
+              }),
+              day[0].toUpperCase() + day.slice(1),
+            ),
+          ),
+        ),
+        h(
+          "label",
+          null,
+          "V2 athlete level",
+          h(
+            "select",
+            {
+              name: "v2AthleteLevel",
+              defaultValue: normalizedPreferences.athleteLevel,
+            },
+            h("option", { value: "beginner" }, "Beginner"),
+            h("option", { value: "intermediate" }, "Intermediate"),
+            h("option", { value: "advanced" }, "Advanced"),
+          ),
+        ),
+        h(
+          "fieldset",
+          null,
+          h("legend", null, "Strength maxes (kg)"),
+          h(
+            "div",
+            { className: "form-row" },
+            [
+              ["v2FrontSquatMax", "Front squat", profile.maxes?.frontSquat],
+              ["v2BackSquatMax", "Back squat", profile.maxes?.backSquat],
+              ["v2SnatchMax", "Snatch", profile.maxes?.snatch],
+              ["v2CleanJerkMax", "Clean and jerk", profile.maxes?.cleanJerk],
+              ["v2StrictPressMax", "Strict press", profile.maxes?.strictPress],
+            ].map(([name, label, value]) =>
+              h(
+                "label",
+                { key: name },
+                label,
+                h("input", {
+                  name,
+                  type: "number",
+                  min: "1",
+                  step: "0.5",
+                  defaultValue: value || "",
+                }),
+              ),
+            ),
+          ),
+        ),
+        h(
+          "fieldset",
+          null,
+          h("legend", null, "Available equipment"),
+          equipmentOptions.map(([value, label, required]) =>
+            h(
+              "label",
+              { className: "check-row", key: value },
+              h("input", {
+                type: "checkbox",
+                name: "v2AvailableEquipment",
+                value,
+                defaultChecked:
+                  required ||
+                  normalizedPreferences.availableEquipment.includes(value),
+                disabled: required,
+              }),
+              `${label}${required ? " (required)" : ""}`,
+              required
+                ? h("input", {
+                    type: "hidden",
+                    name: "v2AvailableEquipment",
+                    value,
+                  })
+                : null,
+            ),
+          ),
+        ),
         h(
           "fieldset",
           null,
@@ -7048,9 +7398,49 @@
           }),
         ),
         h(
+          "div",
+          { className: "form-row" },
+          h(
+            "label",
+            null,
+            "Weight increment",
+            h(
+              "select",
+              {
+                name: "v2WeightIncrement",
+                defaultValue: String(normalizedPreferences.weightIncrementKg),
+              },
+              [1, 2, 2.5, 5].map((increment) =>
+                h(
+                  "option",
+                  { key: increment, value: String(increment) },
+                  `${increment} kg`,
+                ),
+              ),
+            ),
+          ),
+          h(
+            "label",
+            null,
+            "Rounding",
+            h(
+              "select",
+              {
+                name: "v2RoundingMode",
+                defaultValue: normalizedPreferences.roundingMode,
+              },
+              h("option", { value: "nearest" }, "Nearest"),
+              h("option", { value: "down" }, "Down"),
+              h("option", { value: "up" }, "Up"),
+            ),
+          ),
+        ),
+        h(
           "button",
-          { className: "ghost-button", type: "submit" },
-          "Save restrictions",
+          { className: "primary-button", type: "submit" },
+          program
+            ? "Generate a new future block"
+            : "Generate six-week V2 block",
         ),
       ),
     );
@@ -7419,11 +7809,12 @@
   function V2ProgramPanel({
     program,
     featureFlag,
+    profile,
+    preferences,
     restrictions,
     onGenerate,
     onRegenerate,
     onComplete,
-    onSaveRestrictions,
   }) {
     const [selectedWeek, setSelectedWeek] = ReactRuntime.useState(1);
     if (!featureFlag.enabled) {
@@ -7462,6 +7853,7 @@
       );
     }
     const block = program?.trainingBlocks?.[0] || null;
+    const programmeSummary = v2Api.summarizeV2Program(program);
     const week = block?.trainingWeeks?.find(
       (item) => item.weekNumber === selectedWeek,
     );
@@ -7481,17 +7873,18 @@
         ),
         h(
           "p",
-          { className: "muted-copy" },
-          `Feature flag: ${featureFlag.source}. Template: ${program?.templateVersion || v2Api.TEMPLATE_VERSION}.`,
-        ),
-        h(V2RestrictionForm, { restrictions, onSave: onSaveRestrictions }),
-        h(
-          "button",
-          { className: "primary-button", type: "button", onClick: onGenerate },
+          { className: "v2-programme-summary" },
           program
-            ? "Generate a new future block"
-            : "Generate six-week V2 block",
+            ? `${programmeSummary.weeks} weeks · ${programmeSummary.sessions} sessions · ${programmeSummary.exercises} exercises`
+            : "Choose two weekly training days, available equipment, and your current maxes.",
         ),
+        h(V2ProgrammeSetup, {
+          program,
+          profile,
+          preferences,
+          restrictions,
+          onGenerate,
+        }),
       ),
       block
         ? h(
@@ -7547,6 +7940,7 @@
     onGenerate,
     onSaveSession,
     onSelectPlan,
+    onSelectV2Program,
     onRenamePlan,
     onDeletePlan,
     onDeleteSession,
@@ -7556,11 +7950,19 @@
     onGenerateV2,
     onRegenerateV2,
     onCompleteV2,
-    onSaveV2Restrictions,
   }) {
     const [customFormVersion, setCustomFormVersion] = ReactRuntime.useState(0);
     const [editingSessionId, setEditingSessionId] = ReactRuntime.useState(null);
     const activePlan = selectActivePlan(appState);
+    const activeV2Program = (appState.v2Programs || []).find(
+      (item) => item.id === appState.activeV2ProgramId,
+    );
+    const activeProgrammeValue =
+      appState.activeProgrammingEngine === "v2" && activeV2Program
+        ? `v2:${activeV2Program.id}`
+        : activePlan
+          ? `v1:${activePlan.id}`
+          : "v1:built-in";
     const editingSession = activePlan?.sessions.find(
       (session) => session.id === editingSessionId,
     );
@@ -7586,31 +7988,84 @@
           h("h2", { id: "builderTitle" }, "Programme builder"),
         ),
       ),
-      h(V2ProgramPanel, {
-        program: (appState.v2Programs || []).find(
-          (item) => item.id === appState.activeV2ProgramId,
-        ),
-        featureFlag: v2FeatureFlag,
-        restrictions: appState.movementRestrictions || {
-          movementIds: [],
-          movementFamilyIds: [],
-          guidance: null,
+      activePlan || activeV2Program
+        ? h(
+            "section",
+            { className: "panel programme-selector" },
+            h(
+              "label",
+              null,
+              "Active programme",
+              h(
+                "select",
+                {
+                  value: activeProgrammeValue,
+                  onChange: (event) => {
+                    setEditingSessionId(null);
+                    const [engine, programId] = event.target.value.split(":");
+                    if (engine === "v2") onSelectV2Program(programId);
+                    else onSelectPlan(programId);
+                  },
+                },
+                (appState.v2Programs || []).map((program) =>
+                  h(
+                    "option",
+                    { key: `v2:${program.id}`, value: `v2:${program.id}` },
+                    `V2 · ${program.trainingBlocks?.[0]?.name || "Six-week mixed-strength block"}`,
+                  ),
+                ),
+                h(
+                  "option",
+                  { key: "v1:built-in", value: "v1:built-in" },
+                  "V1 · Built-in eight-week cycle",
+                ),
+                appState.plans.map((plan) =>
+                  h(
+                    "option",
+                    { key: `v1:${plan.id}`, value: `v1:${plan.id}` },
+                    `V1 · ${plan.title}`,
+                  ),
+                ),
+              ),
+            ),
+          )
+        : null,
+      appState.activeProgrammingEngine === "v2" || !activeV2Program
+        ? h(V2ProgramPanel, {
+            program: activeV2Program,
+            featureFlag: v2FeatureFlag,
+            profile: appState.profile,
+            preferences: appState.v2GenerationPreferences,
+            restrictions: appState.movementRestrictions || {
+              movementIds: [],
+              movementFamilyIds: [],
+              guidance: null,
+            },
+            onGenerate: onGenerateV2,
+            onRegenerate: onRegenerateV2,
+            onComplete: onCompleteV2,
+          })
+        : null,
+      h(
+        "details",
+        {
+          className: "legacy-generator",
+          open: appState.activeProgrammingEngine !== "v2",
         },
-        onGenerate: onGenerateV2,
-        onRegenerate: onRegenerateV2,
-        onComplete: onCompleteV2,
-        onSaveRestrictions: onSaveV2Restrictions,
-      }),
-      h(GeneratorForm, {
-        key: activePlan?.id || "new-generated-plan",
-        profile: appState.profile,
-        onGenerate,
-        regenerating: activePlan?.kind === "generated",
-        initialOptions:
-          activePlan?.kind === "generated" ? activePlan.generatorOptions : null,
-        onNotify,
-      }),
-      appState.plans.length
+        h("summary", null, "Legacy V1 generator"),
+        h(GeneratorForm, {
+          key: activePlan?.id || "new-generated-plan",
+          profile: appState.profile,
+          onGenerate,
+          regenerating: activePlan?.kind === "generated",
+          initialOptions:
+            activePlan?.kind === "generated"
+              ? activePlan.generatorOptions
+              : null,
+          onNotify,
+        }),
+      ),
+      appState.plans.length && appState.activeProgrammingEngine !== "v2"
         ? h(
             "section",
             { className: "panel plan-manager", "aria-label": "Saved plans" },

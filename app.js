@@ -7324,7 +7324,12 @@ function parseBoxWorkout(rawText) {
 }
 
 function sessionTrainingStimuli(session) {
-  const explicit = Array.isArray(session?.stimuli) ? session.stimuli : [];
+  const explicit = [
+    ...(Array.isArray(session?.stimuli) ? session.stimuli : []),
+    ...(Array.isArray(session?.movementPatterns)
+      ? session.movementPatterns
+      : []),
+  ];
   const sourceText = [
     session?.title,
     session?.shortTitle,
@@ -7511,7 +7516,13 @@ function buildTrainingSchedule({
         log.dayId === (session.logDayId || session.id) &&
         Number(log.week || session.week) === Number(session.week),
     );
-    const completed = Boolean(completionLog);
+    const completed =
+      Boolean(completionLog) || String(session?.status || "") === "completed";
+    const sessionStatus = ["planned", "completed", "skipped"].includes(
+      String(session?.status || ""),
+    )
+      ? session.status
+      : "planned";
     return {
       id: override?.id || `scheduled-${session.id}`,
       date:
@@ -7519,7 +7530,9 @@ function buildTrainingSchedule({
         override?.date ||
         scheduledDateForSession(session, cycleStartDate),
       kind: "app",
-      status: completed ? "completed" : override?.status || "planned",
+      status: completed
+        ? "completed"
+        : override?.status || sessionStatus || "planned",
       sessionId: session.id,
       title: session.shortTitle || session.title,
       stimuli: sessionTrainingStimuli(session),

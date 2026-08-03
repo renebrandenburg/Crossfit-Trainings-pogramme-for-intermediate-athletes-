@@ -115,6 +115,51 @@ test("generates a connected six-week mixed-strength block", () => {
   );
 });
 
+test("calendar adapter schedules all twelve V2 sessions on the athlete's two preferred days", () => {
+  const program = generate();
+  const calendarSessions = v2.adaptV2ProgramToCalendarSessions(program, {
+    preferredDays: ["wednesday", "sunday"],
+    athleteLevel: "advanced",
+    availableEquipment: EQUIPMENT,
+    weightIncrementKg: 1,
+    roundingMode: "down",
+  });
+
+  assert.equal(calendarSessions.length, 12);
+  assert.deepEqual(
+    calendarSessions.slice(0, 4).map((session) => session.preferredDay),
+    ["wednesday", "sunday", "wednesday", "sunday"],
+  );
+  assert.equal(calendarSessions[0].engineVersion, "v2");
+  assert.equal(calendarSessions[0].week, 1);
+  assert.ok(calendarSessions[0].movementPatterns.includes("olympic_lifting"));
+  assert.equal(calendarSessions[0].v2Session.id, calendarSessions[0].id);
+  assert.deepEqual(v2.summarizeV2Program(program), {
+    weeks: 6,
+    sessions: 12,
+    exercises: 54,
+  });
+});
+
+test("V2 generation preferences default safely and require a two-day tuple", () => {
+  assert.deepEqual(
+    v2.normalizeV2GenerationPreferences({
+      preferredDays: ["tuesday", "tuesday", "noday"],
+      athleteLevel: "unknown",
+      availableEquipment: ["barbell", "barbell", "rower"],
+      weightIncrementKg: 3,
+      roundingMode: "sideways",
+    }),
+    {
+      preferredDays: ["tuesday", "saturday"],
+      athleteLevel: "intermediate",
+      availableEquipment: ["barbell", "rower"],
+      weightIncrementKg: 2.5,
+      roundingMode: "nearest",
+    },
+  );
+});
+
 test("front squat, snatch, and clean-and-jerk steps progress and deload", () => {
   const tracks = generate().trainingBlocks[0].progressionTracks;
   const frontSquat = tracks.find((track) => track.trackType === "front_squat");

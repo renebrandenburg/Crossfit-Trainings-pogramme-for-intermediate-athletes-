@@ -33,9 +33,8 @@ test("@critical V2 generates, renders, regenerates, completes, and reloads a con
   await page
     .getByRole("button", { name: "Generate six-week V2 block" })
     .click();
-  await expect(page.getByTestId("v2-session-card")).toHaveCount(2);
-
   const programme = page.getByTestId("v2-programme");
+  await expect(programme.getByTestId("v2-session-card")).toHaveCount(2);
   await expect(programme).toContainText("72–75% of front squat 1RM");
   await expect(programme).toContainText("Working weight");
   await expect(programme).toContainText("90–95 kg");
@@ -45,6 +44,22 @@ test("@critical V2 generates, renders, regenerates, completes, and reloads a con
   await expect(programme).not.toContainText(INVALID_GYMNASTICS);
   await expect(programme).not.toContainText(INVALID_PULL_HOLD);
 
+  await app.navigate("Plan");
+  const calendar = page.locator("#calendarView");
+  await expect(calendar.getByTestId("v2-session-card")).toHaveCount(2);
+  await expect(calendar).toContainText("72–75% of front squat 1RM");
+  await expect(calendar).toContainText("Rest 120 sec");
+  await expect(page.getByLabel("Programme week").locator("option")).toHaveCount(
+    6,
+  );
+
+  await app.navigate("Home");
+  await expect(page.locator("#dashboardView")).toContainText("V2 progression");
+  await expect(
+    page.getByRole("button", { name: "Open structured workout" }),
+  ).toBeVisible();
+  await builder.open();
+
   const beforeState = await readAppState(page);
   const beforeProgram = activeV2Program(beforeState);
   const beforeSession = firstSession(beforeProgram);
@@ -53,7 +68,7 @@ test("@critical V2 generates, renders, regenerates, completes, and reloads a con
   );
   const assignmentsBefore = beforeSession.trackAssignments;
 
-  await page
+  await programme
     .getByTestId("v2-session-card")
     .first()
     .getByRole("button", { name: "Regenerate conditioning" })
@@ -74,7 +89,7 @@ test("@critical V2 generates, renders, regenerates, completes, and reloads a con
   expect(regeneratedSession.trackAssignments).toEqual(assignmentsBefore);
   expect(regeneratedSession.estimatedDurationMinutes).toBeLessThanOrEqual(65);
 
-  const firstCard = page.getByTestId("v2-session-card").first();
+  const firstCard = programme.getByTestId("v2-session-card").first();
   await firstCard
     .getByText("Record completion and advance progression", { exact: true })
     .click();
@@ -98,6 +113,11 @@ test("@critical V2 generates, renders, regenerates, completes, and reloads a con
       .filter((track) => completedTrackIds.includes(track.id))
       .every((track) => track.currentStep === 2),
   ).toBe(true);
+
+  await app.navigate("Plan");
+  await expect(
+    page.locator("#calendarView").getByTestId("v2-session-card").first(),
+  ).toContainText("Completed — progression feedback has been applied.");
 
   await page.reload();
   await builder.open();

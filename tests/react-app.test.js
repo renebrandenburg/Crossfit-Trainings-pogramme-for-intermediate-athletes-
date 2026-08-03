@@ -776,7 +776,7 @@ test("React retroactively unlocks consistency badges from existing logs", async 
       assert.ok(achievementState.earned["training-habit"]);
     });
     assert.ok(mounted.ui.getByRole("heading", { name: "Training Habit" }));
-    assert.equal(mounted.readState().schemaVersion, 6);
+    assert.equal(mounted.readState().schemaVersion, 7);
   } finally {
     mounted.cleanup();
   }
@@ -871,13 +871,13 @@ test("React Testing Library moves, skips, and resumes a dated progression sessio
     fireEvent.click(ui.getByRole("button", { name: "Calendar" }));
     const event = squatEvent();
     fireEvent.change(event.querySelector('input[type="date"]'), {
-      target: { value: "2026-08-03" },
+      target: { value: "2026-08-04" },
     });
 
     await waitFor(() => {
       const stored = activeScores(readState()).trainingEvents;
       assert.equal(stored.length, 1);
-      assert.equal(stored[0].date, "2026-08-03");
+      assert.equal(stored[0].date, "2026-08-04");
     });
 
     const skip = Array.from(squatEvent().querySelectorAll("button")).find(
@@ -899,7 +899,7 @@ test("React Testing Library moves, skips, and resumes a dated progression sessio
       const stored = activeScores(readState()).trainingEvents;
       assert.equal(stored.length, 1);
       assert.equal(stored[0].status, "planned");
-      assert.notEqual(stored[0].date, "2026-08-03");
+      assert.notEqual(stored[0].date, "2026-08-04");
     });
   } finally {
     cleanup();
@@ -1091,7 +1091,10 @@ test("React renders complete V2 strength and skill prescriptions from the valida
 
     const programme = await mounted.ui.findByTestId("v2-programme");
     await mounted.waitFor(() => {
-      assert.equal(mounted.ui.getAllByTestId("v2-session-card").length, 2);
+      assert.equal(
+        programme.querySelectorAll('[data-testid="v2-session-card"]').length,
+        2,
+      );
       assert.match(programme.textContent, /72–75% of front squat 1RM/);
       assert.match(programme.textContent, /Rest 120 sec/);
       assert.match(programme.textContent, /Working weight90–95 kg/);
@@ -1122,6 +1125,111 @@ test("React renders complete V2 strength and skill prescriptions from the valida
       window.ForgeHourProgrammingV2.validateProgram(finalProgramme).valid,
       true,
     );
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React schedules V2 on the athlete's two days and renders structured sessions in Calendar and Today", async () => {
+  const mounted = mountApp();
+
+  try {
+    openMoreTool(mounted, "Build programme");
+    const setup = document.querySelector(".v2-programme-setup");
+    for (const day of ["tuesday", "saturday", "wednesday", "sunday"]) {
+      mounted.fireEvent.click(
+        setup.querySelector(`input[name="v2PreferredDay"][value="${day}"]`),
+      );
+    }
+    mounted.fireEvent.change(mounted.ui.getByLabelText("V2 athlete level"), {
+      target: { value: "advanced" },
+    });
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Weight increment"), {
+      target: { value: "1" },
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", {
+        name: "Generate six-week V2 block",
+      }),
+    );
+
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      assert.equal(state.activeProgrammingEngine, "v2");
+      assert.deepEqual(state.v2GenerationPreferences.preferredDays, [
+        "wednesday",
+        "sunday",
+      ]);
+      assert.equal(state.v2GenerationPreferences.athleteLevel, "advanced");
+      assert.equal(state.v2GenerationPreferences.weightIncrementKg, 1);
+    });
+
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Calendar" }),
+    );
+    const calendar = document.getElementById("calendarView");
+    await mounted.waitFor(() => {
+      assert.equal(
+        calendar.querySelectorAll('[data-testid="v2-session-card"]').length,
+        2,
+      );
+      assert.match(calendar.textContent, /Aug 5, 2026/);
+      assert.match(calendar.textContent, /Aug 9, 2026/);
+      assert.match(calendar.textContent, /72–75% of front squat 1RM/);
+      assert.match(calendar.textContent, /Rest 120 sec/);
+    });
+    assert.equal(
+      mounted.ui.getByLabelText("Programme week").querySelectorAll("option")
+        .length,
+      6,
+    );
+
+    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "Today" }));
+    const dashboard = document.getElementById("dashboardView");
+    assert.match(dashboard.textContent, /V2 progression/);
+    assert.ok(
+      Array.from(dashboard.querySelectorAll("button")).some(
+        (button) => button.textContent === "Open structured workout",
+      ),
+    );
+    assert.match(dashboard.textContent, /72–75% of front squat 1RM/);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("React can switch between the built-in V1 cycle and V2 without losing the generated block", async () => {
+  const mounted = mountApp();
+
+  try {
+    openMoreTool(mounted, "Build programme");
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", {
+        name: "Generate six-week V2 block",
+      }),
+    );
+    const selector = await mounted.ui.findByLabelText("Active programme");
+    const v2Value = selector.value;
+    const v1Option = Array.from(selector.options).find((option) =>
+      option.value.startsWith("v1:"),
+    );
+    assert.ok(v1Option);
+
+    mounted.fireEvent.change(selector, { target: { value: v1Option.value } });
+    await mounted.waitFor(() => {
+      assert.equal(mounted.readState().activeProgrammingEngine, "v1");
+    });
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Active programme"), {
+      target: { value: v2Value },
+    });
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      assert.equal(state.activeProgrammingEngine, "v2");
+      assert.ok(
+        state.v2Programs.some((program) => `v2:${program.id}` === v2Value),
+      );
+      assert.equal(v1Option.value, "v1:built-in");
+    });
   } finally {
     mounted.cleanup();
   }
@@ -2565,10 +2673,10 @@ test("React Testing Library migrates legacy profile and programmes into the gues
 
   try {
     await mounted.waitFor(() => {
-      assert.equal(mounted.readState().schemaVersion, 6);
+      assert.equal(mounted.readState().schemaVersion, 7);
     });
     const saved = mounted.readState();
-    assert.equal(saved.schemaVersion, 6);
+    assert.equal(saved.schemaVersion, 7);
     assert.equal(saved.activeScoreOwner, "guest");
     assert.equal(
       saved.athleteStateByOwner.guest.profile.athleteName,
@@ -3081,7 +3189,7 @@ test("React Testing Library isolates signed-in scores from legacy guest scores",
     assert.equal(ui.queryByText(/Account-only squat/), null);
 
     const saved = readState();
-    assert.equal(saved.schemaVersion, 6);
+    assert.equal(saved.schemaVersion, 7);
     assert.equal(saved.planSchemaVersion, 5);
     assert.equal(Object.hasOwn(saved, "logs"), false);
     assert.equal(saved.scoreDataByOwner.guest.logs[0].id, "guest-log");

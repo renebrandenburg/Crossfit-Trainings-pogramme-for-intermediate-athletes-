@@ -8,6 +8,57 @@ export const VALIDATOR_VERSION = 1 as const;
 
 export type ProgrammingEngineVersion = "v1" | "v2";
 
+export type ProgrammingEngine = ProgrammingEngineVersion;
+
+export type Weekday =
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday"
+  | "sunday";
+
+export interface V2GenerationPreferences {
+  preferredDays: [Weekday, Weekday];
+  athleteLevel: "beginner" | "intermediate" | "advanced";
+  availableEquipment: string[];
+  weightIncrementKg: 1 | 2 | 2.5 | 5;
+  roundingMode: "nearest" | "down" | "up";
+}
+
+export type TrainingStimulus =
+  | "squat"
+  | "hinge"
+  | "horizontal_push"
+  | "vertical_push"
+  | "horizontal_pull"
+  | "vertical_pull"
+  | "olympic_lifting"
+  | "gymnastics"
+  | "short_conditioning"
+  | "medium_conditioning"
+  | "long_conditioning"
+  | "aerobic"
+  | "sprint";
+
+export interface V2CalendarSession {
+  id: string;
+  engineVersion: "v2";
+  week: number;
+  weekNumber: number;
+  sessionNumber: number;
+  preferredDay: Weekday;
+  weekday: string;
+  title: string;
+  shortTitle: string;
+  focus: string;
+  duration: number;
+  status: TrainingSession["status"];
+  movementPatterns: TrainingStimulus[];
+  v2Session: TrainingSession;
+}
+
 export type TrainingBlockType =
   | "mixed_strength"
   | "front_squat_accumulation"

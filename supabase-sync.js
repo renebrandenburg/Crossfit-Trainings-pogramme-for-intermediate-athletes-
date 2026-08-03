@@ -142,7 +142,7 @@
     },
   ];
   const SELECT_PAGE_SIZE = 1000;
-  const ATHLETE_STATE_SCHEMA_VERSION = 3;
+  const ATHLETE_STATE_SCHEMA_VERSION = 4;
   const ATHLETE_STATE_MAX_BYTES = 5 * 1024 * 1024;
   const ATHLETE_STATE_COLUMNS = "user_id,schema_version,state,updated_at";
   const LOWER_IS_BETTER_PR_IDS = new Set(["row1k", "row2k", "run5k", "murph"]);
@@ -255,6 +255,58 @@
     return value;
   }
 
+  function normalizeV2GenerationPreferences(value) {
+    const source =
+      value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const weekdays = [
+      "monday",
+      "tuesday",
+      "wednesday",
+      "thursday",
+      "friday",
+      "saturday",
+      "sunday",
+    ];
+    const requestedDays = Array.isArray(source.preferredDays)
+      ? [...new Set(source.preferredDays.map(String))].filter((day) =>
+          weekdays.includes(day),
+        )
+      : [];
+    requestedDays.sort(
+      (left, right) => weekdays.indexOf(left) - weekdays.indexOf(right),
+    );
+    const increment = Number(source.weightIncrementKg);
+    return {
+      preferredDays:
+        requestedDays.length === 2 ? requestedDays : ["tuesday", "saturday"],
+      athleteLevel: ["beginner", "intermediate", "advanced"].includes(
+        source.athleteLevel,
+      )
+        ? source.athleteLevel
+        : "intermediate",
+      availableEquipment: Array.isArray(source.availableEquipment)
+        ? [...new Set(source.availableEquipment.map(String).filter(Boolean))]
+        : [
+            "barbell",
+            "rack",
+            "pull-up bar",
+            "dumbbell",
+            "kettlebell",
+            "box",
+            "rings",
+            "rower",
+            "bike",
+            "ski erg",
+            "band",
+            "PVC",
+          ],
+      weightIncrementKg: [1, 2, 2.5, 5].includes(increment) ? increment : 2.5,
+      roundingMode: ["nearest", "down", "up"].includes(source.roundingMode)
+        ? source.roundingMode
+        : "nearest",
+    };
+  }
+
   function validateAthleteState(
     value,
     operation = "validate_remote_athlete_state",
@@ -311,6 +363,16 @@
         !Array.isArray(state.v2ProgramRevisions)
           ? state.v2ProgramRevisions
           : {},
+      activeProgrammingEngine: ["v1", "v2"].includes(
+        state.activeProgrammingEngine,
+      )
+        ? state.activeProgrammingEngine
+        : typeof state.activeV2ProgramId === "string"
+          ? "v2"
+          : "v1",
+      v2GenerationPreferences: normalizeV2GenerationPreferences(
+        state.v2GenerationPreferences,
+      ),
       movementRestrictions:
         state.movementRestrictions &&
         typeof state.movementRestrictions === "object" &&
@@ -349,7 +411,11 @@
       row.schema_version,
       "Athlete-state schema version",
     );
-    if (![1, 2, ATHLETE_STATE_SCHEMA_VERSION].includes(schemaVersion)) {
+    if (
+      !Number.isInteger(schemaVersion) ||
+      schemaVersion < 1 ||
+      schemaVersion > ATHLETE_STATE_SCHEMA_VERSION
+    ) {
       throw syncError(
         "validate_remote_athlete_state",
         new Error("Athlete-state schema version is unsupported"),

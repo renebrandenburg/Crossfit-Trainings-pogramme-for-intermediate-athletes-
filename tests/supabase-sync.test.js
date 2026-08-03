@@ -38,6 +38,14 @@ function athleteState(overrides = {}) {
     v2Programs: [],
     activeV2ProgramId: null,
     v2ProgramRevisions: {},
+    activeProgrammingEngine: "v1",
+    v2GenerationPreferences: {
+      preferredDays: ["wednesday", "sunday"],
+      athleteLevel: "advanced",
+      availableEquipment: ["barbell", "rack", "pull-up bar", "rower"],
+      weightIncrementKg: 1,
+      roundingMode: "down",
+    },
     movementRestrictions: {
       movementIds: [],
       movementFamilyIds: [],
@@ -63,6 +71,23 @@ test("athlete-state helpers map one canonical private document", () => {
     ),
     { ...state, updatedAt: "2026-07-21T08:00:00.000Z" },
   );
+});
+
+test("athlete-state persistence retains V2 engine selection and generation preferences", () => {
+  const state = athleteState({
+    activeProgrammingEngine: "v2",
+    activeV2ProgramId: "v2-program",
+  });
+  const row = athleteStateToRow(state, "user-1");
+
+  assert.equal(row.schema_version, 4);
+  assert.equal(row.state.activeProgrammingEngine, "v2");
+  assert.deepEqual(row.state.v2GenerationPreferences.preferredDays, [
+    "wednesday",
+    "sunday",
+  ]);
+  assert.equal(row.state.v2GenerationPreferences.weightIncrementKg, 1);
+  assert.equal(row.state.v2GenerationPreferences.roundingMode, "down");
 });
 
 test("athlete-state validation rejects malformed and cross-account data", () => {

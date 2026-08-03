@@ -1,7 +1,7 @@
 "use strict";
 
 const CACHE_PREFIX = "crossfit-training-programme-";
-const CACHE_NAME = `${CACHE_PREFIX}v18-engine-v2`;
+const CACHE_NAME = `${CACHE_PREFIX}v19-v2-calendar`;
 const LOCAL_ASSETS = [
   "./",
   "./index.html",
