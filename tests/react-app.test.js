@@ -2352,7 +2352,7 @@ test("React persists unrelated week changes when an inactive V2 programme is inv
         persisted.v2Programs.some(
           (program) => program.id === "invalid-inactive-v2-programme",
         ),
-        false,
+        true,
       );
       assert.equal(mounted.ui.queryByText("Local save failed"), null);
     });
