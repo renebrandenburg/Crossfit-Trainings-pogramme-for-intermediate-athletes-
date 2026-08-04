@@ -2169,6 +2169,198 @@ test("React Testing Library regenerates once and renders the same saved WOD in P
   }
 });
 
+test("React keeps V2 programme, week, calendar, log, and proof selections in sync", async () => {
+  const mounted = mountApp();
+
+  try {
+    openMoreTool(mounted, "Build programme");
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", {
+        name: "Generate six-week V2 block",
+      }),
+    );
+    const firstState = mounted.readState();
+    const firstProgramId = firstState.activeV2ProgramId;
+    const firstProgram = firstState.v2Programs.find(
+      (program) => program.id === firstProgramId,
+    );
+    mounted.fireEvent.change(mounted.ui.getByLabelText("V2 programme name"), {
+      target: { value: "First V2 block" },
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Save V2 programme name" }),
+    );
+
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Create new V2 programme" }),
+    );
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Programming goal"), {
+      target: { value: "strength" },
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", {
+        name: "Generate a new future block",
+      }),
+    );
+
+    await mounted.waitFor(() => {
+      assert.equal(mounted.readState().v2Programs.length, 2);
+    });
+    const secondState = mounted.readState();
+    const secondProgramId = secondState.activeV2ProgramId;
+    const secondProgram = secondState.v2Programs.find(
+      (program) => program.id === secondProgramId,
+    );
+    assert.notEqual(firstProgramId, secondProgramId);
+    assert.notEqual(
+      firstProgram.trainingBlocks[0].trainingWeeks[0].sessions[0].id,
+      secondProgram.trainingBlocks[0].trainingWeeks[0].sessions[0].id,
+    );
+
+    mounted.fireEvent.change(mounted.ui.getByLabelText("V2 programme name"), {
+      target: { value: "Second V2 block" },
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Save V2 programme name" }),
+    );
+
+    const selector = mounted.ui.getByLabelText("Active programme");
+    mounted.fireEvent.change(selector, {
+      target: { value: `v2:${firstProgramId}` },
+    });
+    await mounted.waitFor(() => {
+      assert.equal(
+        mounted.ui.getByLabelText("V2 programme name").value,
+        "First V2 block",
+      );
+    });
+
+    mounted.fireEvent.change(selector, {
+      target: { value: `v2:${secondProgramId}` },
+    });
+    await mounted.waitFor(() => {
+      assert.equal(
+        mounted.ui.getByLabelText("V2 programme name").value,
+        "Second V2 block",
+      );
+    });
+
+    mounted.fireEvent.click(
+      mounted.view("builderView").getByRole("button", { name: "Week 2" }),
+    );
+    await mounted.waitFor(() =>
+      assert.equal(mounted.readState().selectedWeek, 2),
+    );
+
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Calendar" }),
+    );
+    await mounted.waitFor(() => {
+      assert.equal(mounted.ui.getByLabelText("Programme week").value, "2");
+      assert.equal(
+        mounted.ui
+          .getByRole("heading", { name: "Calendar" })
+          .parentElement.parentElement.textContent.includes(
+            "Active periodized V2 programme",
+          ),
+        true,
+      );
+    });
+
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Programme week"), {
+      target: { value: "3" },
+    });
+    await mounted.waitFor(() =>
+      assert.equal(mounted.readState().selectedWeek, 3),
+    );
+
+    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "Log" }));
+    await mounted.waitFor(() => {
+      const logView = mounted.view("logView");
+      assert.equal(logView.getByLabelText("Week").value, "3");
+      assert.ok(logView.getByLabelText("Session").options.length > 0);
+    });
+
+    mounted.fireEvent.click(mounted.ui.getByRole("button", { name: "More" }));
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Competition proof" }),
+    );
+    await mounted.waitFor(() => {
+      assert.ok(mounted.ui.getByLabelText("Workout source").options.length > 0);
+    });
+
+    const persisted = mounted.readState();
+    assert.equal(persisted.activeV2ProgramId, secondProgramId);
+    assert.equal(persisted.selectedWeek, 3);
+    mounted.cleanup();
+
+    const reloaded = mountApp({ storedState: persisted });
+    try {
+      openMoreTool(reloaded, "Build programme");
+      await reloaded.waitFor(() => {
+        const builderView = reloaded.view("builderView");
+        assert.equal(
+          builderView.getByLabelText("Active programme").value,
+          `v2:${secondProgramId}`,
+        );
+        assert.equal(
+          builderView.getByRole("button", { name: "Week 3" }).className,
+          "is-active",
+        );
+      });
+    } finally {
+      reloaded.cleanup();
+    }
+  } finally {
+    if (global.window) mounted.cleanup();
+  }
+});
+
+test("React persists unrelated week changes when an inactive V2 programme is invalid", async () => {
+  const source = mountApp();
+  let storedState;
+
+  try {
+    openMoreTool(source, "Build programme");
+    source.fireEvent.click(
+      source.ui.getByRole("button", {
+        name: "Generate six-week V2 block",
+      }),
+    );
+    storedState = source.readState();
+  } finally {
+    source.cleanup();
+  }
+
+  storedState.v2Programs.push({
+    id: "invalid-inactive-v2-programme",
+    engineVersion: "v2",
+    schemaVersion: 2,
+    trainingBlocks: [],
+  });
+
+  const mounted = mountApp({ storedState });
+  try {
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Dashboard week"), {
+      target: { value: "2" },
+    });
+    await mounted.waitFor(() => {
+      const persisted = mounted.readState();
+      assert.equal(persisted.selectedWeek, 2);
+      assert.equal(persisted.activeV2ProgramId, storedState.activeV2ProgramId);
+      assert.equal(
+        persisted.v2Programs.some(
+          (program) => program.id === "invalid-inactive-v2-programme",
+        ),
+        false,
+      );
+      assert.equal(mounted.ui.queryByText("Local save failed"), null);
+    });
+  } finally {
+    mounted.cleanup();
+  }
+});
+
 test("React Testing Library preserves the active plan when generation is rejected", async () => {
   const originalConsoleError = console.error;
   console.error = () => undefined;

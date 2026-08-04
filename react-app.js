@@ -71,7 +71,6 @@
     startOfCoachWeek,
     trimNumber,
     selectActivePlan,
-    selectActiveWeekSessions,
     timerDisplaySeconds,
     validateGeneratedProgramme,
     validateGeneratedPlansForPersistence,
@@ -233,7 +232,33 @@
   function saveState(state, previous = null) {
     try {
       validateGeneratedPlansForPersistence(state.plans);
-      validateV2ProgramsForPersistence(state.v2Programs);
+      const validV2Programs = (state.v2Programs || []).filter((program) => {
+        const validation = v2Api?.validateProgram?.(program);
+        if (validation?.valid) return true;
+        console.warn(
+          "Skipping invalid V2 programme during persistence.",
+          validation?.issues || program?.id,
+        );
+        return false;
+      });
+      const activeV2ProgramId = validV2Programs.some(
+        (program) => program.id === state.activeV2ProgramId,
+      )
+        ? state.activeV2ProgramId
+        : null;
+      const persistenceState =
+        validV2Programs.length === (state.v2Programs || []).length
+          ? state
+          : withActiveAthleteState({
+              ...state,
+              v2Programs: validV2Programs,
+              activeV2ProgramId,
+              activeProgrammingEngine:
+                activeV2ProgramId && state.activeProgrammingEngine === "v2"
+                  ? "v2"
+                  : "v1",
+            });
+      validateV2ProgramsForPersistence(persistenceState.v2Programs);
       state.plans
         .filter((plan) => plan?.kind === "generated")
         .flatMap((plan) => plan.sessions || [])
@@ -244,7 +269,7 @@
             strengthAndSkillBlocks: session.trainingBlocks,
           }),
         );
-      return localStateStore.save(state, previous);
+      return localStateStore.save(persistenceState, previous);
     } catch (error) {
       console.warn("Could not save state.", error);
       return false;
@@ -466,7 +491,9 @@
         state.cycleStartDate || startOfCoachWeek(),
       ),
       planSchemaVersion: PLAN_SCHEMA_VERSION,
-      v2Programs: state.v2Programs || [],
+      v2Programs: (state.v2Programs || []).filter(
+        (program) => v2Api?.validateProgram?.(program)?.valid,
+      ),
       activeV2ProgramId: state.activeV2ProgramId || null,
       v2ProgramRevisions: state.v2ProgramRevisions || {},
       activeProgrammingEngine: state.activeProgrammingEngine || "v1",
@@ -956,6 +983,15 @@
   function selectActiveProgrammingSessions(state) {
     const v2Program = selectActiveV2Program(state);
     if (v2Program && v2Api?.adaptV2ProgramToCalendarSessions) {
+      const validation = v2Api.validateProgram(v2Program);
+      if (!validation.valid) {
+        return {
+          engine: "v2",
+          program: v2Program,
+          sessions: [],
+          maxWeeks: v2Program.trainingBlocks?.[0]?.durationWeeks || 6,
+        };
+      }
       return {
         engine: "v2",
         program: v2Program,
@@ -984,7 +1020,9 @@
   function defaultSessionSelection(state, week = state.selectedWeek) {
     const selectedWeek = clamp(Number(week) || 1, 1, 8);
     const activePlan = selectActivePlan(state);
-    const activeSessions = selectActiveWeekSessions(state, selectedWeek);
+    const activeSessions = selectActiveProgrammingSessions(
+      state,
+    ).sessions.filter((session) => Number(session.week) === selectedWeek);
     return {
       dayId:
         activeSessions[0]?.id || (activePlan ? "" : getNextDayForToday().id),
@@ -1157,7 +1195,9 @@
         : candidate;
       try {
         validateGeneratedPlansForPersistence(next.plans);
-        validateV2ProgramsForPersistence(next.v2Programs);
+        if (next.v2Programs !== current.v2Programs) {
+          validateV2ProgramsForPersistence(next.v2Programs);
+        }
       } catch (error) {
         console.error(
           "State update rejected invalid generated programme.",
@@ -1513,9 +1553,10 @@
     ReactRuntime.useEffect(() => {
       setLogSelection((current) => {
         const activePlan = selectActivePlan(appState);
-        const sessions = selectActiveWeekSessions(
+        const sessions = selectActiveProgrammingSessions(
           appState,
-          appState.selectedWeek,
+        ).sessions.filter(
+          (session) => Number(session.week) === Number(appState.selectedWeek),
         );
         const validIds = new Set(
           sessions.length
@@ -1528,7 +1569,14 @@
           ? current
           : defaultSessionSelection(appState);
       });
-    }, [appState.activePlanId, appState.selectedWeek, appState.plans]);
+    }, [
+      appState.activePlanId,
+      appState.activeV2ProgramId,
+      appState.activeProgrammingEngine,
+      appState.plans,
+      appState.v2Programs,
+      appState.selectedWeek,
+    ]);
 
     ReactRuntime.useEffect(() => {
       registerServiceWorker();
@@ -3049,6 +3097,7 @@
             ? h(MemoBuilderView, {
                 appState: viewState,
                 activeView,
+                onWeekChange: setSelectedWeek,
                 onNotify: notify,
                 onGenerate: handleGenerateProgramme,
                 onSaveSession: handleSaveCustomSession,
@@ -6147,13 +6196,8 @@
 
   function ProofView({ appState, activeView, onFinish }) {
     const activePlan = selectActivePlan(appState);
-    const programmeSessions = activePlan
-      ? selectActiveWeekSessions(appState, appState.selectedWeek).map(
-          customPlanToSession,
-        )
-      : getProgramDays().map((day) =>
-          buildSession(day.id, appState.selectedWeek, appState.profile),
-        );
+    const programmeSessions =
+      selectActiveProgrammingSessions(appState).sessions;
     const allSessions = programmeSessions;
     const initialSession = allSessions[0];
     const customSessionId = ReactRuntime.useRef(`competition-${createId()}`);
@@ -6177,7 +6221,14 @@
       }
       if (!refreshedSession) setSourceId(nextSession.id);
       setDraft(proofDraftFromSession(nextSession));
-    }, [appState.activePlanId, appState.plans, appState.selectedWeek]);
+    }, [
+      appState.activePlanId,
+      appState.activeV2ProgramId,
+      appState.activeProgrammingEngine,
+      appState.plans,
+      appState.v2Programs,
+      appState.selectedWeek,
+    ]);
 
     const selectedSession = allSessions.find(
       (session) => session.id === sourceId,
@@ -8414,6 +8465,8 @@
 
   function V2ProgramPanel({
     program,
+    selectedWeek: selectedWeekValue,
+    onWeekChange,
     featureFlag,
     profile,
     preferences,
@@ -8424,7 +8477,6 @@
     onRecordMaxAttempt,
     onConfirmMaxUpdate,
   }) {
-    const [selectedWeek, setSelectedWeek] = ReactRuntime.useState(1);
     const [setupOpen, setSetupOpen] = ReactRuntime.useState(!program);
     ReactRuntime.useEffect(() => {
       setSetupOpen(!program);
@@ -8466,6 +8518,11 @@
     }
     const block = program?.trainingBlocks?.[0] || null;
     const programmeSummary = v2Api.summarizeV2Program(program);
+    const selectedWeek = clamp(
+      Number(selectedWeekValue) || 1,
+      1,
+      block?.durationWeeks || block?.trainingWeeks?.length || 6,
+    );
     const week = block?.trainingWeeks?.find(
       (item) => item.weekNumber === selectedWeek,
     );
@@ -8526,7 +8583,7 @@
                     key: item.id,
                     className:
                       item.weekNumber === selectedWeek ? "is-active" : "",
-                    onClick: () => setSelectedWeek(item.weekNumber),
+                    onClick: () => onWeekChange(item.weekNumber),
                   },
                   `Week ${item.weekNumber}`,
                 ),
@@ -8563,6 +8620,7 @@
   function BuilderView({
     appState,
     activeView,
+    onWeekChange,
     onNotify,
     onGenerate,
     onSaveSession,
@@ -8709,6 +8767,8 @@
       appState.activeProgrammingEngine === "v2" || !activeV2Program
         ? h(V2ProgramPanel, {
             program: activeV2Program,
+            selectedWeek: appState.selectedWeek,
+            onWeekChange,
             featureFlag: v2FeatureFlag,
             profile: appState.profile,
             preferences: appState.v2GenerationPreferences,
@@ -9885,7 +9945,11 @@
         ? pendingTimerResult
         : null;
     const timerSummary = matchingTimer ? formatTimerResult(matchingTimer) : "";
-    const activeSessions = selectActiveWeekSessions(appState, selectedWeek);
+    const activeSessions = selectActiveProgrammingSessions(
+      appState,
+    ).sessions.filter(
+      (session) => Number(session.week) === Number(selectedWeek),
+    );
 
     ReactRuntime.useEffect(() => {
       if (!logSelection.workoutSource) return;
@@ -10610,6 +10674,13 @@
   }
 
   function findTrainingSessionForState(sessionId, weekNumber, state) {
+    const activeProgramming = selectActiveProgrammingSessions(state);
+    const activeSession = activeProgramming.sessions.find(
+      (session) =>
+        session.id === sessionId && Number(session.week) === Number(weekNumber),
+    );
+    if (activeSession) return activeSession;
+
     const activePlan = selectActivePlan(state);
     if (!activePlan) {
       const mainDay = getProgramDays().find((day) => day.id === sessionId);
