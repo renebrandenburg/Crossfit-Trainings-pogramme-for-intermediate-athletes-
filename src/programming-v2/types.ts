@@ -83,6 +83,7 @@ export type TrainingBlockType =
   | "gymnastics_capacity"
   | "aerobic_capacity"
   | "competition_preparation"
+  | "masters_open_preparation"
   | "deload";
 
 export type MaxTestType =
@@ -400,6 +401,18 @@ export interface ConditioningPrescription {
   stations: ConditioningEmomStation[];
   scalingOptions: ScalingOption[];
   estimatedDurationMinutes: number;
+  competitionMetadata?: OpenWorkoutMetadata | null;
+}
+
+export interface OpenWorkoutMetadata {
+  competitionStyle: boolean;
+  movementStandards: string[];
+  pacingPlan: string[];
+  setStrategy: string[];
+  transitionGoals: string[];
+  scoreType: "time" | "rounds_reps" | "total_reps" | "calories";
+  targetScoreGuidance: string | null;
+  tieBreakPoints: string[];
 }
 
 export interface WarmupExercise {

@@ -232,33 +232,6 @@
   function saveState(state, previous = null) {
     try {
       validateGeneratedPlansForPersistence(state.plans);
-      const validV2Programs = (state.v2Programs || []).filter((program) => {
-        const validation = v2Api?.validateProgram?.(program);
-        if (validation?.valid) return true;
-        console.warn(
-          "Skipping invalid V2 programme during persistence.",
-          validation?.issues || program?.id,
-        );
-        return false;
-      });
-      const activeV2ProgramId = validV2Programs.some(
-        (program) => program.id === state.activeV2ProgramId,
-      )
-        ? state.activeV2ProgramId
-        : null;
-      const persistenceState =
-        validV2Programs.length === (state.v2Programs || []).length
-          ? state
-          : withActiveAthleteState({
-              ...state,
-              v2Programs: validV2Programs,
-              activeV2ProgramId,
-              activeProgrammingEngine:
-                activeV2ProgramId && state.activeProgrammingEngine === "v2"
-                  ? "v2"
-                  : "v1",
-            });
-      validateV2ProgramsForPersistence(persistenceState.v2Programs);
       state.plans
         .filter((plan) => plan?.kind === "generated")
         .flatMap((plan) => plan.sessions || [])
@@ -269,7 +242,7 @@
             strengthAndSkillBlocks: session.trainingBlocks,
           }),
         );
-      return localStateStore.save(persistenceState, previous);
+      return localStateStore.save(state, previous);
     } catch (error) {
       console.warn("Could not save state.", error);
       return false;
@@ -290,6 +263,17 @@
             .map((item) => item.code)
             .join(", ")}`,
         );
+      }
+    });
+  }
+
+  function validateChangedV2Programs(previous, next) {
+    const before = new Map(
+      (previous || []).map((program) => [program.id, program]),
+    );
+    (next || []).forEach((program) => {
+      if (before.get(program.id) !== program) {
+        validateV2ProgramsForPersistence([program]);
       }
     });
   }
@@ -381,7 +365,7 @@
       plans: Array.isArray(source.plans) ? source.plans : [],
       activePlanId:
         typeof source.activePlanId === "string" ? source.activePlanId : null,
-      selectedWeek: clamp(Number(source.selectedWeek) || 1, 1, 8),
+      selectedWeek: Math.max(1, Math.round(Number(source.selectedWeek) || 1)),
       cycleStartDate: coachDateValue(
         source.cycleStartDate || fallback.cycleStartDate,
       ),
@@ -409,7 +393,7 @@
       (program) => program.id === requestedV2Id,
     )
       ? requestedV2Id
-      : null;
+      : v2Programs[0]?.id || null;
     const activeProgrammingEngine = ["v1", "v2"].includes(
       source.activeProgrammingEngine,
     )
@@ -421,7 +405,14 @@
       profile: normalized.profile,
       plans: normalized.plans,
       activePlanId: normalized.activePlanId,
-      selectedWeek: selection.selectedWeek,
+      selectedWeek: activeV2ProgramId
+        ? resolveValidWeek(
+            getAvailableProgrammeWeeks(
+              v2Programs.find((program) => program.id === activeV2ProgramId),
+            ),
+            source.selectedWeek,
+          )
+        : selection.selectedWeek,
       cycleStartDate: normalized.cycleStartDate,
       planSchemaVersion: PLAN_SCHEMA_VERSION,
       v2Programs,
@@ -491,9 +482,7 @@
         state.cycleStartDate || startOfCoachWeek(),
       ),
       planSchemaVersion: PLAN_SCHEMA_VERSION,
-      v2Programs: (state.v2Programs || []).filter(
-        (program) => v2Api?.validateProgram?.(program)?.valid,
-      ),
+      v2Programs: state.v2Programs || [],
       activeV2ProgramId: state.activeV2ProgramId || null,
       v2ProgramRevisions: state.v2ProgramRevisions || {},
       activeProgrammingEngine: state.activeProgrammingEngine || "v1",
@@ -576,13 +565,6 @@
     });
     const v2Programs = [...mergedById.values()];
     const localActiveId = localState?.activeV2ProgramId;
-    const activeV2ProgramId =
-      localActiveId && localWins.has(localActiveId)
-        ? localActiveId
-        : remoteState?.activeV2ProgramId ||
-          (localActiveId && mergedById.has(localActiveId)
-            ? localActiveId
-            : null);
     const v2ProgramRevisions = Object.fromEntries(
       v2Programs.map((program) => [
         program.id,
@@ -596,6 +578,20 @@
     const localStateWins =
       Number.isFinite(localStateTime) &&
       (!Number.isFinite(remoteStateTime) || localStateTime > remoteStateTime);
+    const preferredActiveId = localStateWins
+      ? localActiveId
+      : remoteState?.activeV2ProgramId;
+    const activeV2ProgramId =
+      (preferredActiveId && mergedById.has(preferredActiveId)
+        ? preferredActiveId
+        : null) ||
+      (localActiveId && mergedById.has(localActiveId) ? localActiveId : null) ||
+      (remoteState?.activeV2ProgramId &&
+      mergedById.has(remoteState.activeV2ProgramId)
+        ? remoteState.activeV2ProgramId
+        : null) ||
+      v2Programs[0]?.id ||
+      null;
     const activeProgrammingEngine = localStateWins
       ? localState?.activeProgrammingEngine
       : remoteState?.activeProgrammingEngine;
@@ -606,6 +602,12 @@
       v2ProgramRevisions,
       activeProgrammingEngine:
         activeProgrammingEngine === "v2" && activeV2ProgramId ? "v2" : "v1",
+      selectedWeek: resolveValidWeek(
+        getAvailableProgrammeWeeks(
+          v2Programs.find((program) => program.id === activeV2ProgramId),
+        ),
+        localStateWins ? localState?.selectedWeek : remoteState?.selectedWeek,
+      ),
       v2GenerationPreferences: localStateWins
         ? localState?.v2GenerationPreferences
         : remoteState?.v2GenerationPreferences,
@@ -980,36 +982,79 @@
     );
   }
 
-  function selectActiveProgrammingSessions(state) {
-    const v2Program = selectActiveV2Program(state);
-    if (v2Program && v2Api?.adaptV2ProgramToCalendarSessions) {
-      const validation = v2Api.validateProgram(v2Program);
-      if (!validation.valid) {
-        return {
-          engine: "v2",
-          program: v2Program,
-          sessions: [],
-          maxWeeks: v2Program.trainingBlocks?.[0]?.durationWeeks || 6,
-        };
-      }
+  function resolveValidWeek(availableWeeks, requestedWeek) {
+    const weeks = [...new Set((availableWeeks || []).map(Number))]
+      .filter(Number.isInteger)
+      .sort((left, right) => left - right);
+    if (!weeks.length) return 1;
+    const requested = Number(requestedWeek);
+    if (weeks.includes(requested)) return requested;
+    const lower = weeks.filter((week) => week <= requested);
+    return lower.length ? Math.max(...lower) : Math.min(...weeks);
+  }
+
+  function getAvailableProgrammeWeeks(program) {
+    return [
+      ...new Set(
+        (program?.trainingBlocks || []).flatMap((block) =>
+          (block.trainingWeeks || []).map((week) => Number(week.weekNumber)),
+        ),
+      ),
+    ].sort((left, right) => left - right);
+  }
+
+  function selectActiveProgrammingSelection(state) {
+    const selected = selectActiveV2Program(state);
+    if (selected && v2Api?.adaptV2ProgramToCalendarSessions) {
+      const validation = v2Api.validateProgram?.(selected);
+      const allSessions = validation?.valid
+        ? v2Api.adaptV2ProgramToCalendarSessions(
+            selected,
+            state.v2GenerationPreferences,
+          )
+        : [];
+      const availableWeeks = getAvailableProgrammeWeeks(selected);
+      const selectedWeek = resolveValidWeek(availableWeeks, state.selectedWeek);
       return {
         engine: "v2",
-        program: v2Program,
-        sessions: v2Api.adaptV2ProgramToCalendarSessions(
-          v2Program,
-          state.v2GenerationPreferences,
+        programme: selected,
+        programmeId: selected.id,
+        selectedWeek,
+        availableWeeks,
+        allSessions,
+        weekSessions: allSessions.filter(
+          (session) => Number(session.week) === selectedWeek,
         ),
-        maxWeeks: v2Program.trainingBlocks?.[0]?.durationWeeks || 6,
       };
     }
     const activePlan = selectActivePlan(state);
+    const allSessions = activePlan
+      ? activePlan.sessions.map(customPlanToSession)
+      : builtInCycleSessions(state.profile);
+    const availableWeeks = [
+      ...new Set(allSessions.map((session) => Number(session.week))),
+    ].sort((a, b) => a - b);
+    const selectedWeek = resolveValidWeek(availableWeeks, state.selectedWeek);
     return {
       engine: "v1",
-      program: activePlan,
-      sessions: activePlan
-        ? activePlan.sessions.map(customPlanToSession)
-        : builtInCycleSessions(state.profile),
-      maxWeeks: 8,
+      programme: activePlan,
+      programmeId: activePlan?.id || null,
+      selectedWeek,
+      availableWeeks,
+      allSessions,
+      weekSessions: allSessions.filter(
+        (session) => Number(session.week) === selectedWeek,
+      ),
+    };
+  }
+
+  function selectActiveProgrammingSessions(state) {
+    const selection = selectActiveProgrammingSelection(state);
+    return {
+      ...selection,
+      program: selection.programme,
+      sessions: selection.allSessions,
+      maxWeeks: selection.availableWeeks.at(-1) || 1,
     };
   }
 
@@ -1196,7 +1241,7 @@
       try {
         validateGeneratedPlansForPersistence(next.plans);
         if (next.v2Programs !== current.v2Programs) {
-          validateV2ProgramsForPersistence(next.v2Programs);
+          validateChangedV2Programs(current.v2Programs, next.v2Programs);
         }
       } catch (error) {
         console.error(
@@ -1511,8 +1556,16 @@
 
     const setSelectedWeek = ReactRuntime.useCallback(
       (week) => {
-        const selectedWeek = clamp(Number(week) || 1, 1, 8);
-        updateAppState((current) => ({ ...current, selectedWeek }));
+        updateAppState((current) => {
+          const selection = selectActiveProgrammingSelection(current);
+          return {
+            ...current,
+            selectedWeek: resolveValidWeek(
+              selection.availableWeeks,
+              Number(week),
+            ),
+          };
+        });
       },
       [updateAppState],
     );
@@ -1950,23 +2003,34 @@
           endurance: "endurance_capacity_6w",
           gymnastics: "gymnastics_capacity_6w",
           bar_muscle_up: "bar_muscle_up_6w",
-          masters_open: "masters_open_6w",
+          masters_open: "masters_open_preparation_six_week",
           olympic_lifting: "olympic_lifting_6w",
           general_crossfit: "general_crossfit_6w",
           mixed: "mixed_strength_6w",
         };
+        const requestedTemplateId =
+          settings.templateId || rawPreferences?.templateId || null;
         const templateId =
-          settings.templateId ||
-          rawPreferences?.templateId ||
-          templateByGoal[preferences.goal] ||
-          "mixed_strength_6w";
+          (preferences.goal === "masters_open" ||
+            preferences.blockType === "masters_open_preparation" ||
+            preferences.blockType === "competition_preparation") &&
+          (!requestedTemplateId ||
+            requestedTemplateId === "mixed_strength_6w" ||
+            requestedTemplateId === "masters_open_6w")
+            ? "masters_open_preparation_six_week"
+            : requestedTemplateId ||
+              templateByGoal[preferences.goal] ||
+              "mixed_strength_6w";
         const generator =
           v2Api.generateV2Program || v2Api.generateMixedStrengthBlock;
         const program = generator({
           programId,
           ownerId: remoteUser ? String(remoteUser.id || "") : null,
           generatedAt: now,
-          blockType: preferences.blockType,
+          blockType:
+            templateId === "masters_open_preparation_six_week"
+              ? "masters_open_preparation"
+              : preferences.blockType,
           goal: preferences.goal,
           sessionCount: preferences.frequency,
           templateId,
@@ -2402,10 +2466,9 @@
         ...current,
         activeV2ProgramId: program.id,
         activeProgrammingEngine: "v2",
-        selectedWeek: clamp(
-          Number(current.selectedWeek) || 1,
-          1,
-          program.trainingBlocks?.[0]?.durationWeeks || 6,
+        selectedWeek: resolveValidWeek(
+          getAvailableProgrammeWeeks(program),
+          current.selectedWeek,
         ),
       }));
       setPendingTimerResult(null);
@@ -7718,6 +7781,11 @@
               { value: "competition_preparation" },
               "Competition preparation",
             ),
+            h(
+              "option",
+              { value: "masters_open_preparation" },
+              "Masters/Open preparation",
+            ),
             h("option", { value: "deload" }, "Deload"),
           ),
         ),
@@ -7748,6 +7816,11 @@
               "option",
               { value: "masters_open_6w" },
               "Six-week Masters/Open preparation",
+            ),
+            h(
+              "option",
+              { value: "masters_open_preparation_six_week" },
+              "Six-week Masters/Open preparation (Open-specific)",
             ),
             h(
               "option",
@@ -8369,7 +8442,7 @@
         ? h(
             "p",
             { className: "notice", "data-testid": "v2-provisional" },
-            "Baseline preview — this section is rematerialized from progression state before it becomes actionable.",
+            "This session will be finalized when the training week becomes active.",
           )
         : null,
       session.status === "blocked"
@@ -8599,7 +8672,7 @@
                 { className: "muted-copy" },
                 week.weekNumber === 6
                   ? "Planned deload: reduced volume and controlled technical work."
-                  : "Future work remains a baseline preview until prior progression feedback is applied.",
+                  : "Future work is fully programmed and can be adjusted after progression feedback is recorded.",
               ),
             ),
             week.sessions.map((session) =>

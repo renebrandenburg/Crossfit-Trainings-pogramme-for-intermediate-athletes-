@@ -12,6 +12,7 @@ export type V2TemplateId =
   | "gymnastics_capacity_6w"
   | "bar_muscle_up_6w"
   | "masters_open_6w"
+  | "masters_open_preparation_six_week"
   | "olympic_lifting_6w"
   | "general_crossfit_6w"
   | "deload_1w";
@@ -78,6 +79,15 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
       blockType: "competition_preparation",
       name: "Six-week Masters/Open preparation block",
       goal: "Build durable strength, engine, and competition-specific capacity.",
+      supportedFrequencies: [2, 3, 4],
+      durationWeeks: 6,
+      deloadWeek: 6,
+    },
+    {
+      id: "masters_open_preparation_six_week",
+      blockType: "masters_open_preparation",
+      name: "Six-week Masters/Open preparation block",
+      goal: "Prepare pacing, gymnastics standards, barbell cycling, transitions, and repeatable Open-style efforts.",
       supportedFrequencies: [2, 3, 4],
       durationWeeks: 6,
       deloadWeek: 6,
@@ -797,6 +807,62 @@ export const PROGRAMME_TEMPLATES: Readonly<
       day2ConditioningMinutes: Math.max(8, week.day2ConditioningMinutes - 2),
     }),
   ),
+  masters_open_preparation_six_week: cloneProgrammeTemplate(
+    MIXED_STRENGTH_TEMPLATE,
+    (item) => {
+      if (item.role === "primary") {
+        return {
+          ...item,
+          trackType:
+            item.sessionNumber === 1 ? "front_squat" : "clean_and_jerk",
+          movementId:
+            item.sessionNumber === 1 ? "front_squat" : "hang_clean_and_jerk",
+          sets: Math.max(2, Math.min(3, item.sets - 1)),
+          reps: item.weekNumber >= 4 ? 2 : item.reps,
+          intensityMin:
+            item.weekNumber >= 4 ? 65 : Math.min(80, item.intensityMin ?? 70),
+          intensityMax:
+            item.weekNumber >= 4 ? 75 : Math.min(85, item.intensityMax ?? 80),
+          technicalIntent:
+            "Maintain strength without grinding before competition work.",
+          progressionObjective:
+            "Maintain useful strength while prioritizing Open readiness.",
+        };
+      }
+      return {
+        ...item,
+        trackType: "strict_pull",
+        movementFamilyId: "strict_pull",
+        movementId: "strict_pull_up",
+        intensityMethod: "bodyweight",
+        intensityMin: null,
+        intensityMax: null,
+        sets: Math.max(2, Math.min(3, item.sets)),
+        reps: null,
+        repRangeMin: 4,
+        repRangeMax: 8,
+        technicalIntent:
+          "Preserve gymnastics standards under controlled fatigue.",
+        progressionObjective:
+          "Build repeatable pulling capacity for Open-style workouts.",
+        stoppingRule: GYMNASTICS_STOP,
+      };
+    },
+    (week) => ({
+      theme:
+        week.weekNumber === 4
+          ? "Competition specificity and Open test"
+          : week.weekNumber === 5
+            ? "Peak simulation and repeatability"
+            : week.weekNumber === 6
+              ? "Taper and readiness"
+              : `Open preparation: ${week.theme}`,
+      day1ConditioningMinutes:
+        week.weekNumber === 6 ? 8 : week.weekNumber >= 4 ? 14 : 12,
+      day2ConditioningMinutes:
+        week.weekNumber === 6 ? 8 : week.weekNumber >= 4 ? 10 : 12,
+    }),
+  ),
   olympic_lifting_6w: cloneProgrammeTemplate(
     MIXED_STRENGTH_TEMPLATE,
     (item) => {
@@ -910,6 +976,32 @@ export function getV2ProgrammeTemplate(
   const template = PROGRAMME_TEMPLATES[id];
   if (!template) throw new Error(`UNSUPPORTED_TEMPLATE:${id}`);
   return template;
+}
+
+export function getV2TemplateForBlockType(
+  blockType: TrainingBlockType,
+): V2TemplateDefinition {
+  switch (blockType) {
+    case "masters_open_preparation":
+      return getV2TemplateDefinition("masters_open_preparation_six_week");
+    case "competition_preparation":
+      return getV2TemplateDefinition("masters_open_6w");
+    case "mixed_strength":
+      return getV2TemplateDefinition("mixed_strength_6w");
+    case "aerobic_capacity":
+      return getV2TemplateDefinition("endurance_capacity_6w");
+    case "gymnastics_capacity":
+      return getV2TemplateDefinition("gymnastics_capacity_6w");
+    case "olympic_lifting_development":
+      return getV2TemplateDefinition("olympic_lifting_6w");
+    case "deload":
+      return getV2TemplateDefinition("deload_1w");
+    case "front_squat_accumulation":
+    case "back_squat_strength":
+    case "snatch_development":
+    case "clean_and_jerk_development":
+      throw new Error(`UNSUPPORTED_BLOCK_TYPE:${blockType}`);
+  }
 }
 
 export function templateStepFor(

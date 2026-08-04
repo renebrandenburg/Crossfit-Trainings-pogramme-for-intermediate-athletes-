@@ -131,3 +131,40 @@ test("@critical V2 generates, renders, regenerates, completes, and reloads a con
     INVALID_PULL_HOLD,
   );
 });
+
+test("@critical Masters/Open V2 uses competition-specific sessions", async ({
+  page,
+}) => {
+  const app = new AppShell(page);
+  const builder = new PlanBuilderPage(page);
+  await app.open();
+  await builder.open();
+
+  await page.locator('select[name="v2Goal"]').selectOption("masters_open");
+  await page
+    .locator('select[name="v2TemplateId"]')
+    .selectOption("masters_open_preparation_six_week");
+  await page
+    .getByRole("button", { name: "Generate six-week V2 block" })
+    .click();
+
+  const programme = page.getByTestId("v2-programme");
+  await expect(programme).toContainText("Masters/Open");
+  await page.getByRole("button", { name: "Week 4" }).click();
+  await expect(programme).toContainText("Open-specific mixed-modal test");
+  await expect(programme).toContainText("Pacing:");
+  await expect(programme).toContainText("Standards:");
+  await expect(programme).toContainText("Score: rounds_reps");
+  await expect(programme).not.toContainText(
+    "Front-squat progression and snatch development",
+  );
+  await expect(programme).not.toContainText("Baseline preview");
+  await expect(programme).not.toContainText("rematerialized");
+
+  await app.navigate("Plan");
+  await expect(page.getByLabel("Programme week")).toHaveValue("4");
+  await page.reload();
+  await builder.open();
+  await expect(page.getByLabel("Programme week")).toHaveValue("4");
+  await expect(page.getByTestId("v2-programme")).toContainText("Pacing:");
+});

@@ -361,7 +361,7 @@
     if (
       !Number.isInteger(selectedWeek) ||
       selectedWeek < 1 ||
-      selectedWeek > 8 ||
+      selectedWeek > 52 ||
       !Number.isInteger(planSchemaVersion) ||
       planSchemaVersion < 1
     ) {

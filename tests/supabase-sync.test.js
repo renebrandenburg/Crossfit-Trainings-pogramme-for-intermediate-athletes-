@@ -102,7 +102,7 @@ test("athlete-state persistence retains V2 engine selection and generation prefe
 
 test("athlete-state validation rejects malformed and cross-account data", () => {
   assert.throws(
-    () => validateAthleteState(athleteState({ selectedWeek: 9 })),
+    () => validateAthleteState(athleteState({ selectedWeek: 53 })),
     (error) =>
       error.name === "ForgeHourSyncError" &&
       error.operation === "validate_remote_athlete_state",

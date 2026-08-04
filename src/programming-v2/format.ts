@@ -312,6 +312,15 @@ export function formatSessionForDisplay(
                 .join(", ")}.`,
             ]),
         `Stimulus: ${conditioning.intendedStimulus}`,
+        ...(conditioning.competitionMetadata
+          ? [
+              `Pacing: ${conditioning.competitionMetadata.pacingPlan.join(" ")}`,
+              `Set strategy: ${conditioning.competitionMetadata.setStrategy.join(" ")}`,
+              `Transitions: ${conditioning.competitionMetadata.transitionGoals.join(" ")}`,
+              `Score: ${conditioning.competitionMetadata.scoreType}. ${conditioning.competitionMetadata.targetScoreGuidance ?? "Record your result."}`,
+              `Standards: ${conditioning.competitionMetadata.movementStandards.join(" ")}`,
+            ]
+          : []),
         `Scaling: ${conditioning.scalingOptions
           .map(
             (option) =>

@@ -178,6 +178,7 @@ test("V2 template registry covers supported goals and frequencies", () => {
       "gymnastics_capacity_6w",
       "bar_muscle_up_6w",
       "masters_open_6w",
+      "masters_open_preparation_six_week",
       "olympic_lifting_6w",
       "general_crossfit_6w",
       "deload_1w",
@@ -227,6 +228,74 @@ test("programme types produce materially different six-week workout fingerprints
   assert.notEqual(
     programmes[0].trainingBlocks[0].trainingWeeks[0].sessions[0].objective,
     programmes[1].trainingBlocks[0].trainingWeeks[0].sessions[0].objective,
+  );
+});
+
+test("Masters/Open preparation uses a dedicated competition template", () => {
+  const mixed = v2.generateV2Program(
+    generationInput({
+      templateId: "mixed_strength_6w",
+      blockType: "mixed_strength",
+    }),
+  );
+  const open = v2.generateV2Program(
+    generationInput({
+      templateId: "masters_open_preparation_six_week",
+      blockType: "masters_open_preparation",
+    }),
+  );
+  const openSessions = sessions(open);
+  assert.equal(
+    open.trainingBlocks[0].templateId,
+    "masters_open_preparation_six_week",
+  );
+  assert.equal(open.trainingBlocks[0].blockType, "masters_open_preparation");
+  assert.notDeepEqual(
+    openSessions.map((session) => session.objective),
+    sessions(mixed).map((session) => session.objective),
+  );
+  assert.ok(
+    [4, 5].every((weekNumber) =>
+      open.trainingBlocks[0].trainingWeeks[weekNumber - 1].sessions.some(
+        (session) =>
+          session.conditioning?.competitionMetadata?.competitionStyle,
+      ),
+    ),
+  );
+  assert.ok(
+    openSessions.some(
+      (session) => session.conditioning?.competitionMetadata?.pacingPlan.length,
+    ),
+  );
+  assert.ok(
+    openSessions.some((session) =>
+      session.conditioning?.movements.some(
+        (movement) => movement.movementId === "hang_clean_and_jerk",
+      ),
+    ),
+  );
+  assert.ok(
+    openSessions.every(
+      (session) =>
+        session.provisional === false && session.estimatedDurationMinutes <= 65,
+    ),
+  );
+  assert.ok(
+    openSessions.every(
+      (session) => !JSON.stringify(session).includes("rematerialized"),
+    ),
+  );
+  assert.equal(v2.validateProgram(open).valid, true);
+});
+
+test("unsupported block types never silently resolve to mixed strength", () => {
+  assert.throws(
+    () => v2.getV2TemplateForBlockType("front_squat_accumulation"),
+    /UNSUPPORTED_BLOCK_TYPE/,
+  );
+  assert.equal(
+    v2.getV2TemplateForBlockType("masters_open_preparation").id,
+    "masters_open_preparation_six_week",
   );
 });
 

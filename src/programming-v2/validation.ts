@@ -851,6 +851,100 @@ export function validateTrainingBlock(
       );
     }
   }
+  if (block.blockType === "masters_open_preparation") {
+    if (block.templateId !== "masters_open_preparation_six_week") {
+      issues.push(
+        issue(
+          "OPEN_PREP_WRONG_TEMPLATE",
+          "error",
+          `${path}.templateId`,
+          "Open-preparation programmes require the dedicated Open template.",
+        ),
+      );
+    }
+    const sessions = block.trainingWeeks.flatMap((week) => week.sessions);
+    const conditioning = sessions
+      .map((session) => session.conditioning)
+      .filter(Boolean);
+    if (
+      !conditioning.some((item) => item?.competitionMetadata?.competitionStyle)
+    ) {
+      issues.push(
+        issue(
+          "OPEN_PREP_MISSING_COMPETITION_CONDITIONING",
+          "error",
+          path,
+          "Open preparation requires competition-specific conditioning.",
+        ),
+      );
+    }
+    if (
+      !conditioning.some((item) => item?.competitionMetadata?.pacingPlan.length)
+    ) {
+      issues.push(
+        issue(
+          "OPEN_PREP_MISSING_PACING",
+          "error",
+          path,
+          "Open preparation requires measurable pacing guidance.",
+        ),
+      );
+    }
+    if (
+      !conditioning.some(
+        (item) => item?.competitionMetadata?.movementStandards.length,
+      )
+    ) {
+      issues.push(
+        issue(
+          "OPEN_PREP_MISSING_STANDARDS",
+          "error",
+          path,
+          "Open preparation requires movement standards.",
+        ),
+      );
+    }
+    if (!conditioning.some((item) => item?.competitionMetadata?.scoreType)) {
+      issues.push(
+        issue(
+          "OPEN_PREP_MISSING_SCORING",
+          "error",
+          path,
+          "Open preparation requires score recording metadata.",
+        ),
+      );
+    }
+    for (const weekNumber of [4, 5]) {
+      const week = block.trainingWeeks.find(
+        (item) => item.weekNumber === weekNumber,
+      );
+      if (
+        !week?.sessions.some(
+          (session) =>
+            session.conditioning?.competitionMetadata?.competitionStyle,
+        )
+      ) {
+        issues.push(
+          issue(
+            "OPEN_PREP_MISSING_SIMULATION",
+            "error",
+            `${path}.trainingWeeks.${weekNumber}`,
+            "Weeks 4 and 5 require Open-specific test work.",
+          ),
+        );
+      }
+    }
+    if (sessions.some((session) => session.provisional)) {
+      issues.push(
+        issue(
+          "OPEN_PREP_INTERNAL_PROVISIONAL",
+          "error",
+          path,
+          "Open-preparation sessions must be actionable at creation.",
+        ),
+      );
+    }
+  }
   for (const track of block.progressionTracks) {
     for (const step of track.steps) {
       if (track.trackType === "snatch" && step.movementFamilyId !== "snatch") {

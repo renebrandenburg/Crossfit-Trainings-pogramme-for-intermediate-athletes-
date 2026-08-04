@@ -141,6 +141,7 @@ export function normalizeV2GenerationPreferences(
     "gymnastics_capacity",
     "aerobic_capacity",
     "competition_preparation",
+    "masters_open_preparation",
     "deload",
   ];
   const blockType = blockTypes.includes(String(value?.blockType))
@@ -161,7 +162,9 @@ export function normalizeV2GenerationPreferences(
     templateId:
       typeof value?.templateId === "string" && value.templateId.length > 0
         ? value.templateId
-        : "mixed_strength_6w",
+        : blockType === "masters_open_preparation"
+          ? "masters_open_preparation_six_week"
+          : "mixed_strength_6w",
   };
 }
 
