@@ -286,7 +286,11 @@
       "endurance",
       "gymnastics",
       "bar_muscle_up",
+      "competition",
+      "open",
       "masters_open",
+      "olympic_lifting",
+      "general_crossfit",
       "mixed",
     ];
     const blockTypes = [
@@ -299,6 +303,8 @@
       "gymnastics_capacity",
       "aerobic_capacity",
       "competition_preparation",
+      "open_preparation",
+      "masters_open_preparation",
       "deload",
     ];
     return {

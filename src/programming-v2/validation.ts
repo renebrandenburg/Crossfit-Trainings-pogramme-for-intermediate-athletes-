@@ -851,14 +851,37 @@ export function validateTrainingBlock(
       );
     }
   }
-  if (block.blockType === "masters_open_preparation") {
-    if (block.templateId !== "masters_open_preparation_six_week") {
+  if (
+    block.blockType === "competition_preparation" ||
+    block.blockType === "open_preparation" ||
+    block.blockType === "masters_open_preparation"
+  ) {
+    const expectedTemplateId =
+      block.blockType === "competition_preparation"
+        ? "competition_preparation_6w"
+        : block.blockType === "open_preparation"
+          ? "open_preparation_6w"
+          : "masters_open_preparation_6w";
+    const legacyMastersTemplate =
+      block.blockType === "masters_open_preparation" &&
+      block.templateId === "masters_open_preparation_six_week";
+    if (block.templateId !== expectedTemplateId && !legacyMastersTemplate) {
       issues.push(
         issue(
           "OPEN_PREP_WRONG_TEMPLATE",
           "error",
           `${path}.templateId`,
-          "Open-preparation programmes require the dedicated Open template.",
+          "Competition, Open, and Masters/Open programmes require their dedicated template.",
+        ),
+      );
+    }
+    if (legacyMastersTemplate) {
+      issues.push(
+        issue(
+          "LEGACY_OPEN_PREP_TEMPLATE",
+          "warning",
+          `${path}.templateId`,
+          "This Masters/Open programme uses the legacy shared template and should be regenerated as a new programme.",
         ),
       );
     }
@@ -867,6 +890,7 @@ export function validateTrainingBlock(
       .map((session) => session.conditioning)
       .filter(Boolean);
     if (
+      !legacyMastersTemplate &&
       !conditioning.some((item) => item?.competitionMetadata?.competitionStyle)
     ) {
       issues.push(
@@ -874,11 +898,12 @@ export function validateTrainingBlock(
           "OPEN_PREP_MISSING_COMPETITION_CONDITIONING",
           "error",
           path,
-          "Open preparation requires competition-specific conditioning.",
+          "Competition preparation requires competition-specific conditioning.",
         ),
       );
     }
     if (
+      !legacyMastersTemplate &&
       !conditioning.some((item) => item?.competitionMetadata?.pacingPlan.length)
     ) {
       issues.push(
@@ -886,11 +911,12 @@ export function validateTrainingBlock(
           "OPEN_PREP_MISSING_PACING",
           "error",
           path,
-          "Open preparation requires measurable pacing guidance.",
+          "Competition preparation requires measurable pacing guidance.",
         ),
       );
     }
     if (
+      !legacyMastersTemplate &&
       !conditioning.some(
         (item) => item?.competitionMetadata?.movementStandards.length,
       )
@@ -900,21 +926,28 @@ export function validateTrainingBlock(
           "OPEN_PREP_MISSING_STANDARDS",
           "error",
           path,
-          "Open preparation requires movement standards.",
+          "Competition preparation requires movement standards.",
         ),
       );
     }
-    if (!conditioning.some((item) => item?.competitionMetadata?.scoreType)) {
+    if (
+      !legacyMastersTemplate &&
+      !conditioning.some((item) => item?.competitionMetadata?.scoreType)
+    ) {
       issues.push(
         issue(
           "OPEN_PREP_MISSING_SCORING",
           "error",
           path,
-          "Open preparation requires score recording metadata.",
+          "Competition preparation requires score recording metadata.",
         ),
       );
     }
-    for (const weekNumber of [4, 5]) {
+    for (const weekNumber of legacyMastersTemplate
+      ? []
+      : block.blockType === "competition_preparation"
+        ? [5]
+        : [4, 5]) {
       const week = block.trainingWeeks.find(
         (item) => item.weekNumber === weekNumber,
       );
@@ -929,18 +962,21 @@ export function validateTrainingBlock(
             "OPEN_PREP_MISSING_SIMULATION",
             "error",
             `${path}.trainingWeeks.${weekNumber}`,
-            "Weeks 4 and 5 require Open-specific test work.",
+            "The required competition or Open simulation week is missing.",
           ),
         );
       }
     }
-    if (sessions.some((session) => session.provisional)) {
+    if (
+      !legacyMastersTemplate &&
+      sessions.some((session) => session.provisional)
+    ) {
       issues.push(
         issue(
           "OPEN_PREP_INTERNAL_PROVISIONAL",
           "error",
           path,
-          "Open-preparation sessions must be actionable at creation.",
+          "Competition, Open, and Masters/Open sessions must be actionable at creation.",
         ),
       );
     }
@@ -1133,4 +1169,19 @@ export function assertValidProgram(program: ProgramV2): ProgramV2 {
     throw error;
   }
   return { ...program, validation };
+}
+
+export function isLegacySharedTemplateProgram(program: ProgramV2): boolean {
+  return program.trainingBlocks.some(
+    (block) =>
+      [
+        "competition_preparation",
+        "open_preparation",
+        "masters_open_preparation",
+      ].includes(block.blockType) &&
+      (!block.templateId ||
+        ["masters_open_6w", "masters_open_preparation_six_week"].includes(
+          block.templateId,
+        )),
+  );
 }

@@ -24,6 +24,8 @@ export type V2ProgrammingGoal =
   | "endurance"
   | "gymnastics"
   | "bar_muscle_up"
+  | "competition"
+  | "open"
   | "masters_open"
   | "olympic_lifting"
   | "general_crossfit"
@@ -83,6 +85,7 @@ export type TrainingBlockType =
   | "gymnastics_capacity"
   | "aerobic_capacity"
   | "competition_preparation"
+  | "open_preparation"
   | "masters_open_preparation"
   | "deload";
 
@@ -609,7 +612,7 @@ export interface ValidationResult {
 export interface ProgramV2 {
   schemaVersion: typeof PROGRAM_SCHEMA_VERSION;
   engineVersion: typeof ENGINE_VERSION;
-  templateVersion: typeof TEMPLATE_VERSION;
+  templateVersion: string;
   catalogVersion: typeof CATALOG_VERSION;
   validatorVersion: typeof VALIDATOR_VERSION;
   id: string;

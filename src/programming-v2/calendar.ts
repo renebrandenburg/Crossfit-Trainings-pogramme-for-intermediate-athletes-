@@ -124,6 +124,8 @@ export function normalizeV2GenerationPreferences(
     "endurance",
     "gymnastics",
     "bar_muscle_up",
+    "competition",
+    "open",
     "masters_open",
     "olympic_lifting",
     "general_crossfit",
@@ -141,6 +143,7 @@ export function normalizeV2GenerationPreferences(
     "gymnastics_capacity",
     "aerobic_capacity",
     "competition_preparation",
+    "open_preparation",
     "masters_open_preparation",
     "deload",
   ];
@@ -162,9 +165,13 @@ export function normalizeV2GenerationPreferences(
     templateId:
       typeof value?.templateId === "string" && value.templateId.length > 0
         ? value.templateId
-        : blockType === "masters_open_preparation"
-          ? "masters_open_preparation_six_week"
-          : "mixed_strength_6w",
+        : blockType === "competition_preparation"
+          ? "competition_preparation_6w"
+          : blockType === "open_preparation"
+            ? "open_preparation_6w"
+            : blockType === "masters_open_preparation"
+              ? "masters_open_preparation_6w"
+              : "mixed_strength_6w",
   };
 }
 

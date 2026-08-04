@@ -143,7 +143,7 @@ test("@critical Masters/Open V2 uses competition-specific sessions", async ({
   await page.locator('select[name="v2Goal"]').selectOption("masters_open");
   await page
     .locator('select[name="v2TemplateId"]')
-    .selectOption("masters_open_preparation_six_week");
+    .selectOption("masters_open_preparation_6w");
   await page
     .getByRole("button", { name: "Generate six-week V2 block" })
     .click();
@@ -151,7 +151,7 @@ test("@critical Masters/Open V2 uses competition-specific sessions", async ({
   const programme = page.getByTestId("v2-programme");
   await expect(programme).toContainText("Masters/Open");
   await page.getByRole("button", { name: "Week 4" }).click();
-  await expect(programme).toContainText("Open-specific mixed-modal test");
+  await expect(programme).toContainText("Masters Open simulation");
   await expect(programme).toContainText("Pacing:");
   await expect(programme).toContainText("Standards:");
   await expect(programme).toContainText("Score: rounds_reps");
@@ -165,6 +165,50 @@ test("@critical Masters/Open V2 uses competition-specific sessions", async ({
   await expect(page.getByLabel("Programme week")).toHaveValue("4");
   await page.reload();
   await builder.open();
-  await expect(page.getByLabel("Programme week")).toHaveValue("4");
   await expect(page.getByTestId("v2-programme")).toContainText("Pacing:");
+});
+
+test("@critical V2 families produce different Week 4 programming", async ({
+  page,
+}) => {
+  const app = new AppShell(page);
+  const builder = new PlanBuilderPage(page);
+  await app.open();
+  await builder.open();
+
+  const families = [
+    ["mixed", "mixed_strength", "mixed_strength_6w"],
+    ["competition", "competition_preparation", "competition_preparation_6w"],
+    ["open", "open_preparation", "open_preparation_6w"],
+    ["masters_open", "masters_open_preparation", "masters_open_preparation_6w"],
+  ];
+  const weekFour = [];
+  for (const [goal, blockType, templateId] of families) {
+    await page.locator('select[name="v2Goal"]').selectOption(goal);
+    await page.locator('select[name="v2BlockType"]').selectOption(blockType);
+    await page.locator('select[name="v2TemplateId"]').selectOption(templateId);
+    await page.getByRole("button", { name: /Generate .*block/ }).click();
+    const state = await readAppState(page);
+    const programme = activeV2Program(state);
+    const week = programme.trainingBlocks[0].trainingWeeks[3];
+    weekFour.push({
+      templateId: programme.trainingBlocks[0].templateId,
+      theme: week.theme,
+      objectives: week.sessions.map((session) => session.objective),
+      formats: week.sessions.map((session) => session.conditioning?.format),
+    });
+    if (templateId !== families[families.length - 1][2]) {
+      await page
+        .getByRole("button", { name: "Create new V2 programme" })
+        .click();
+    }
+  }
+  expect(new Set(weekFour.map((item) => item.templateId)).size).toBe(4);
+  expect(new Set(weekFour.map((item) => item.theme)).size).toBe(4);
+  expect(new Set(weekFour.map((item) => item.objectives.join("|"))).size).toBe(
+    4,
+  );
+  await page.reload();
+  await builder.open();
+  await expect(page.getByTestId("v2-programme")).toContainText("Masters/Open");
 });

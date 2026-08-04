@@ -2003,7 +2003,9 @@
           endurance: "endurance_capacity_6w",
           gymnastics: "gymnastics_capacity_6w",
           bar_muscle_up: "bar_muscle_up_6w",
-          masters_open: "masters_open_preparation_six_week",
+          competition: "competition_preparation_6w",
+          open: "open_preparation_6w",
+          masters_open: "masters_open_preparation_6w",
           olympic_lifting: "olympic_lifting_6w",
           general_crossfit: "general_crossfit_6w",
           mixed: "mixed_strength_6w",
@@ -2011,16 +2013,22 @@
         const requestedTemplateId =
           settings.templateId || rawPreferences?.templateId || null;
         const templateId =
-          (preferences.goal === "masters_open" ||
-            preferences.blockType === "masters_open_preparation" ||
-            preferences.blockType === "competition_preparation") &&
-          (!requestedTemplateId ||
-            requestedTemplateId === "mixed_strength_6w" ||
-            requestedTemplateId === "masters_open_6w")
-            ? "masters_open_preparation_six_week"
-            : requestedTemplateId ||
-              templateByGoal[preferences.goal] ||
-              "mixed_strength_6w";
+          preferences.goal === "competition" ||
+          preferences.blockType === "competition_preparation"
+            ? "competition_preparation_6w"
+            : preferences.goal === "open" ||
+                preferences.blockType === "open_preparation"
+              ? "open_preparation_6w"
+              : (preferences.goal === "masters_open" ||
+                    preferences.blockType === "masters_open_preparation") &&
+                  (!requestedTemplateId ||
+                    requestedTemplateId === "mixed_strength_6w" ||
+                    requestedTemplateId === "masters_open_6w" ||
+                    requestedTemplateId === "masters_open_preparation_six_week")
+                ? "masters_open_preparation_6w"
+                : requestedTemplateId ||
+                  templateByGoal[preferences.goal] ||
+                  "mixed_strength_6w";
         const generator =
           v2Api.generateV2Program || v2Api.generateMixedStrengthBlock;
         const program = generator({
@@ -2028,9 +2036,13 @@
           ownerId: remoteUser ? String(remoteUser.id || "") : null,
           generatedAt: now,
           blockType:
-            templateId === "masters_open_preparation_six_week"
-              ? "masters_open_preparation"
-              : preferences.blockType,
+            templateId === "competition_preparation_6w"
+              ? "competition_preparation"
+              : templateId === "open_preparation_6w"
+                ? "open_preparation"
+                : templateId === "masters_open_preparation_6w"
+                  ? "masters_open_preparation"
+                  : preferences.blockType,
           goal: preferences.goal,
           sessionCount: preferences.frequency,
           templateId,
@@ -2045,7 +2057,13 @@
           },
           equipment: preferences.availableEquipment,
           restrictions,
-          competitionFocus: preferences.goal === "masters_open" ? "Open" : null,
+          competitionFocus:
+            preferences.goal === "competition"
+              ? "Local competition"
+              : preferences.goal === "open" ||
+                  preferences.goal === "masters_open"
+                ? "Open"
+                : null,
           skillPriorities:
             preferences.goal === "olympic_lifting"
               ? ["snatch", "clean_and_jerk"]
@@ -7747,6 +7765,8 @@
               { value: "masters_open" },
               "Masters / Open preparation",
             ),
+            h("option", { value: "competition" }, "Competition preparation"),
+            h("option", { value: "open" }, "Open preparation"),
             h(
               "option",
               { value: "olympic_lifting" },
@@ -7781,6 +7801,7 @@
               { value: "competition_preparation" },
               "Competition preparation",
             ),
+            h("option", { value: "open_preparation" }, "Open preparation"),
             h(
               "option",
               { value: "masters_open_preparation" },
@@ -7814,13 +7835,18 @@
             ),
             h(
               "option",
-              { value: "masters_open_6w" },
-              "Six-week Masters/Open preparation",
+              { value: "competition_preparation_6w" },
+              "Six-week competition preparation",
             ),
             h(
               "option",
-              { value: "masters_open_preparation_six_week" },
-              "Six-week Masters/Open preparation (Open-specific)",
+              { value: "open_preparation_6w" },
+              "Six-week Open preparation",
+            ),
+            h(
+              "option",
+              { value: "masters_open_preparation_6w" },
+              "Six-week Masters/Open preparation",
             ),
             h(
               "option",
@@ -8620,6 +8646,21 @@
             ? `${programmeSummary.weeks} weeks · ${programmeSummary.sessions} sessions · ${programmeSummary.exercises} exercises`
             : "Choose two weekly training days, available equipment, and your current maxes.",
         ),
+        program && v2Api.isLegacySharedTemplateProgram?.(program)
+          ? h(
+              "p",
+              { className: "notice", "data-testid": "v2-outdated-template" },
+              "This programme was created with an older shared template. Create a new programme to use the updated programming structure; the original remains unchanged.",
+            )
+          : null,
+        window.ForgeHourV2Debug === true ||
+          window.localStorage.getItem("forge-hour-v2-debug") === "true"
+          ? h(
+              "p",
+              { className: "muted-copy", "data-testid": "v2-template-debug" },
+              `Programme Type: ${block?.blockType || "unknown"} · Template: ${block?.templateId || "unknown"} · Template Version: ${program?.templateVersion || "unknown"}`,
+            )
+          : null,
         program
           ? h(
               "button",

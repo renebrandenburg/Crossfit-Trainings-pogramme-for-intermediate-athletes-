@@ -154,8 +154,11 @@ function createProgressionExercise(
   if (
     !movementAllowed(
       movement.id,
-      programmeType === "gymnastics_capacity_6w" &&
-        movement.category === "gymnastics"
+      [
+        "gymnastics_capacity_6w",
+        "open_preparation_6w",
+        "masters_open_preparation_6w",
+      ].includes(programmeType) && movement.category === "gymnastics"
         ? "secondary"
         : templateStep.role,
       input.equipment,
@@ -612,6 +615,193 @@ function createOpenPreparationConditioning(
   };
 }
 
+function createCompetitionConditioning(
+  input: GenerateProgramInput,
+  sessionId: string,
+  week: MixedStrengthWeekTemplate,
+  sessionNumber: 1 | 2,
+  variantSeed: string,
+): ConditioningPrescription {
+  const engineId = engineMovementId(input, `${variantSeed}:competition-engine`);
+  const id = stableUuid(sessionId, "conditioning", "competition", variantSeed);
+  const base = {
+    id,
+    sessionId,
+    intervalSeconds: null,
+    executionMode: null,
+    stations: [],
+    scalingOptions: measurableConditioningScaling(),
+    competitionMetadata: {
+      competitionStyle: true,
+      movementStandards: [
+        "Complete every repetition to the stated competition range of motion.",
+        "Record loads, times, and event scores before starting the next event.",
+      ],
+      pacingPlan: [
+        "Open the first event below maximal effort so later events remain executable.",
+        "Keep event transitions deliberate and under 90 seconds when possible.",
+      ],
+      setStrategy: [
+        "Use heavier, planned sets for lifting events and sustainable sets for conditioning events.",
+      ],
+      transitionGoals: [
+        "Practise moving from lifting to mixed-modal work without losing setup quality.",
+      ],
+      scoreType: "time" as const,
+      targetScoreGuidance:
+        "Record each event separately and review recovery between events.",
+      tieBreakPoints:
+        week.weekNumber === 5
+          ? ["Record the finish time of the first event."]
+          : [],
+    },
+  };
+  const machineTarget =
+    engineId === "run" ? { distanceMeters: 200 } : { calories: 10 };
+  const eventOne = [
+    conditioningMovement(engineId, machineTarget),
+    conditioningMovement("hang_clean_and_jerk", { reps: 5 }),
+    conditioningMovement("burpee", { reps: 8 }),
+  ];
+  const eventTwo = [
+    conditioningMovement("hang_power_snatch", { reps: 5 }),
+    conditioningMovement("box_step_up", { reps: 10 }),
+    conditioningMovement(engineId, { durationSeconds: 60 }),
+  ];
+  if (week.weekNumber === 6) {
+    return {
+      ...base,
+      format: "intervals",
+      durationMinutes: 8,
+      rounds: 3,
+      workSeconds: 30,
+      restSeconds: 90,
+      timeCapMinutes: null,
+      intendedStimulus:
+        "Taper: retain event rhythm and technical speed without accumulating fatigue.",
+      targetDurationMin: 6,
+      targetDurationMax: 8,
+      targetRpe: 5,
+      movements: [conditioningMovement(engineId, { durationSeconds: 30 })],
+      estimatedDurationMinutes: 8,
+    };
+  }
+  if (sessionNumber === 1) {
+    return {
+      ...base,
+      format:
+        week.weekNumber === 2
+          ? "emom"
+          : week.weekNumber === 3
+            ? "amrap"
+            : "for_time",
+      durationMinutes:
+        week.weekNumber === 2 ? 12 : week.weekNumber === 3 ? 14 : null,
+      rounds: week.weekNumber === 3 ? null : week.weekNumber === 2 ? 4 : 4,
+      timeCapMinutes:
+        week.weekNumber === 2 || week.weekNumber === 3
+          ? null
+          : week.weekNumber === 5
+            ? 18
+            : 14,
+      workSeconds: week.weekNumber === 2 ? 45 : null,
+      restSeconds: week.weekNumber === 2 ? 45 : null,
+      intervalSeconds: week.weekNumber === 2 ? 60 : null,
+      executionMode: week.weekNumber === 2 ? "rotate" : null,
+      stations:
+        week.weekNumber === 2
+          ? eventOne.map((movement, index) => ({ minute: index + 1, movement }))
+          : [],
+      intendedStimulus:
+        "Competition event: heavier lifting, event standards, and mixed-modal output with a recorded score.",
+      targetDurationMin: 8,
+      targetDurationMax: week.weekNumber === 5 ? 18 : 14,
+      targetRpe: 8,
+      movements: eventOne,
+      estimatedDurationMinutes:
+        week.weekNumber === 5
+          ? 18
+          : week.weekNumber === 2
+            ? 12
+            : week.weekNumber === 3
+              ? 14
+              : 14,
+    };
+  }
+  return {
+    ...base,
+    format: week.weekNumber === 3 ? "for_time" : "intervals",
+    durationMinutes: week.day2ConditioningMinutes,
+    rounds: week.weekNumber === 3 ? 3 : 5,
+    timeCapMinutes: week.weekNumber === 3 ? 12 : null,
+    workSeconds: week.weekNumber === 3 ? null : 90,
+    restSeconds: week.weekNumber === 3 ? null : 60,
+    intendedStimulus:
+      "Second event: Olympic-lifting, sprint, or endurance emphasis with recovery between efforts.",
+    targetDurationMin: null,
+    targetDurationMax: null,
+    targetRpe: 7,
+    movements: eventTwo,
+    estimatedDurationMinutes: week.day2ConditioningMinutes,
+  };
+}
+
+function createMastersOpenConditioning(
+  input: GenerateProgramInput,
+  sessionId: string,
+  week: MixedStrengthWeekTemplate,
+  sessionNumber: 1 | 2,
+  variantSeed: string,
+): ConditioningPrescription {
+  const base = createOpenPreparationConditioning(
+    input,
+    sessionId,
+    week,
+    sessionNumber,
+    `${variantSeed}:masters`,
+  );
+  return {
+    ...base,
+    id: stableUuid(sessionId, "conditioning", "masters", variantSeed),
+    format: sessionNumber === 1 ? "intervals" : "amrap",
+    restSeconds:
+      sessionNumber === 1
+        ? Math.max(60, base.restSeconds ?? 60)
+        : base.restSeconds,
+    rounds:
+      base.rounds == null ? null : Math.max(2, Math.ceil(base.rounds * 0.75)),
+    durationMinutes:
+      base.durationMinutes == null
+        ? null
+        : Math.max(7, Math.round(base.durationMinutes * 0.75)),
+    timeCapMinutes:
+      base.timeCapMinutes == null
+        ? null
+        : Math.max(10, Math.round(base.timeCapMinutes * 0.8)),
+    workSeconds:
+      base.workSeconds == null ? null : Math.min(90, base.workSeconds),
+    targetRpe: Math.min(7, base.targetRpe ?? 6),
+    intendedStimulus:
+      "Masters repeatability: controlled fatigue, lower impact, reduced grip accumulation, and deliberate recovery.",
+    estimatedDurationMinutes: base.estimatedDurationMinutes,
+    competitionMetadata: base.competitionMetadata
+      ? {
+          ...base.competitionMetadata,
+          pacingPlan: [
+            ...base.competitionMetadata.pacingPlan,
+            "Use the recovery interval fully; do not accumulate shoulder or grip fatigue.",
+          ],
+          transitionGoals: [
+            ...base.competitionMetadata.transitionGoals,
+            "Prefer step-ups and controlled transitions when impact or recovery is limited.",
+          ],
+          targetScoreGuidance:
+            "Record the score together with recovery quality, shoulder response, and scaling used.",
+        }
+      : null,
+  };
+}
+
 function engineMovementId(input: GenerateProgramInput, seed: string): string {
   const candidates = ["row", "bike", "ski", "run"].filter((movementId) =>
     movementAllowed(
@@ -649,8 +839,26 @@ function createConditioning(
   variantSeed: string,
   programmeType = "mixed_strength_6w",
 ): ConditioningPrescription {
-  if (programmeType === "masters_open_preparation_six_week") {
+  if (programmeType === "competition_preparation_6w") {
+    return createCompetitionConditioning(
+      input,
+      sessionId,
+      week,
+      sessionNumber,
+      variantSeed,
+    );
+  }
+  if (programmeType === "open_preparation_6w") {
     return createOpenPreparationConditioning(
+      input,
+      sessionId,
+      week,
+      sessionNumber,
+      variantSeed,
+    );
+  }
+  if (programmeType === "masters_open_preparation_6w") {
+    return createMastersOpenConditioning(
       input,
       sessionId,
       week,
@@ -1092,13 +1300,31 @@ function recalculateSession(session: TrainingSession): TrainingSession {
     warmupMinutes: session.warmup.durationMinutes,
     cooldownMinutes: 0,
   });
-  const sections = createSections(
+  let sections = createSections(
     session.id,
     session.warmup,
     session.exercises,
     session.conditioning as ConditioningPrescription,
     transitions,
   );
+  const sectionTotal = sections.reduce(
+    (total, section) => total + section.estimatedDurationMinutes,
+    0,
+  );
+  const sectionDelta = estimate.totalMinutes - sectionTotal;
+  if (Math.abs(sectionDelta) > 0.1) {
+    sections = sections.map((section, index) =>
+      index === sections.length - 1
+        ? {
+            ...section,
+            estimatedDurationMinutes: Math.max(
+              0,
+              section.estimatedDurationMinutes + sectionDelta,
+            ),
+          }
+        : section,
+    );
+  }
   return {
     ...session,
     equipmentTransitions: transitions,
@@ -1228,6 +1454,18 @@ function sessionObjective(programmeType: string, sessionNumber: 1 | 2): string {
       "Open-specific mixed-modal test, gymnastics standards, and controlled barbell cycling",
       "Repeatability intervals, pacing practice, and recovery-aware capacity",
     ],
+    competition_preparation_6w: [
+      "Strength event and Olympic-lifting competition readiness",
+      "Multiple event styles, recovery, and mixed-modal performance",
+    ],
+    open_preparation_6w: [
+      "Open baseline, pacing, and gymnastics under fatigue",
+      "Open simulation, barbell cycling, and repeat intervals",
+    ],
+    masters_open_preparation_6w: [
+      "Masters baseline, controlled fatigue, and movement standards",
+      "Masters repeatability, recovery management, and taper readiness",
+    ],
     olympic_lifting_6w: [
       "Snatch positions, receiving strength, and barbell speed",
       "Clean-and-jerk technique, pulls, and overhead stability",
@@ -1265,6 +1503,21 @@ function sessionStimulus(programmeType: string, sessionNumber: 1 | 2): string {
       ? "Competition-specific Open work with pacing, movement standards, transitions, and barbell cycling."
       : "Repeatable Open capacity with gymnastics under fatigue, controlled recovery, and score-focused execution.";
   }
+  if (programmeType === "competition_preparation_6w") {
+    return sessionNumber === 1
+      ? "Competition event preparation with heavier lifting, standards, and mixed-modal output."
+      : "Event diversity with Olympic lifting, sprint or endurance work, and recovery between efforts.";
+  }
+  if (programmeType === "open_preparation_6w") {
+    return sessionNumber === 1
+      ? "Open pacing, movement standards, gymnastics under fatigue, and transitions."
+      : "Open repeatability with barbell cycling, controlled gymnastics volume, and recovery intervals.";
+  }
+  if (programmeType === "masters_open_preparation_6w") {
+    return sessionNumber === 1
+      ? "Masters Open preparation with controlled fatigue, lower impact, and standards practice."
+      : "Masters repeatability with recovery management, shoulder health, and trunk control.";
+  }
   return sessionNumber === 1
     ? "Lower-body strength, technical lifting, and mixed-modal conditioning."
     : "Technical lifting, gymnastics capacity, and controlled aerobic conditioning.";
@@ -1276,7 +1529,7 @@ function buildGenerationRequest(
 ): GenerationRequest {
   return {
     programmeType: template.id,
-    programmeVersion: TEMPLATE_VERSION,
+    programmeVersion: template.templateVersion,
     cycleLengthWeeks: template.durationWeeks,
     sessionsPerWeek: input.sessionCount ?? 2,
     athleteLevel: input.athleteLevel,
@@ -1397,6 +1650,27 @@ function createSession(
     sessionNumber,
     conditioning.estimatedDurationMinutes,
   );
+  const specializedStress: SessionStress =
+    programmeType === "competition_preparation_6w"
+      ? {
+          ...stress,
+          lowerBodyVolumeScore: Math.min(10, stress.lowerBodyVolumeScore + 2),
+          skillComplexityScore: Math.min(10, stress.skillComplexityScore + 1),
+          totalStressScore: stress.totalStressScore + 3,
+        }
+      : programmeType === "masters_open_preparation_6w"
+        ? {
+            ...stress,
+            lowerBodyVolumeScore: Math.max(2, stress.lowerBodyVolumeScore - 2),
+            upperBodyVolumeScore: Math.max(2, stress.upperBodyVolumeScore - 2),
+            gripVolumeScore: Math.max(2, stress.gripVolumeScore - 2),
+            conditioningStressScore: Math.max(
+              2,
+              stress.conditioningStressScore - 1,
+            ),
+            totalStressScore: Math.max(8, stress.totalStressScore - 7),
+          }
+        : stress;
   const base: TrainingSession = {
     id: sessionId,
     trainingWeekId,
@@ -1405,12 +1679,23 @@ function createSession(
     weekNumber: week.weekNumber,
     objective: sessionObjective(programmeType, sessionNumber),
     intendedStimulus: sessionStimulus(programmeType, sessionNumber),
-    expectedFatigue: expectedFatigue(stress),
-    fatigueFocus: sessionNumber === 1 ? "lower_body" : "mixed",
+    expectedFatigue: expectedFatigue(specializedStress),
+    fatigueFocus:
+      programmeType === "masters_open_preparation_6w"
+        ? "recovery"
+        : sessionNumber === 1
+          ? "lower_body"
+          : "mixed",
     communityWorkoutAdvice:
-      sessionNumber === 1
-        ? "Avoid placing this session directly after a heavy squat or high-volume jumping community workout."
-        : "Avoid placing this session directly after grip-intensive pulling or high-volume overhead work.",
+      programmeType === "competition_preparation_6w"
+        ? "Allow full recovery before the next event; record the event score and lifting quality."
+        : programmeType === "open_preparation_6w"
+          ? "Protect movement standards and transitions; avoid adding extra grip work before this session."
+          : programmeType === "masters_open_preparation_6w"
+            ? "Use the recovery interval fully and reduce impact or grip volume at the first sign of technical decline."
+            : sessionNumber === 1
+              ? "Avoid placing this session directly after a heavy squat or high-volume jumping community workout."
+              : "Avoid placing this session directly after grip-intensive pulling or high-volume overhead work.",
     durationTargetMinutes:
       week.weekNumber === 6 ? 52 : sessionNumber === 1 ? 57 : 59,
     estimatedDurationMinutes: 0,
@@ -1424,7 +1709,7 @@ function createSession(
     conditioning,
     equipmentTransitions: [],
     sections: [],
-    stress,
+    stress: specializedStress,
     feedback: null,
     maxTestPrescription: null,
     createdAt: input.generatedAt,
@@ -1632,7 +1917,7 @@ export function generateMixedStrengthBlock(
   const draft: ProgramV2 = {
     schemaVersion: PROGRAM_SCHEMA_VERSION,
     engineVersion: ENGINE_VERSION,
-    templateVersion: TEMPLATE_VERSION,
+    templateVersion: template.templateVersion,
     catalogVersion: CATALOG_VERSION,
     validatorVersion: VALIDATOR_VERSION,
     id: input.programId,
@@ -1646,7 +1931,7 @@ export function generateMixedStrengthBlock(
     generationSource: "generated",
     generationRequest: buildGenerationRequest(input, template),
     generationFingerprint: "pending",
-    generatorVersion: TEMPLATE_VERSION,
+    generatorVersion: template.templateVersion,
     validation: {
       valid: false,
       validatorVersion: VALIDATOR_VERSION,
@@ -1670,6 +1955,19 @@ export function generateMixedStrengthBlock(
 export function generateV2Program(input: GenerateProgramInput): ProgramV2 {
   if (!input.templateId)
     throw new Error("GENERATION_REQUEST_MISSING_PROGRAMME_TYPE");
+  const template = getV2TemplateDefinition(input.templateId);
+  if (
+    [
+      "competition_preparation_6w",
+      "open_preparation_6w",
+      "masters_open_preparation_6w",
+    ].includes(template.id) &&
+    input.blockType !== template.blockType
+  ) {
+    throw new Error(
+      `TEMPLATE_BLOCK_TYPE_MISMATCH:${template.id}:${String(input.blockType)}`,
+    );
+  }
   return generateMixedStrengthBlock(input);
 }
 

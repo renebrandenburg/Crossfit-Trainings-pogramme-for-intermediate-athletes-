@@ -107,7 +107,7 @@ export const MOVEMENTS: ReadonlyArray<Movement> = Object.freeze([
     familyId: "snatch",
     category: "olympic_lifting",
     difficulty: "intermediate",
-    allowedContexts: ["primary", "secondary", "skill"],
+    allowedContexts: ["primary", "secondary", "skill", "conditioning"],
     loadable: true,
     requiresPercentageReference: true,
     equipment: ["barbell"],

@@ -12,6 +12,9 @@ export type V2TemplateId =
   | "gymnastics_capacity_6w"
   | "bar_muscle_up_6w"
   | "masters_open_6w"
+  | "competition_preparation_6w"
+  | "open_preparation_6w"
+  | "masters_open_preparation_6w"
   | "masters_open_preparation_six_week"
   | "olympic_lifting_6w"
   | "general_crossfit_6w"
@@ -25,6 +28,7 @@ export interface V2TemplateDefinition {
   supportedFrequencies: ReadonlyArray<2 | 3 | 4>;
   durationWeeks: number;
   deloadWeek: number | null;
+  templateVersion: string;
 }
 
 export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
@@ -37,6 +41,7 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
       supportedFrequencies: [2, 3, 4],
       durationWeeks: 6,
       deloadWeek: 6,
+      templateVersion: "mixed-strength-6w-v1",
     },
     {
       id: "mixed_strength_8w_testing",
@@ -46,6 +51,7 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
       supportedFrequencies: [2, 3, 4],
       durationWeeks: 8,
       deloadWeek: 7,
+      templateVersion: "mixed-strength-8w-testing-v1",
     },
     {
       id: "endurance_capacity_6w",
@@ -55,6 +61,7 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
       supportedFrequencies: [2, 3, 4],
       durationWeeks: 6,
       deloadWeek: 6,
+      templateVersion: "aerobic-capacity-6w-v1",
     },
     {
       id: "gymnastics_capacity_6w",
@@ -64,6 +71,7 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
       supportedFrequencies: [2, 3, 4],
       durationWeeks: 6,
       deloadWeek: 6,
+      templateVersion: "gymnastics-capacity-6w-v1",
     },
     {
       id: "bar_muscle_up_6w",
@@ -73,6 +81,7 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
       supportedFrequencies: [2, 3, 4],
       durationWeeks: 6,
       deloadWeek: 6,
+      templateVersion: "bar-muscle-up-6w-v1",
     },
     {
       id: "masters_open_6w",
@@ -82,6 +91,7 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
       supportedFrequencies: [2, 3, 4],
       durationWeeks: 6,
       deloadWeek: 6,
+      templateVersion: "competition-preparation-legacy-v1",
     },
     {
       id: "masters_open_preparation_six_week",
@@ -91,6 +101,37 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
       supportedFrequencies: [2, 3, 4],
       durationWeeks: 6,
       deloadWeek: 6,
+      templateVersion: "masters-open-preparation-v1",
+    },
+    {
+      id: "competition_preparation_6w",
+      blockType: "competition_preparation",
+      name: "Six-week competition preparation block",
+      goal: "Prepare heavier lifting, diverse event formats, recovery between events, and mixed-modal competition performance.",
+      supportedFrequencies: [2, 3, 4],
+      durationWeeks: 6,
+      deloadWeek: 6,
+      templateVersion: "competition-preparation-6w-v1",
+    },
+    {
+      id: "open_preparation_6w",
+      blockType: "open_preparation",
+      name: "Six-week Open preparation block",
+      goal: "Prepare pacing, movement standards, gymnastics under fatigue, barbell cycling, transitions, and Open simulations.",
+      supportedFrequencies: [2, 3, 4],
+      durationWeeks: 6,
+      deloadWeek: 6,
+      templateVersion: "open-preparation-6w-v1",
+    },
+    {
+      id: "masters_open_preparation_6w",
+      blockType: "masters_open_preparation",
+      name: "Six-week Masters/Open preparation block",
+      goal: "Prepare Masters athletes for the Open with controlled fatigue, recovery management, standards, and repeatability.",
+      supportedFrequencies: [2, 3, 4],
+      durationWeeks: 6,
+      deloadWeek: 6,
+      templateVersion: "masters-open-preparation-6w-v1",
     },
     {
       id: "olympic_lifting_6w",
@@ -100,6 +141,7 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
       supportedFrequencies: [2, 3, 4],
       durationWeeks: 6,
       deloadWeek: 6,
+      templateVersion: "olympic-lifting-6w-v1",
     },
     {
       id: "general_crossfit_6w",
@@ -109,6 +151,7 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
       supportedFrequencies: [2, 3, 4],
       durationWeeks: 6,
       deloadWeek: 6,
+      templateVersion: "general-crossfit-6w-v1",
     },
     {
       id: "deload_1w",
@@ -118,6 +161,7 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
       supportedFrequencies: [2, 3, 4],
       durationWeeks: 6,
       deloadWeek: 6,
+      templateVersion: "deload-1w-v1",
     },
   ]);
 
@@ -715,6 +759,7 @@ export const MIXED_STRENGTH_TEMPLATE: ReadonlyArray<MixedStrengthWeekTemplate> =
 
 export const TRACK_ORDER: ReadonlyArray<ProgressionTrackType> = Object.freeze([
   "front_squat",
+  "back_squat",
   "snatch",
   "clean_and_jerk",
   "strict_pull",
@@ -776,6 +821,178 @@ export const PROGRAMME_TEMPLATES: Readonly<
   Record<string, ReadonlyArray<MixedStrengthWeekTemplate>>
 > = Object.freeze({
   mixed_strength_6w: MIXED_STRENGTH_TEMPLATE,
+  competition_preparation_6w: cloneProgrammeTemplate(
+    MIXED_STRENGTH_TEMPLATE,
+    (item) => {
+      if (item.role === "primary") {
+        const olympic = item.sessionNumber === 1;
+        return {
+          ...item,
+          trackType: olympic ? "snatch" : "clean_and_jerk",
+          movementFamilyId: olympic ? "snatch" : "clean_and_jerk",
+          movementId: olympic
+            ? item.weekNumber >= 4
+              ? "snatch"
+              : "hang_power_snatch"
+            : item.weekNumber >= 4
+              ? "clean_and_jerk"
+              : "hang_clean_and_jerk",
+          sets: Math.max(3, item.sets),
+          reps: item.weekNumber >= 4 ? 1 : 2,
+          technicalIntent:
+            "Build competition-ready lifting quality under event-style fatigue.",
+          progressionObjective:
+            "Progress heavier Olympic lifting while preserving repeatable event output.",
+        };
+      }
+      return {
+        ...item,
+        trackType: item.sessionNumber === 1 ? "front_squat" : "back_squat",
+        movementId: item.sessionNumber === 1 ? "front_squat" : "back_squat",
+        movementFamilyId:
+          item.sessionNumber === 1 ? "front_squat" : "back_squat",
+        technicalIntent:
+          "Support competition strength without compromising the next event.",
+        progressionObjective:
+          "Integrate strength with mixed-modal competition demands.",
+      };
+    },
+    (week) => ({
+      theme:
+        week.weekNumber === 1
+          ? "Assessment and event readiness baseline"
+          : week.weekNumber === 2
+            ? "Strength integration"
+            : week.weekNumber === 3
+              ? "Multiple event styles"
+              : week.weekNumber === 4
+                ? "Competition combinations"
+                : week.weekNumber === 5
+                  ? "Competition simulation"
+                  : "Taper and event recovery",
+      day1ConditioningMinutes:
+        week.weekNumber === 6 ? 8 : week.weekNumber >= 4 ? 16 : 12,
+      day2ConditioningMinutes:
+        week.weekNumber === 6 ? 8 : week.weekNumber >= 4 ? 12 : 14,
+    }),
+  ),
+  open_preparation_6w: cloneProgrammeTemplate(
+    MIXED_STRENGTH_TEMPLATE,
+    (item) => {
+      if (item.role === "primary") {
+        return {
+          ...item,
+          role: "secondary",
+          trackType: "strict_pull",
+          movementFamilyId: "strict_pull",
+          movementId: "strict_pull_up",
+          intensityMethod: "bodyweight",
+          intensityMin: null,
+          intensityMax: null,
+          sets: Math.max(2, Math.min(3, item.sets - 1)),
+          reps: null,
+          repRangeMin: 4,
+          repRangeMax: 8,
+          technicalIntent:
+            "Build repeatable gymnastics capacity without technical breakdown.",
+          progressionObjective:
+            "Improve Open movement efficiency under fatigue.",
+          stoppingRule: GYMNASTICS_STOP,
+        };
+      }
+      return {
+        ...item,
+        trackType: "front_squat",
+        movementFamilyId: "front_squat",
+        movementId: "front_squat",
+        sets: 2,
+        reps: 3,
+        intensityMin: 65,
+        intensityMax: 75,
+        technicalIntent:
+          "Maintain strength with low fatigue while prioritizing Open work.",
+        progressionObjective:
+          "Maintain useful strength; do not accumulate lifting fatigue.",
+      };
+    },
+    (week) => ({
+      theme:
+        week.weekNumber === 1
+          ? "Open baseline"
+          : week.weekNumber === 2
+            ? "Sustainable pacing"
+            : week.weekNumber === 3
+              ? "Gymnastics under fatigue"
+              : week.weekNumber === 4
+                ? "Open test"
+                : week.weekNumber === 5
+                  ? "Full Open simulation"
+                  : "Taper and readiness",
+      day1ConditioningMinutes:
+        week.weekNumber === 6 ? 8 : week.weekNumber >= 4 ? 16 : 12,
+      day2ConditioningMinutes:
+        week.weekNumber === 6 ? 8 : week.weekNumber >= 4 ? 12 : 12,
+    }),
+  ),
+  masters_open_preparation_6w: cloneProgrammeTemplate(
+    MIXED_STRENGTH_TEMPLATE,
+    (item) => {
+      if (item.role === "primary") {
+        return {
+          ...item,
+          role: "secondary",
+          trackType: "strict_pull",
+          movementFamilyId: "strict_pull",
+          movementId: "strict_pull_up",
+          intensityMethod: "bodyweight",
+          intensityMin: null,
+          intensityMax: null,
+          sets: 2,
+          reps: null,
+          repRangeMin: 3,
+          repRangeMax: 6,
+          technicalIntent:
+            "Use controlled, recovery-aware gymnastics volume with strict quality limits.",
+          progressionObjective:
+            "Prepare Masters athletes without accumulating grip or shoulder fatigue.",
+          stoppingRule:
+            "Stop before grip, shoulder position, or pulling speed deteriorates.",
+        };
+      }
+      return {
+        ...item,
+        trackType: "front_squat",
+        movementFamilyId: "front_squat",
+        movementId: "front_squat",
+        sets: 2,
+        reps: 3,
+        intensityMin: 60,
+        intensityMax: 70,
+        technicalIntent:
+          "Maintain lower-body strength with low eccentric cost and generous recovery.",
+        progressionObjective:
+          "Maintain strength while protecting recovery and connective tissue.",
+      };
+    },
+    (week) => ({
+      theme:
+        week.weekNumber === 1
+          ? "Masters baseline and movement standards"
+          : week.weekNumber === 2
+            ? "Masters repeatability"
+            : week.weekNumber === 3
+              ? "Controlled fatigue and shoulder health"
+              : week.weekNumber === 4
+                ? "Masters Open simulation"
+                : week.weekNumber === 5
+                  ? "Peak specificity with recovery control"
+                  : "Masters taper and readiness",
+      day1ConditioningMinutes:
+        week.weekNumber === 6 ? 7 : week.weekNumber >= 4 ? 12 : 10,
+      day2ConditioningMinutes:
+        week.weekNumber === 6 ? 7 : week.weekNumber >= 4 ? 10 : 10,
+    }),
+  ),
   general_crossfit_6w: cloneProgrammeTemplate(
     MIXED_STRENGTH_TEMPLATE,
     (item) => ({
@@ -982,10 +1199,12 @@ export function getV2TemplateForBlockType(
   blockType: TrainingBlockType,
 ): V2TemplateDefinition {
   switch (blockType) {
-    case "masters_open_preparation":
-      return getV2TemplateDefinition("masters_open_preparation_six_week");
     case "competition_preparation":
-      return getV2TemplateDefinition("masters_open_6w");
+      return getV2TemplateDefinition("competition_preparation_6w");
+    case "open_preparation":
+      return getV2TemplateDefinition("open_preparation_6w");
+    case "masters_open_preparation":
+      return getV2TemplateDefinition("masters_open_preparation_6w");
     case "mixed_strength":
       return getV2TemplateDefinition("mixed_strength_6w");
     case "aerobic_capacity":

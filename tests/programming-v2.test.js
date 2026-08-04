@@ -179,6 +179,9 @@ test("V2 template registry covers supported goals and frequencies", () => {
       "bar_muscle_up_6w",
       "masters_open_6w",
       "masters_open_preparation_six_week",
+      "competition_preparation_6w",
+      "open_preparation_6w",
+      "masters_open_preparation_6w",
       "olympic_lifting_6w",
       "general_crossfit_6w",
       "deload_1w",
@@ -201,15 +204,15 @@ test("V2 template registry covers supported goals and frequencies", () => {
 
 test("programme types produce materially different six-week workout fingerprints", () => {
   const templates = [
-    "mixed_strength_6w",
-    "masters_open_6w",
-    "olympic_lifting_6w",
-    "endurance_capacity_6w",
-    "general_crossfit_6w",
+    ["mixed_strength_6w", "mixed_strength"],
+    ["mixed_strength_8w_testing", "mixed_strength"],
+    ["olympic_lifting_6w", "olympic_lifting_development"],
+    ["endurance_capacity_6w", "aerobic_capacity"],
+    ["general_crossfit_6w", "mixed_strength"],
   ];
-  const programmes = templates.map((templateId) =>
+  const programmes = templates.map(([templateId, blockType]) =>
     v2.generateV2Program({
-      ...generationInput({ templateId }),
+      ...generationInput({ templateId, blockType }),
       programId: v2.stableUuid(
         "33333333-3333-4333-a333-333333333333",
         templateId,
@@ -226,9 +229,81 @@ test("programme types produce materially different six-week workout fingerprints
     programmes[1].trainingBlocks[0].trainingWeeks[0].sessions[0].exercises,
   );
   assert.notEqual(
-    programmes[0].trainingBlocks[0].trainingWeeks[0].sessions[0].objective,
-    programmes[1].trainingBlocks[0].trainingWeeks[0].sessions[0].objective,
+    programmes[0].trainingBlocks[0].templateId,
+    programmes[1].trainingBlocks[0].templateId,
   );
+});
+
+test("competition, Open, and Masters/Open use independent programming families", () => {
+  const inputs = [
+    ["mixed_strength_6w", "mixed_strength"],
+    ["competition_preparation_6w", "competition_preparation"],
+    ["open_preparation_6w", "open_preparation"],
+    ["masters_open_preparation_6w", "masters_open_preparation"],
+  ];
+  const programmes = inputs.map(([templateId, blockType]) =>
+    v2.generateV2Program(
+      generationInput({
+        templateId,
+        blockType,
+        programId: v2.stableUuid(
+          "44444444-4444-4444-a444-444444444444",
+          templateId,
+        ),
+      }),
+    ),
+  );
+  assert.deepEqual(
+    programmes.map((program) => program.trainingBlocks[0].templateId),
+    inputs.map(([templateId]) => templateId),
+  );
+  assert.equal(
+    new Set(programmes.map((program) => program.generationFingerprint)).size,
+    programmes.length,
+  );
+  const weekFour = programmes.map(
+    (program) => program.trainingBlocks[0].trainingWeeks[3],
+  );
+  assert.equal(new Set(weekFour.map((week) => week.theme)).size, 4);
+  assert.ok(
+    weekFour[1].sessions.some(
+      (session) =>
+        session.conditioning?.competitionMetadata?.setStrategy?.length,
+    ),
+  );
+  assert.ok(
+    weekFour[2].sessions.some(
+      (session) =>
+        session.conditioning?.competitionMetadata?.pacingPlan?.length,
+    ),
+  );
+  assert.ok(
+    weekFour[3].sessions.some((session) => session.fatigueFocus === "recovery"),
+  );
+  assert.notDeepEqual(
+    sessions(programmes[2]).map((session) => session.conditioning?.format),
+    sessions(programmes[3]).map((session) => session.conditioning?.format),
+  );
+  for (let weekIndex = 0; weekIndex < 6; weekIndex += 1) {
+    const weekSignatures = programmes.map((program) => {
+      const week = program.trainingBlocks[0].trainingWeeks[weekIndex];
+      return JSON.stringify({
+        theme: week.theme,
+        objectives: week.sessions.map((session) => session.objective),
+        formats: week.sessions.map((session) => session.conditioning?.format),
+        movements: week.sessions.flatMap((session) =>
+          session.conditioning?.movements.map(
+            (movement) => movement.movementId,
+          ),
+        ),
+      });
+    });
+    assert.equal(
+      new Set(weekSignatures).size,
+      4,
+      `programming families must differ in week ${weekIndex + 1}`,
+    );
+  }
 });
 
 test("Masters/Open preparation uses a dedicated competition template", () => {
@@ -240,14 +315,14 @@ test("Masters/Open preparation uses a dedicated competition template", () => {
   );
   const open = v2.generateV2Program(
     generationInput({
-      templateId: "masters_open_preparation_six_week",
+      templateId: "masters_open_preparation_6w",
       blockType: "masters_open_preparation",
     }),
   );
   const openSessions = sessions(open);
   assert.equal(
     open.trainingBlocks[0].templateId,
-    "masters_open_preparation_six_week",
+    "masters_open_preparation_6w",
   );
   assert.equal(open.trainingBlocks[0].blockType, "masters_open_preparation");
   assert.notDeepEqual(
@@ -295,7 +370,7 @@ test("unsupported block types never silently resolve to mixed strength", () => {
   );
   assert.equal(
     v2.getV2TemplateForBlockType("masters_open_preparation").id,
-    "masters_open_preparation_six_week",
+    "masters_open_preparation_6w",
   );
 });
 
