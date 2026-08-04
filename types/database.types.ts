@@ -9,6 +9,53 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      athlete_movement_maxes: {
+        Row: {
+          estimated_one_rep_max_kg: number | null
+          id: string
+          movement_id: string
+          source: string
+          technical_one_rep_max_kg: number | null
+          tested_at: string | null
+          tested_one_rep_max_kg: number | null
+          training_max_kg: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          estimated_one_rep_max_kg?: number | null
+          id?: string
+          movement_id: string
+          source: string
+          technical_one_rep_max_kg?: number | null
+          tested_at?: string | null
+          tested_one_rep_max_kg?: number | null
+          training_max_kg?: number | null
+          updated_at: string
+          user_id: string
+        }
+        Update: {
+          estimated_one_rep_max_kg?: number | null
+          id?: string
+          movement_id?: string
+          source?: string
+          technical_one_rep_max_kg?: number | null
+          tested_at?: string | null
+          tested_one_rep_max_kg?: number | null
+          training_max_kg?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "athlete_movement_maxes_movement_id_fkey"
+            columns: ["movement_id"]
+            isOneToOne: false
+            referencedRelation: "movements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       athlete_movement_restrictions: {
         Row: {
           created_at: string
@@ -438,6 +485,69 @@ export type Database = {
             columns: ["progression_track_id"]
             isOneToOne: false
             referencedRelation: "progression_tracks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      max_test_prescriptions: {
+        Row: {
+          attempt_results: Json
+          eligibility: Json
+          estimated_duration_minutes: number
+          id: string
+          max_update: Json | null
+          movement_id: string
+          planned_attempts: Json
+          session_id: string
+          stopping_rules: Json
+          technical_standards: Json | null
+          test_type: string
+          user_id: string
+          warmup_sets: Json
+        }
+        Insert: {
+          attempt_results?: Json
+          eligibility: Json
+          estimated_duration_minutes: number
+          id: string
+          max_update?: Json | null
+          movement_id: string
+          planned_attempts?: Json
+          session_id: string
+          stopping_rules?: Json
+          technical_standards?: Json | null
+          test_type: string
+          user_id: string
+          warmup_sets?: Json
+        }
+        Update: {
+          attempt_results?: Json
+          eligibility?: Json
+          estimated_duration_minutes?: number
+          id?: string
+          max_update?: Json | null
+          movement_id?: string
+          planned_attempts?: Json
+          session_id?: string
+          stopping_rules?: Json
+          technical_standards?: Json | null
+          test_type?: string
+          user_id?: string
+          warmup_sets?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "max_test_prescriptions_movement_id_fkey"
+            columns: ["movement_id"]
+            isOneToOne: false
+            referencedRelation: "movements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "max_test_prescriptions_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "training_sessions"
             referencedColumns: ["id"]
           },
         ]
@@ -972,12 +1082,16 @@ export type Database = {
           current_week: number
           deload_week: number | null
           duration_weeks: number
+          ends_with_test: boolean
           goal: string
           id: string
           name: string
+          planned_test_movement_ids: string[]
           program_id: string
           started_at: string | null
           status: string
+          test_strategy: string
+          test_week_number: number | null
           updated_at: string
           user_id: string
         }
@@ -988,12 +1102,16 @@ export type Database = {
           current_week: number
           deload_week?: number | null
           duration_weeks: number
+          ends_with_test?: boolean
           goal: string
           id: string
           name: string
+          planned_test_movement_ids?: string[]
           program_id: string
           started_at?: string | null
           status: string
+          test_strategy?: string
+          test_week_number?: number | null
           updated_at: string
           user_id: string
         }
@@ -1004,12 +1122,16 @@ export type Database = {
           current_week?: number
           deload_week?: number | null
           duration_weeks?: number
+          ends_with_test?: boolean
           goal?: string
           id?: string
           name?: string
+          planned_test_movement_ids?: string[]
           program_id?: string
           started_at?: string | null
           status?: string
+          test_strategy?: string
+          test_week_number?: number | null
           updated_at?: string
           user_id?: string
         }
@@ -1141,10 +1263,12 @@ export type Database = {
           fatigue_focus: string
           id: string
           intended_stimulus: string
+          max_test_prescription_id: string | null
           objective: string
           provisional: boolean
           revision: number
           session_number: number
+          session_type: string
           status: string
           stress: Json
           training_week_id: string
@@ -1162,10 +1286,12 @@ export type Database = {
           fatigue_focus: string
           id: string
           intended_stimulus: string
+          max_test_prescription_id?: string | null
           objective: string
           provisional?: boolean
           revision: number
           session_number: number
+          session_type?: string
           status: string
           stress: Json
           training_week_id: string
@@ -1183,10 +1309,12 @@ export type Database = {
           fatigue_focus?: string
           id?: string
           intended_stimulus?: string
+          max_test_prescription_id?: string | null
           objective?: string
           provisional?: boolean
           revision?: number
           session_number?: number
+          session_type?: string
           status?: string
           stress?: Json
           training_week_id?: string
@@ -1195,6 +1323,13 @@ export type Database = {
           week_number?: number
         }
         Relationships: [
+          {
+            foreignKeyName: "training_sessions_max_test_fk"
+            columns: ["max_test_prescription_id"]
+            isOneToOne: false
+            referencedRelation: "max_test_prescriptions"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "training_sessions_training_week_id_fkey"
             columns: ["training_week_id"]
@@ -1235,6 +1370,47 @@ export type Database = {
             columns: ["training_block_id"]
             isOneToOne: false
             referencedRelation: "training_blocks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      v2_personal_records: {
+        Row: {
+          achieved_at: string
+          id: string
+          load_kg: number
+          movement_id: string
+          previous_record_kg: number | null
+          record_type: string
+          session_id: string | null
+          user_id: string
+        }
+        Insert: {
+          achieved_at: string
+          id: string
+          load_kg: number
+          movement_id: string
+          previous_record_kg?: number | null
+          record_type: string
+          session_id?: string | null
+          user_id: string
+        }
+        Update: {
+          achieved_at?: string
+          id?: string
+          load_kg?: number
+          movement_id?: string
+          previous_record_kg?: number | null
+          record_type?: string
+          session_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "v2_personal_records_movement_id_fkey"
+            columns: ["movement_id"]
+            isOneToOne: false
+            referencedRelation: "movements"
             referencedColumns: ["id"]
           },
         ]
@@ -1446,6 +1622,10 @@ export type Database = {
         Returns: Json
       }
       save_programming_engine_v2: {
+        Args: { p_expected_revision?: number; p_program: Json }
+        Returns: Json
+      }
+      save_programming_engine_v2_testing: {
         Args: { p_expected_revision?: number; p_program: Json }
         Returns: Json
       }
