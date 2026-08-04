@@ -11,6 +11,7 @@ import type {
 } from "./types";
 import { VALIDATOR_VERSION } from "./types";
 import { validateMaxTestPrescription } from "./max-testing";
+import { getV2TemplateDefinition } from "./template";
 
 const PROHIBITED_LANGUAGE = [
   "or similar",
@@ -901,6 +902,121 @@ export function validateProgram(program: ProgramV2): ValidationResult {
         "Training block is required.",
       ),
     );
+  }
+  if (
+    program.generationSource !== undefined &&
+    !["generated", "fallback", "mock"].includes(program.generationSource)
+  ) {
+    issues.push(
+      issue(
+        "MISSING_GENERATION_SOURCE",
+        "warning",
+        "program.generationSource",
+        "Generation source must be explicitly recorded.",
+      ),
+    );
+  }
+  if (
+    program.generationSource !== undefined &&
+    program.generationSource !== "generated"
+  ) {
+    issues.push(
+      issue(
+        "NON_PRODUCTION_GENERATION_SOURCE",
+        "error",
+        "program.generationSource",
+        "Fallback and mock programmes cannot be treated as production V2 programmes.",
+      ),
+    );
+  }
+  const programmeIds = new Set<string>();
+  const weekIds = new Set<string>();
+  const sessionIds = new Set<string>();
+  for (const block of program.trainingBlocks) {
+    if (block.programId !== program.id) {
+      issues.push(
+        issue(
+          "BLOCK_PROGRAM_MISMATCH",
+          "error",
+          `program.trainingBlocks.${block.id}.programId`,
+          "Training block does not belong to the generated programme.",
+        ),
+      );
+    }
+    if (programmeIds.has(program.id)) {
+      issues.push(
+        issue(
+          "DUPLICATE_PROGRAM_ID",
+          "error",
+          "program.id",
+          "Programme IDs must be unique within the generated graph.",
+        ),
+      );
+    }
+    programmeIds.add(program.id);
+    try {
+      const template = getV2TemplateDefinition(block.templateId, {
+        allowDefault: false,
+      });
+      if (
+        program.generationRequest?.programmeType !== undefined &&
+        program.generationRequest.programmeType !== template.id
+      ) {
+        issues.push(
+          issue(
+            "PROGRAMME_TYPE_MISMATCH",
+            "error",
+            "program.generationRequest.programmeType",
+            "Generated programme type does not match its block template.",
+          ),
+        );
+      }
+    } catch {
+      issues.push(
+        issue(
+          "UNSUPPORTED_TEMPLATE",
+          "error",
+          `program.trainingBlocks.${block.id}.templateId`,
+          "Generated programme uses an unsupported template.",
+        ),
+      );
+    }
+    for (const week of block.trainingWeeks) {
+      if (weekIds.has(week.id)) {
+        issues.push(
+          issue(
+            "DUPLICATE_WEEK_ID",
+            "error",
+            `program.weeks.${week.id}`,
+            "Week IDs must be unique.",
+          ),
+        );
+      }
+      weekIds.add(week.id);
+      for (const session of week.sessions) {
+        if (sessionIds.has(session.id)) {
+          issues.push(
+            issue(
+              "DUPLICATE_SESSION_ID",
+              "error",
+              `program.sessions.${session.id}`,
+              "Session IDs must be unique.",
+            ),
+          );
+        }
+        sessionIds.add(session.id);
+        if (session.trainingWeekId !== week.id) {
+          issues.push(
+            issue(
+              "SESSION_WEEK_MISMATCH",
+              "error",
+              `program.sessions.${session.id}`,
+              "Session does not belong to its week.",
+            ),
+          );
+        }
+      }
+    }
   }
   program.trainingBlocks.forEach((block, index) => {
     issues.push(

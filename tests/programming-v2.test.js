@@ -19,8 +19,8 @@ const EQUIPMENT = [
   "PVC",
 ];
 
-function generate(overrides = {}) {
-  return v2.generateMixedStrengthBlock({
+function generationInput(overrides = {}) {
+  return {
     programId: "11111111-1111-4111-a111-111111111111",
     ownerId: "22222222-2222-4222-a222-222222222222",
     generatedAt: "2026-08-02T10:00:00.000Z",
@@ -43,7 +43,11 @@ function generate(overrides = {}) {
     weightIncrementKg: 2.5,
     roundingMode: "nearest",
     ...overrides,
-  });
+  };
+}
+
+function generate(overrides = {}) {
+  return v2.generateMixedStrengthBlock(generationInput(overrides));
 }
 
 function sessions(program) {
@@ -174,6 +178,8 @@ test("V2 template registry covers supported goals and frequencies", () => {
       "gymnastics_capacity_6w",
       "bar_muscle_up_6w",
       "masters_open_6w",
+      "olympic_lifting_6w",
+      "general_crossfit_6w",
       "deload_1w",
     ],
   );
@@ -190,6 +196,53 @@ test("V2 template registry covers supported goals and frequencies", () => {
       ),
     );
   }
+});
+
+test("programme types produce materially different six-week workout fingerprints", () => {
+  const templates = [
+    "mixed_strength_6w",
+    "masters_open_6w",
+    "olympic_lifting_6w",
+    "endurance_capacity_6w",
+    "general_crossfit_6w",
+  ];
+  const programmes = templates.map((templateId) =>
+    v2.generateV2Program({
+      ...generationInput({ templateId }),
+      programId: v2.stableUuid(
+        "33333333-3333-4333-a333-333333333333",
+        templateId,
+      ),
+      templateId,
+    }),
+  );
+  assert.equal(
+    new Set(programmes.map((program) => program.generationFingerprint)).size,
+    templates.length,
+  );
+  assert.notDeepEqual(
+    programmes[0].trainingBlocks[0].trainingWeeks[0].sessions[0].exercises,
+    programmes[1].trainingBlocks[0].trainingWeeks[0].sessions[0].exercises,
+  );
+  assert.notEqual(
+    programmes[0].trainingBlocks[0].trainingWeeks[0].sessions[0].objective,
+    programmes[1].trainingBlocks[0].trainingWeeks[0].sessions[0].objective,
+  );
+});
+
+test("V2 generation rejects missing or unsupported programme types", () => {
+  assert.throws(
+    () => v2.generateV2Program(generationInput()),
+    /MISSING_PROGRAMME_TYPE/,
+  );
+  assert.throws(
+    () =>
+      v2.generateV2Program({
+        ...generationInput(),
+        templateId: "not-a-template",
+      }),
+    /UNSUPPORTED_TEMPLATE/,
+  );
 });
 
 test("front squat, snatch, and clean-and-jerk steps progress and deload", () => {

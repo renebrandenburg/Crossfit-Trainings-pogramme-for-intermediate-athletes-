@@ -125,6 +125,8 @@ export function normalizeV2GenerationPreferences(
     "gymnastics",
     "bar_muscle_up",
     "masters_open",
+    "olympic_lifting",
+    "general_crossfit",
     "mixed",
   ].includes(String(value?.goal))
     ? (value?.goal as V2GenerationPreferences["goal"])
@@ -157,8 +159,8 @@ export function normalizeV2GenerationPreferences(
     weightIncrementKg,
     roundingMode,
     templateId:
-      value?.templateId === "mixed_strength_8w_testing"
-        ? "mixed_strength_8w_testing"
+      typeof value?.templateId === "string" && value.templateId.length > 0
+        ? value.templateId
         : "mixed_strength_6w",
   };
 }

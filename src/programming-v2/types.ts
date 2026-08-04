@@ -25,6 +25,8 @@ export type V2ProgrammingGoal =
   | "gymnastics"
   | "bar_muscle_up"
   | "masters_open"
+  | "olympic_lifting"
+  | "general_crossfit"
   | "mixed";
 
 export interface V2GenerationPreferences {
@@ -605,9 +607,28 @@ export interface ProgramV2 {
   trainingBlocks: TrainingBlock[];
   movementMaxes: AthleteMovementMax[];
   personalRecords: PersonalRecord[];
+  generationSource: "generated" | "fallback" | "mock";
+  generationRequest: GenerationRequest;
+  generationFingerprint: string;
+  generatorVersion: string;
   validation: ValidationResult;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface GenerationRequest {
+  programmeType: string;
+  programmeVersion: string;
+  cycleLengthWeeks: number;
+  sessionsPerWeek: 2 | 3 | 4;
+  athleteLevel: "beginner" | "intermediate" | "advanced";
+  athleteGoals: string[];
+  competitionFocus: string | null;
+  availableEquipment: string[];
+  known1RMs: AthleteMaxes;
+  skillPriorities: string[];
+  limitations: MovementRestrictions;
+  requestedStartDate: string;
 }
 
 export interface AthleteMaxes {
@@ -641,6 +662,8 @@ export interface GenerateProgramInput {
   templateId?: string;
   allowBeginnerTrue1Rm?: boolean;
   movementMaxes?: AthleteMovementMax[];
+  competitionFocus?: string | null;
+  skillPriorities?: string[];
 }
 
 export interface DurationEstimateInput {

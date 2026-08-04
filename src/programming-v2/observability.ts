@@ -3,6 +3,10 @@ import type { ProgramV2, RegenerationScope } from "./types";
 export interface GenerationLogRecord {
   event: "generated" | "regenerated" | "completed" | "rejected";
   programId: string;
+  programmeType: string;
+  generationSource: ProgramV2["generationSource"];
+  generationFingerprint: string;
+  generatorVersion: string;
   blockType: string;
   currentWeek: number;
   progressionTracks: Array<{
@@ -49,6 +53,11 @@ export function createGenerationLogRecord(
   return {
     event: input.event,
     programId: program.id,
+    programmeType:
+      program.generationRequest?.programmeType || block.templateId || "legacy",
+    generationSource: program.generationSource || "generated",
+    generationFingerprint: program.generationFingerprint || "legacy",
+    generatorVersion: program.generatorVersion || "legacy",
     blockType: block.blockType,
     currentWeek: block.currentWeek,
     progressionTracks: block.progressionTracks.map((track) => ({

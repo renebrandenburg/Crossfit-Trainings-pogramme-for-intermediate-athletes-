@@ -12,6 +12,8 @@ export type V2TemplateId =
   | "gymnastics_capacity_6w"
   | "bar_muscle_up_6w"
   | "masters_open_6w"
+  | "olympic_lifting_6w"
+  | "general_crossfit_6w"
   | "deload_1w";
 
 export interface V2TemplateDefinition {
@@ -81,6 +83,24 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
       deloadWeek: 6,
     },
     {
+      id: "olympic_lifting_6w",
+      blockType: "olympic_lifting_development",
+      name: "Six-week Olympic-lifting development block",
+      goal: "Build snatch and clean-and-jerk consistency with specific positional strength.",
+      supportedFrequencies: [2, 3, 4],
+      durationWeeks: 6,
+      deloadWeek: 6,
+    },
+    {
+      id: "general_crossfit_6w",
+      blockType: "mixed_strength",
+      name: "Six-week general CrossFit progression",
+      goal: "Build balanced strength, skill, and repeatable mixed-modal capacity.",
+      supportedFrequencies: [2, 3, 4],
+      durationWeeks: 6,
+      deloadWeek: 6,
+    },
+    {
       id: "deload_1w",
       blockType: "deload",
       name: "One-week deload block",
@@ -93,11 +113,14 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
 
 export function getV2TemplateDefinition(
   id: string | null | undefined,
+  options: { allowDefault?: boolean } = {},
 ): V2TemplateDefinition {
-  return (
-    V2_TEMPLATE_REGISTRY.find((template) => template.id === id) ??
-    V2_TEMPLATE_REGISTRY[0]!
-  );
+  const match = V2_TEMPLATE_REGISTRY.find((template) => template.id === id);
+  if (match) return match;
+  if (options.allowDefault && (id == null || id === "")) {
+    return V2_TEMPLATE_REGISTRY[0]!;
+  }
+  throw new Error(`UNSUPPORTED_TEMPLATE:${String(id)}`);
 }
 
 export interface TemplateProgressionStep {
@@ -722,6 +745,172 @@ export const TESTING_STRENGTH_TEMPLATE: ReadonlyArray<MixedStrengthWeekTemplate>
       };
     }),
   ]);
+
+function cloneProgrammeTemplate(
+  source: ReadonlyArray<MixedStrengthWeekTemplate>,
+  transform: (step: TemplateProgressionStep) => TemplateProgressionStep,
+  conditioning: (
+    week: MixedStrengthWeekTemplate,
+  ) => Partial<MixedStrengthWeekTemplate>,
+): ReadonlyArray<MixedStrengthWeekTemplate> {
+  return Object.freeze(
+    source.map((week) => ({
+      ...week,
+      ...conditioning(week),
+      steps: week.steps.map((item) => transform({ ...item })),
+    })),
+  );
+}
+
+export const PROGRAMME_TEMPLATES: Readonly<
+  Record<string, ReadonlyArray<MixedStrengthWeekTemplate>>
+> = Object.freeze({
+  mixed_strength_6w: MIXED_STRENGTH_TEMPLATE,
+  general_crossfit_6w: cloneProgrammeTemplate(
+    MIXED_STRENGTH_TEMPLATE,
+    (item) => ({
+      ...item,
+      progressionObjective: `General CrossFit progression: ${item.progressionObjective}`,
+    }),
+    (week) => ({
+      day1ConditioningMinutes: week.day1ConditioningMinutes + 1,
+      day2ConditioningMinutes: week.day2ConditioningMinutes + 1,
+    }),
+  ),
+  masters_open_6w: cloneProgrammeTemplate(
+    MIXED_STRENGTH_TEMPLATE,
+    (item) =>
+      item.trackType === "front_squat"
+        ? {
+            ...item,
+            movementId: "back_squat",
+            movementFamilyId: "back_squat",
+            technicalIntent:
+              "Build durable squat strength with controlled depth and recovery-aware volume.",
+            progressionObjective:
+              "Develop repeatable squat strength for Masters/Open demands.",
+          }
+        : item,
+    (week) => ({
+      theme: `Masters/Open: ${week.theme}`,
+      day1ConditioningMinutes: Math.max(7, week.day1ConditioningMinutes - 2),
+      day2ConditioningMinutes: Math.max(8, week.day2ConditioningMinutes - 2),
+    }),
+  ),
+  olympic_lifting_6w: cloneProgrammeTemplate(
+    MIXED_STRENGTH_TEMPLATE,
+    (item) => {
+      if (item.sessionNumber === 1 && item.role === "primary") {
+        return {
+          ...item,
+          trackType: "snatch",
+          movementFamilyId: "snatch",
+          movementId: item.weekNumber >= 4 ? "snatch" : "hang_power_snatch",
+          sets: Math.max(4, item.sets),
+          reps: item.weekNumber >= 4 ? 1 : 2,
+          technicalIntent:
+            "Prioritize receiving position, bar proximity, and stable overhead control.",
+          progressionObjective:
+            "Develop the snatch through consistent positional singles.",
+        };
+      }
+      if (item.sessionNumber === 1 && item.role === "secondary") {
+        return {
+          ...item,
+          movementId: "snatch_pull",
+          movementFamilyId: "snatch",
+        };
+      }
+      if (item.sessionNumber === 2 && item.role === "primary") {
+        return {
+          ...item,
+          movementId: "clean_and_jerk",
+          movementFamilyId: "clean_and_jerk",
+          reps: item.weekNumber >= 4 ? 1 : 2,
+        };
+      }
+      if (item.sessionNumber === 2 && item.role === "secondary") {
+        return {
+          ...item,
+          movementId: "hang_clean_and_jerk",
+          movementFamilyId: "clean_and_jerk",
+        };
+      }
+      return item;
+    },
+    (week) => ({
+      theme: `Olympic lifting: ${week.theme}`,
+      day1ConditioningMinutes: Math.max(5, week.day1ConditioningMinutes - 3),
+      day2ConditioningMinutes: Math.max(5, week.day2ConditioningMinutes - 3),
+    }),
+  ),
+  endurance_capacity_6w: cloneProgrammeTemplate(
+    MIXED_STRENGTH_TEMPLATE,
+    (item) => ({
+      ...item,
+      sets: Math.max(2, item.sets - 1),
+      progressionObjective: `Aerobic-support strength: ${item.progressionObjective}`,
+    }),
+    (week) => ({
+      theme: `Engine-focused: ${week.theme}`,
+      day1ConditioningMinutes: week.day1ConditioningMinutes + 6,
+      day2ConditioningMinutes: week.day2ConditioningMinutes + 7,
+    }),
+  ),
+  gymnastics_capacity_6w: cloneProgrammeTemplate(
+    MIXED_STRENGTH_TEMPLATE,
+    (item) =>
+      item.sessionNumber === 1 && item.role === "secondary"
+        ? {
+            ...item,
+            trackType: "strict_pull",
+            movementFamilyId: "strict_pull",
+            movementId: "strict_pull_up",
+            intensityMethod: "bodyweight",
+            intensityMin: null,
+            intensityMax: null,
+            technicalIntent:
+              "Build strict pulling capacity without losing hollow-body control.",
+            progressionObjective:
+              "Progress strict gymnastics strength and repeatable pulling volume.",
+            stoppingRule:
+              "Stop the set when pulling speed or hollow-body position breaks down.",
+          }
+        : item,
+    (week) => ({
+      theme: `Gymnastics capacity: ${week.theme}`,
+      day1ConditioningMinutes: Math.max(6, week.day1ConditioningMinutes - 1),
+      day2ConditioningMinutes: week.day2ConditioningMinutes + 2,
+    }),
+  ),
+  deload_1w: cloneProgrammeTemplate(
+    MIXED_STRENGTH_TEMPLATE,
+    (item) => ({
+      ...item,
+      sets: Math.max(2, Math.min(3, item.sets - 2)),
+      intensityMin:
+        item.intensityMin == null ? null : Math.max(45, item.intensityMin - 15),
+      intensityMax:
+        item.intensityMax == null ? null : Math.max(55, item.intensityMax - 15),
+      progressionObjective:
+        "Deload: preserve movement quality without accumulating fatigue.",
+    }),
+    () => ({
+      theme: "Deload and movement quality",
+      day1ConditioningMinutes: 6,
+      day2ConditioningMinutes: 6,
+    }),
+  ),
+});
+
+export function getV2ProgrammeTemplate(
+  id: string,
+): ReadonlyArray<MixedStrengthWeekTemplate> {
+  if (id === "mixed_strength_8w_testing") return TESTING_STRENGTH_TEMPLATE;
+  const template = PROGRAMME_TEMPLATES[id];
+  if (!template) throw new Error(`UNSUPPORTED_TEMPLATE:${id}`);
+  return template;
+}
 
 export function templateStepFor(
   weekNumber: number,

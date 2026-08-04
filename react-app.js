@@ -963,7 +963,7 @@
           v2Program,
           state.v2GenerationPreferences,
         ),
-        maxWeeks: 6,
+        maxWeeks: v2Program.trainingBlocks?.[0]?.durationWeeks || 6,
       };
     }
     const activePlan = selectActivePlan(state);
@@ -1903,6 +1903,8 @@
           gymnastics: "gymnastics_capacity_6w",
           bar_muscle_up: "bar_muscle_up_6w",
           masters_open: "masters_open_6w",
+          olympic_lifting: "olympic_lifting_6w",
+          general_crossfit: "general_crossfit_6w",
           mixed: "mixed_strength_6w",
         };
         const templateId =
@@ -1931,6 +1933,11 @@
           },
           equipment: preferences.availableEquipment,
           restrictions,
+          competitionFocus: preferences.goal === "masters_open" ? "Open" : null,
+          skillPriorities:
+            preferences.goal === "olympic_lifting"
+              ? ["snatch", "clean_and_jerk"]
+              : [],
           weightIncrementKg: preferences.weightIncrementKg,
           roundingMode: preferences.roundingMode,
         });
@@ -2347,7 +2354,11 @@
         ...current,
         activeV2ProgramId: program.id,
         activeProgrammingEngine: "v2",
-        selectedWeek: clamp(Number(current.selectedWeek) || 1, 1, 6),
+        selectedWeek: clamp(
+          Number(current.selectedWeek) || 1,
+          1,
+          program.trainingBlocks?.[0]?.durationWeeks || 6,
+        ),
       }));
       setPendingTimerResult(null);
     }
@@ -7622,6 +7633,16 @@
               { value: "masters_open" },
               "Masters / Open preparation",
             ),
+            h(
+              "option",
+              { value: "olympic_lifting" },
+              "Olympic lifting development",
+            ),
+            h(
+              "option",
+              { value: "general_crossfit" },
+              "General CrossFit progression",
+            ),
           ),
         ),
         h(
@@ -7658,12 +7679,40 @@
             {
               name: "v2TemplateId",
               defaultValue:
-                program?.trainingBlocks?.[0]?.templateId ===
-                "mixed_strength_8w_testing"
-                  ? "mixed_strength_8w_testing"
-                  : "mixed_strength_6w",
+                program?.trainingBlocks?.[0]?.templateId ||
+                normalizedPreferences.templateId ||
+                "mixed_strength_6w",
             },
-            h("option", { value: "mixed_strength_6w" }, "Six-week progression"),
+            h(
+              "option",
+              { value: "mixed_strength_6w" },
+              "Six-week mixed strength",
+            ),
+            h(
+              "option",
+              { value: "general_crossfit_6w" },
+              "Six-week general CrossFit",
+            ),
+            h(
+              "option",
+              { value: "masters_open_6w" },
+              "Six-week Masters/Open preparation",
+            ),
+            h(
+              "option",
+              { value: "olympic_lifting_6w" },
+              "Six-week Olympic lifting",
+            ),
+            h(
+              "option",
+              { value: "endurance_capacity_6w" },
+              "Six-week engine-focused",
+            ),
+            h(
+              "option",
+              { value: "gymnastics_capacity_6w" },
+              "Six-week gymnastics capacity",
+            ),
             h(
               "option",
               { value: "mixed_strength_8w_testing" },

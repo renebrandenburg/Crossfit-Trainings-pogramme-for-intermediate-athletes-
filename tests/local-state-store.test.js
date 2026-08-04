@@ -4,8 +4,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   ATHLETE_PREFIX,
+  COMPLETION_PREFIX,
   LEGACY_KEY,
   META_KEY,
+  PROGRAM_PREFIX,
   SCORES_PREFIX,
   createLocalStateStore,
 } = require("../local-state-store.js");
@@ -120,4 +122,33 @@ test("clearing local state cancels a pending legacy snapshot", async () => {
   await new Promise((resolve) => setTimeout(resolve, 20));
 
   assert.equal(storage.getItem(LEGACY_KEY), null);
+});
+
+test("V2 programme and completion cache keys are isolated by programme and session", () => {
+  const storage = memoryStorage();
+  const store = createLocalStateStore(storage, { legacySnapshotDelay: 0 });
+  const session = (id, status = "completed") => ({
+    id,
+    status,
+    feedback: { notes: id },
+    revision: 2,
+  });
+  const programme = (id, sessionId) => ({
+    id,
+    trainingBlocks: [{ trainingWeeks: [{ sessions: [session(sessionId)] }] }],
+  });
+  const state = {
+    ...exampleState(),
+    v2Programs: [
+      programme("programme-a", "session-a"),
+      programme("programme-b", "session-b"),
+    ],
+  };
+
+  store.save(state);
+
+  assert.ok(storage.getItem(`${PROGRAM_PREFIX}programme-a`));
+  assert.ok(storage.getItem(`${PROGRAM_PREFIX}programme-b`));
+  assert.ok(storage.getItem(`${COMPLETION_PREFIX}programme-a:session-a`));
+  assert.ok(storage.getItem(`${COMPLETION_PREFIX}programme-b:session-b`));
 });

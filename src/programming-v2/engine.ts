@@ -7,9 +7,8 @@ import {
   equipmentTransitionMinutes,
 } from "./duration";
 import {
-  MIXED_STRENGTH_TEMPLATE,
-  TESTING_STRENGTH_TEMPLATE,
   TRACK_ORDER,
+  getV2ProgrammeTemplate,
   getV2TemplateDefinition,
   type MixedStrengthWeekTemplate,
   type TemplateProgressionStep,
@@ -20,6 +19,7 @@ import type {
   EquipmentTransition,
   ExercisePrescription,
   GenerateProgramInput,
+  GenerationRequest,
   MovementFamilyId,
   ProgramV2,
   ProgressionStep,
@@ -144,6 +144,7 @@ function createProgressionExercise(
   track: ProgressionTrack,
   templateStep: TemplateProgressionStep,
   stepNumber: number,
+  programmeType = "mixed_strength_6w",
 ): ExercisePrescription {
   const movement = getMovement(templateStep.movementId);
   if (!movement) {
@@ -152,7 +153,10 @@ function createProgressionExercise(
   if (
     !movementAllowed(
       movement.id,
-      templateStep.role,
+      programmeType === "gymnastics_capacity_6w" &&
+        movement.category === "gymnastics"
+        ? "secondary"
+        : templateStep.role,
       input.equipment,
       input.restrictions,
     )
@@ -1069,12 +1073,130 @@ function templateStepNumber(
   );
 }
 
+function sessionObjective(programmeType: string, sessionNumber: 1 | 2): string {
+  const objectives: Record<string, [string, string]> = {
+    mixed_strength_6w: [
+      "Front-squat progression and snatch development",
+      "Clean-and-jerk progression and gymnastics capacity",
+    ],
+    general_crossfit_6w: [
+      "General CrossFit strength and mixed-modal capacity",
+      "General CrossFit skill density and aerobic conditioning",
+    ],
+    masters_open_6w: [
+      "Durable squat strength and controlled Olympic-lift technique",
+      "Masters/Open repeatability, gymnastics control, and aerobic capacity",
+    ],
+    olympic_lifting_6w: [
+      "Snatch positions, receiving strength, and barbell speed",
+      "Clean-and-jerk technique, pulls, and overhead stability",
+    ],
+    endurance_capacity_6w: [
+      "Aerobic-support strength with sustainable mixed-modal work",
+      "Engine development with low-fatigue technical lifting",
+    ],
+    gymnastics_capacity_6w: [
+      "Squat maintenance and strict gymnastics skill development",
+      "Strict pulling, midline control, and gymnastics capacity",
+    ],
+  };
+  const selected = objectives[programmeType] || objectives.mixed_strength_6w!;
+  return selected[sessionNumber - 1] ?? selected[0]!;
+}
+
+function sessionStimulus(programmeType: string, sessionNumber: 1 | 2): string {
+  if (programmeType === "olympic_lifting_6w") {
+    return sessionNumber === 1
+      ? "Technical snatch practice with positional strength and short recovery-aware conditioning."
+      : "Clean-and-jerk practice with pulling strength and precise overhead positions.";
+  }
+  if (programmeType === "endurance_capacity_6w") {
+    return "Low-to-moderate strength volume supporting repeatable aerobic output and controlled pacing.";
+  }
+  if (programmeType === "gymnastics_capacity_6w") {
+    return "Strict gymnastics quality, stable positions, and measurable submaximal capacity.";
+  }
+  if (programmeType === "masters_open_6w") {
+    return "Durable strength and competition preparation with controlled fatigue and recovery-aware conditioning.";
+  }
+  return sessionNumber === 1
+    ? "Lower-body strength, technical lifting, and mixed-modal conditioning."
+    : "Technical lifting, gymnastics capacity, and controlled aerobic conditioning.";
+}
+
+function buildGenerationRequest(
+  input: GenerateProgramInput,
+  template: ReturnType<typeof getV2TemplateDefinition>,
+): GenerationRequest {
+  return {
+    programmeType: template.id,
+    programmeVersion: TEMPLATE_VERSION,
+    cycleLengthWeeks: template.durationWeeks,
+    sessionsPerWeek: input.sessionCount ?? 2,
+    athleteLevel: input.athleteLevel,
+    athleteGoals: [input.goal ?? template.blockType],
+    competitionFocus: input.competitionFocus ?? null,
+    availableEquipment: [...input.equipment].sort(),
+    known1RMs: { ...input.maxes },
+    skillPriorities: [...(input.skillPriorities ?? [])].sort(),
+    limitations: {
+      movementIds: [...input.restrictions.movementIds].sort(),
+      movementFamilyIds: [...input.restrictions.movementFamilyIds].sort(),
+      guidance: input.restrictions.guidance,
+    },
+    requestedStartDate: input.generatedAt,
+  };
+}
+
+function generationFingerprint(program: ProgramV2): string {
+  const canonical = program.trainingBlocks.flatMap((block) =>
+    block.trainingWeeks.flatMap((week) =>
+      week.sessions.map((session) => ({
+        week: week.weekNumber,
+        session: session.sessionNumber,
+        objective: session.objective,
+        exercises: session.exercises.map((exercise) => ({
+          section: exercise.section,
+          movementId: exercise.movementId,
+          sets: exercise.sets,
+          reps: exercise.reps,
+          intensityMethod: exercise.intensityMethod,
+          intensityValue: exercise.intensityValue,
+          loadKg: exercise.loadKg,
+        })),
+        conditioning: session.conditioning
+          ? {
+              format: session.conditioning.format,
+              durationMinutes: session.conditioning.durationMinutes,
+              timeCapMinutes: session.conditioning.timeCapMinutes,
+              rounds: session.conditioning.rounds,
+              movements: session.conditioning.movements.map((movement) => ({
+                movementId: movement.movementId,
+                reps: movement.reps,
+                durationSeconds: movement.durationSeconds,
+                calories: movement.calories,
+              })),
+            }
+          : null,
+      })),
+    ),
+  );
+  const text = JSON.stringify(canonical);
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
 function createSession(
   input: GenerateProgramInput,
   trainingWeekId: string,
   week: MixedStrengthWeekTemplate,
   sessionNumber: 1 | 2,
   tracks: Map<ProgressionTrackType, ProgressionTrack>,
+  programmeType = "mixed_strength_6w",
 ): TrainingSession {
   const sessionId = stableUuid(trainingWeekId, "session", sessionNumber);
   const relevantSteps = week.steps.filter(
@@ -1092,6 +1214,7 @@ function createSession(
       track,
       templateStep,
       stepNumber,
+      programmeType,
     );
     exercises.push(exercise);
     if (getMovement(exercise.movementId)?.category === "gymnastics") {
@@ -1133,14 +1256,8 @@ function createSession(
     sessionNumber,
     sessionType: "normal",
     weekNumber: week.weekNumber,
-    objective:
-      sessionNumber === 1
-        ? "Front-squat progression and snatch development"
-        : "Clean-and-jerk progression and gymnastics capacity",
-    intendedStimulus:
-      sessionNumber === 1
-        ? "Lower-body dominant strength and precise snatch positions followed by short mixed-modal conditioning."
-        : "Technical clean-and-jerk work, measurable strict gymnastics, and controlled aerobic conditioning.",
+    objective: sessionObjective(programmeType, sessionNumber),
+    intendedStimulus: sessionStimulus(programmeType, sessionNumber),
     expectedFatigue: expectedFatigue(stress),
     fatigueFocus: sessionNumber === 1 ? "lower_body" : "mixed",
     communityWorkoutAdvice:
@@ -1229,19 +1346,32 @@ export function generateMixedStrengthBlock(
   if (!input.programId || !input.generatedAt) {
     throw new Error("programId and generatedAt are required.");
   }
-  const template = getV2TemplateDefinition(input.templateId);
+  const template = getV2TemplateDefinition(input.templateId, {
+    allowDefault: true,
+  });
   const sessionCount = input.sessionCount ?? 2;
   const blockId = stableUuid(input.programId, template.id);
-  const weekTemplates =
-    template.id === "mixed_strength_8w_testing"
-      ? TESTING_STRENGTH_TEMPLATE
-      : MIXED_STRENGTH_TEMPLATE;
+  const weekTemplates = getV2ProgrammeTemplate(template.id);
   const tracks = trackMapForBlock(blockId, input.generatedAt, weekTemplates);
   let weeks: TrainingWeek[] = weekTemplates.map((weekTemplate) => {
     const trainingWeekId = stableUuid(blockId, "week", weekTemplate.weekNumber);
     const coreSessions = [
-      createSession(input, trainingWeekId, weekTemplate, 1, tracks),
-      createSession(input, trainingWeekId, weekTemplate, 2, tracks),
+      createSession(
+        input,
+        trainingWeekId,
+        weekTemplate,
+        1,
+        tracks,
+        template.id,
+      ),
+      createSession(
+        input,
+        trainingWeekId,
+        weekTemplate,
+        2,
+        tracks,
+        template.id,
+      ),
     ];
     const sessions = Array.from({ length: sessionCount }, (_, index) =>
       index < 2
@@ -1328,7 +1458,7 @@ export function generateMixedStrengthBlock(
   const block: TrainingBlock = {
     id: blockId,
     programId: input.programId,
-    blockType: input.blockType ?? template.blockType,
+    blockType: template.blockType,
     templateId: template.id,
     plannedSessionCount: sessionCount,
     name: template.name,
@@ -1366,6 +1496,10 @@ export function generateMixedStrengthBlock(
     trainingBlocks: [block],
     movementMaxes: input.movementMaxes ?? [],
     personalRecords: [],
+    generationSource: "generated",
+    generationRequest: buildGenerationRequest(input, template),
+    generationFingerprint: "pending",
+    generatorVersion: TEMPLATE_VERSION,
     validation: {
       valid: false,
       validatorVersion: VALIDATOR_VERSION,
@@ -1374,11 +1508,21 @@ export function generateMixedStrengthBlock(
     createdAt: input.generatedAt,
     updatedAt: input.generatedAt,
   };
-  const validation = validateProgram(draft);
-  return assertValidProgram({ ...draft, validation });
+  const fingerprint = generationFingerprint(draft);
+  const validation = validateProgram({
+    ...draft,
+    generationFingerprint: fingerprint,
+  });
+  return assertValidProgram({
+    ...draft,
+    generationFingerprint: fingerprint,
+    validation,
+  });
 }
 
 export function generateV2Program(input: GenerateProgramInput): ProgramV2 {
+  if (!input.templateId)
+    throw new Error("GENERATION_REQUEST_MISSING_PROGRAMME_TYPE");
   return generateMixedStrengthBlock(input);
 }
 
