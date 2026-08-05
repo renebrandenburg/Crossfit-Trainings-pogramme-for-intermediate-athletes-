@@ -4,7 +4,7 @@
   "private": true,
   "description": "Phone-first, box-aware CrossFit coach and progression tracker.",
   "scripts": {
-    "build:v2": "esbuild src/programming-v2/index.ts --bundle --format=iife --global-name=ForgeHourProgrammingV2 --target=es2022 --outfile=build/programming-v2.js && esbuild src/programming-v2/index.ts --bundle --platform=node --format=cjs --target=node22 --outfile=build/programming-v2.cjs",
+    "build:v2": "esbuild src/programming-v2/index.ts --bundle --format=iife --global-name=ForgeHourProgrammingV2 --target=es2022 --outfile=build/programming-v2.js && esbuild src/programming-v2/index.ts --bundle --platform=node --format=cjs --target=node22 --outfile=build/programming-v2.cjs && esbuild src/workout-library/index.js --bundle --format=iife --global-name=ForgeHourWorkoutLibrary --target=es2022 --outfile=build/workout-library.js",
     "check": "npm run lint && npm run format:check && npm run typecheck && npm test",
     "serve:e2e": "npm run build:v2 && node e2e/helpers/static-server.js",
     "format": "prettier . --write",

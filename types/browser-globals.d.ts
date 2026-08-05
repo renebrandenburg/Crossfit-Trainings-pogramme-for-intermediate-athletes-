@@ -29,6 +29,13 @@ interface Window {
   };
   ForgeHour: any;
   ForgeHourProgrammingV2?: typeof import("../src/programming-v2/index");
+  ForgeHourWorkoutLibrary?: {
+    CATEGORIES: ReadonlyArray<any>;
+    OPEN_WORKOUTS: ReadonlyArray<any>;
+    BENCHMARKS: ReadonlyArray<any>;
+    generateEmom: (options?: any) => any;
+    filterCatalog: (items: ReadonlyArray<any>, filters?: any) => any[];
+  };
   ForgeHourV2Debug?: boolean;
   ForgeHourSync: any;
   ForgeHourSupabaseConfig?: {

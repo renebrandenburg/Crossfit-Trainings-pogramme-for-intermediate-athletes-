@@ -844,6 +844,12 @@ alter table public.workout_logs
   add column if not exists recommendation_snapshot jsonb;
 alter table public.workout_logs
   add column if not exists rx_status text;
+alter table public.workout_logs
+  add column if not exists library_category_id text;
+alter table public.workout_logs
+  add column if not exists library_item_id text;
+alter table public.workout_logs
+  add column if not exists library_snapshot jsonb;
 
 alter table public.workout_logs
   drop constraint if exists workout_logs_structured_score_object;
@@ -863,6 +869,23 @@ alter table public.workout_logs
 alter table public.workout_logs
   add constraint workout_logs_rx_status_valid check (
     rx_status is null or rx_status in ('rx', 'scaled', 'not_applicable')
+  );
+alter table public.workout_logs
+  drop constraint if exists workout_logs_source_valid;
+alter table public.workout_logs
+  add constraint workout_logs_source_valid check (
+    workout_source in ('app', 'box', 'custom', 'library')
+  );
+alter table public.workout_logs
+  drop constraint if exists workout_logs_readiness_valid;
+alter table public.workout_logs
+  add constraint workout_logs_readiness_valid check (
+    (workout_source in ('box', 'library') and (readiness is null or readiness in ('green', 'amber', 'red')))
+    or (workout_source in ('app', 'custom') and readiness in ('green', 'amber', 'red'))
+  );
+alter table public.workout_logs
+  add constraint workout_logs_library_snapshot_object check (
+    library_snapshot is null or jsonb_typeof(library_snapshot) = 'object'
   );
 
 alter table public.athlete_states
@@ -899,6 +922,9 @@ create index if not exists readiness_checks_user_date_id_idx
 create index if not exists workout_logs_training_event_idx
   on public.workout_logs (user_id, training_event_id)
   where training_event_id is not null;
+create index if not exists workout_logs_library_item_idx
+  on public.workout_logs (user_id, library_item_id, date desc)
+  where library_item_id is not null;
 
 alter table public.training_events enable row level security;
 alter table public.readiness_checks enable row level security;

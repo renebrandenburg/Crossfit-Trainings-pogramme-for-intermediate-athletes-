@@ -15,6 +15,7 @@ A phone-first, box-aware CrossFit coach and progression tracker for intermediate
 - Manual training programme builder for adding your own sessions.
 - Movement library for gymnastics and weightlifting skills with cues, progressions, scaling, and video guide links.
 - Separate app and box workout logging, with structured time, rounds/reps, load, distance/calorie, split, substitution, strength-set, Rx/scaled, readiness, RPE, notes, and mobility data. Legacy free-form scores remain supported.
+- Standalone Workout Library with seeded 40-minute EMOM generation, searchable 2024/2025 Open workouts, benchmark catalogs, tagged history, and benchmark PR updates.
 - Frequency-aware dashboard totals that distinguish app progression completion from total weekly training.
 - iPhone Competition Proof recording with a synchronized timer overlay, local video preview, and save/share controls.
 - A combined **Progress** view for PRs, benchmark history, strength, gymnastics, engine, adherence, mobility, readiness/RPE, planned-versus-completed work, and end-of-cycle increase/hold/reduce recommendations.
@@ -35,7 +36,7 @@ deloads. Existing V1 plans remain readable and can be explicitly migrated or
 rolled back without inventing structured prescriptions from legacy free text.
 
 The primary navigation is **Today**, **Calendar**, **Log**, **Progress**, and
-**More**. Programme building, the movement library, Competition Proof, profile,
+**More**. Programme building, the Workout Library, movement library, Competition Proof, profile,
 theme, data ownership, and account synchronization live under More so the daily
 decision stays first.
 

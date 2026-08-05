@@ -7,6 +7,7 @@
   const localStateApi = window.ForgeHourLocalState;
   const achievementApi = window.ForgeHourAchievements;
   const v2Api = window.ForgeHourProgrammingV2 || null;
+  const libraryApi = window.ForgeHourWorkoutLibrary || null;
   const ReactRuntime = window.React;
   const ReactDOMRuntime = window.ReactDOM;
 
@@ -2847,6 +2848,103 @@
       notify("Backup restored on this device.");
     }
 
+    function handleSaveLibraryLog(log) {
+      const localOwnerId = appStateRef.current.activeScoreOwner;
+      const ownerId = remoteUser ? String(remoteUser.id || "") : "";
+      const authEpoch = authEpochRef.current;
+      const syncRemotely = Boolean(
+        remoteStore &&
+        ownerId &&
+        localOwnerId === ownerId &&
+        isCurrentAuth(ownerId, authEpoch),
+      );
+      updateAppState((current) =>
+        updateScoreData(
+          current,
+          (scores) => ({ ...scores, logs: mergeById(scores.logs, [log]) }),
+          localOwnerId,
+        ),
+      );
+      const benchmarkMetricIds = {
+        "benchmark-back-squat": "backSquat",
+        "benchmark-deadlift": "deadlift",
+        "benchmark-front-squat": "frontSquat",
+        "benchmark-snatch": "snatch",
+        "benchmark-clean-and-jerk": "cleanJerk",
+        "benchmark-press": "strictPress",
+        "benchmark-row-2k": "row2k",
+        "benchmark-run-5k": "run5k",
+        "benchmark-assault-bike-10": "bike10MinCalories",
+        "benchmark-max-pull-ups": "pullUps",
+        "benchmark-max-ring-muscle-ups": "ringMuscleUp",
+        "benchmark-max-hspu": "strictHspu",
+        "benchmark-max-t2b": "t2b",
+      };
+      const metricId = benchmarkMetricIds[log.libraryItemId];
+      const metric = PR_METRICS.find((item) => item.id === metricId);
+      const value = Number(log.structuredScore?.primaryValue);
+      if (metric && Number.isFinite(value) && value >= 0) {
+        const attempt = {
+          id: createId(),
+          metricId: metric.id,
+          metricName: metric.name,
+          value,
+          display: formatPrValue(value, metric),
+          date: log.date,
+          notes: log.notes,
+          isPr: isBetterPr(
+            value,
+            selectScoreData(appStateRef.current).prs?.[metric.id]?.value,
+            metric,
+          ),
+          createdAt: new Date().toISOString(),
+        };
+        const nextPrs = attempt.isPr
+          ? {
+              [metric.id]: {
+                metricId: metric.id,
+                value,
+                display: attempt.display,
+                date: log.date,
+                notes: log.notes,
+                updatedAt: attempt.createdAt,
+              },
+            }
+          : {};
+        updateAppState((current) =>
+          updateScoreData(
+            current,
+            (scores) => ({
+              ...scores,
+              prs: { ...scores.prs, ...nextPrs },
+              prAttempts: mergeById(scores.prAttempts, [attempt]),
+            }),
+            localOwnerId,
+          ),
+        );
+        if (syncRemotely)
+          remoteStore
+            .savePrAttempt(
+              attempt,
+              { ...selectScoreData(appStateRef.current).prs, ...nextPrs },
+              ownerId,
+            )
+            .catch(() => undefined);
+      }
+      if (syncRemotely) {
+        remoteStore.saveLog(log, ownerId).catch((error) => {
+          console.warn(
+            "Could not save library workout log to Supabase.",
+            error,
+          );
+          if (isCurrentAuth(ownerId, authEpoch)) {
+            notify("Workout saved locally. Remote sync is pending.");
+          }
+        });
+      }
+      return Promise.resolve();
+    }
+
     return h(
       ReactRuntime.Fragment,
       null,
@@ -3203,6 +3301,14 @@
             : null,
           visitedViews.has("learnView")
             ? h(MemoLearnView, { activeView })
+            : null,
+          visitedViews.has("libraryView")
+            ? h(WorkoutLibraryView, {
+                appState: viewState,
+                activeView,
+                onNotify: notify,
+                onSaveLog: handleSaveLibraryLog,
+              })
             : null,
           visitedViews.has("proofView")
             ? h(MemoProofView, {
@@ -4035,6 +4141,11 @@
           "section",
           { className: "more-grid", "aria-label": "Training tools" },
           [
+            [
+              "libraryView",
+              "Workout Library",
+              "Generate an EMOM or choose an Open or benchmark workout.",
+            ],
             [
               "builderView",
               "Build programme",
@@ -9960,6 +10071,453 @@
     );
   }
 
+  function WorkoutLibraryView({ appState, activeView, onNotify, onSaveLog }) {
+    const [categoryId, setCategoryId] = ReactRuntime.useState("emom-40");
+    const [focus, setFocus] = ReactRuntime.useState("mixed");
+    const [selected, setSelected] = ReactRuntime.useState(null);
+    const [query, setQuery] = ReactRuntime.useState("");
+    const [year, setYear] = ReactRuntime.useState("");
+    const [equipment, setEquipment] = ReactRuntime.useState("");
+    const [group, setGroup] = ReactRuntime.useState("all");
+    const [formVersion, setFormVersion] = ReactRuntime.useState(0);
+    const openItems =
+      libraryApi?.filterCatalog(libraryApi.OPEN_WORKOUTS, {
+        query,
+        year,
+        equipment,
+      }) || [];
+    const benchmarkItems = (libraryApi?.BENCHMARKS || []).filter(
+      (item) =>
+        (group === "all" || item.groupId === group) &&
+        (!query ||
+          `${item.title} ${item.description}`
+            .toLowerCase()
+            .includes(query.toLowerCase())),
+    );
+    const history = appState.logs.filter(
+      (log) => log.workoutSource === "library",
+    );
+
+    function chooseCategory(nextCategoryId) {
+      setCategoryId(nextCategoryId);
+      setSelected(null);
+      setQuery("");
+    }
+
+    function generate() {
+      const workout = libraryApi.generateEmom({
+        focus,
+        profile: appState.profile,
+        seed: createId(),
+      });
+      setSelected(workout);
+    }
+
+    function submit(event) {
+      event.preventDefault();
+      const data = new FormData(event.currentTarget);
+      const score = String(data.get("libraryScore") || "").trim();
+      if (!score) {
+        onNotify("Add a result before saving the workout.");
+        return;
+      }
+      const date = String(data.get("libraryDate") || todayInputValue());
+      const log = {
+        id: createId(),
+        date,
+        week: 1,
+        dayId: selected.id,
+        dayTitle: selected.title,
+        workoutSource: "library",
+        readiness: null,
+        difficulty: null,
+        movementPatterns: [],
+        durationMinutes: selected.durationMinutes || null,
+        rpe: "",
+        strengthResult: "",
+        wodScore: score,
+        structuredScore: {
+          scoreType: selected.scoreType || "custom",
+          primaryValue: Number(data.get("libraryValue")) || null,
+          unit: String(data.get("libraryUnit") || "").trim() || null,
+          splits: [],
+          substitutions: [],
+        },
+        rxStatus: String(data.get("libraryRxStatus") || "not_applicable"),
+        notes: String(data.get("libraryNotes") || "").trim(),
+        mobilityDone: false,
+        libraryCategoryId: selected.categoryId,
+        libraryItemId: selected.id,
+        librarySnapshot: selected,
+        createdAt: new Date().toISOString(),
+      };
+      onSaveLog(log).then(() => {
+        setFormVersion((value) => value + 1);
+        onNotify("Library workout saved.");
+      });
+    }
+
+    if (!libraryApi) return null;
+    return h(
+      "section",
+      {
+        id: "libraryView",
+        className: viewClass("libraryView", activeView),
+        "aria-labelledby": "libraryTitle",
+      },
+      h(
+        "div",
+        { className: "section-heading" },
+        h(
+          "div",
+          null,
+          h("p", { className: "eyebrow" }, "Standalone training"),
+          h("h2", { id: "libraryTitle" }, "Workout Library"),
+        ),
+      ),
+      h(
+        "div",
+        { className: "more-grid", "aria-label": "Workout library categories" },
+        libraryApi.CATEGORIES.map((item) =>
+          h(
+            "button",
+            {
+              key: item.id,
+              className: `panel more-card${item.id === categoryId ? " is-selected" : ""}`,
+              type: "button",
+              onClick: () => chooseCategory(item.id),
+            },
+            h("strong", null, `${item.icon} ${item.name}`),
+            h("span", null, item.description),
+          ),
+        ),
+      ),
+      categoryId === "emom-40"
+        ? h(
+            "section",
+            { className: "panel", "aria-labelledby": "emomFocusTitle" },
+            h("p", { className: "eyebrow" }, "Always generated"),
+            h("h3", { id: "emomFocusTitle" }, "Choose your focus"),
+            h(
+              "div",
+              { className: "quick-actions" },
+              [
+                ["engine", "Engine"],
+                ["mixed", "Mixed"],
+                ["olympic", "Olympic Lifting"],
+                ["gymnastics", "Gymnastics"],
+                ["strength_endurance", "Strength Endurance"],
+                ["open_prep", "Open Prep"],
+              ].map(([value, label]) =>
+                h(
+                  "button",
+                  {
+                    key: value,
+                    className: `ghost-button${focus === value ? " is-selected" : ""}`,
+                    type: "button",
+                    onClick: () => setFocus(value),
+                  },
+                  label,
+                ),
+              ),
+            ),
+            h(
+              "button",
+              {
+                className: "primary-button",
+                type: "button",
+                onClick: generate,
+              },
+              "Generate workout",
+            ),
+          )
+        : null,
+      categoryId === "open"
+        ? h(
+            "section",
+            { className: "panel", "aria-labelledby": "openFilterTitle" },
+            h("h3", { id: "openFilterTitle" }, "Find an Open workout"),
+            h(
+              "div",
+              { className: "form-row" },
+              h(
+                "label",
+                null,
+                "Search",
+                h("input", {
+                  type: "search",
+                  value: query,
+                  onChange: (event) => setQuery(event.target.value),
+                  placeholder: "25.1, snatch, burpee",
+                }),
+              ),
+              h(
+                "label",
+                null,
+                "Year",
+                h(
+                  "select",
+                  {
+                    value: year,
+                    onChange: (event) => setYear(event.target.value),
+                  },
+                  h("option", { value: "" }, "All years"),
+                  [2024, 2025].map((value) =>
+                    h("option", { key: value, value }, value),
+                  ),
+                ),
+              ),
+              h(
+                "label",
+                null,
+                "Equipment",
+                h(
+                  "select",
+                  {
+                    value: equipment,
+                    onChange: (event) => setEquipment(event.target.value),
+                  },
+                  h("option", { value: "" }, "Any equipment"),
+                  ["barbell", "dumbbell", "pullupBar", "rower", "plates"].map(
+                    (value) => h("option", { key: value, value }, value),
+                  ),
+                ),
+              ),
+            ),
+            h(
+              "div",
+              { className: "library-grid" },
+              openItems.map((item) =>
+                h(LibraryCard, { key: item.id, item, onSelect: setSelected }),
+              ),
+            ),
+          )
+        : null,
+      categoryId === "benchmarks"
+        ? h(
+            "section",
+            { className: "panel", "aria-labelledby": "benchmarkFilterTitle" },
+            h("h3", { id: "benchmarkFilterTitle" }, "Choose a benchmark"),
+            h(
+              "div",
+              { className: "form-row" },
+              h(
+                "label",
+                null,
+                "Section",
+                h(
+                  "select",
+                  {
+                    value: group,
+                    onChange: (event) => setGroup(event.target.value),
+                  },
+                  h("option", { value: "all" }, "All sections"),
+                  ["girls", "strength", "conditioning", "gymnastics"].map(
+                    (value) =>
+                      h(
+                        "option",
+                        { key: value, value },
+                        value[0].toUpperCase() + value.slice(1),
+                      ),
+                  ),
+                ),
+              ),
+              h(
+                "label",
+                null,
+                "Search",
+                h("input", {
+                  type: "search",
+                  value: query,
+                  onChange: (event) => setQuery(event.target.value),
+                  placeholder: "Fran, row, pull-ups",
+                }),
+              ),
+            ),
+            h(
+              "div",
+              { className: "library-grid" },
+              benchmarkItems.map((item) =>
+                h(LibraryCard, { key: item.id, item, onSelect: setSelected }),
+              ),
+            ),
+          )
+        : null,
+      selected
+        ? h(
+            "section",
+            {
+              className: "panel",
+              "aria-labelledby": "selectedLibraryWorkoutTitle",
+            },
+            h(
+              "p",
+              { className: "eyebrow" },
+              selected.categoryId === "open"
+                ? "Open workout"
+                : selected.groupName || selected.focus || "Generated workout",
+            ),
+            h("h3", { id: "selectedLibraryWorkoutTitle" }, selected.title),
+            h("p", { className: "muted-copy" }, selected.description),
+            selected.rx
+              ? h("p", null, h("strong", null, "RX: "), selected.rx)
+              : null,
+            selected.scaled
+              ? h("p", null, h("strong", null, "Scaled: "), selected.scaled)
+              : null,
+            selected.standards
+              ? h(
+                  "p",
+                  null,
+                  h("strong", null, "Standards: "),
+                  selected.standards,
+                )
+              : null,
+            selected.stations
+              ? h(
+                  "ol",
+                  null,
+                  selected.stations.map((station) =>
+                    h(
+                      "li",
+                      { key: station.minute },
+                      `Minute ${station.minute}: ${station.reps} ${station.movement}`,
+                    ),
+                  ),
+                )
+              : null,
+            h(
+              "form",
+              { key: formVersion, onSubmit: submit },
+              h(
+                "div",
+                { className: "form-row" },
+                h(
+                  "label",
+                  null,
+                  "Date",
+                  h("input", {
+                    name: "libraryDate",
+                    type: "date",
+                    defaultValue: todayInputValue(),
+                    required: true,
+                  }),
+                ),
+                h(
+                  "label",
+                  null,
+                  "Result",
+                  h("input", {
+                    name: "libraryScore",
+                    required: true,
+                    placeholder:
+                      selected.scoreType === "time" ? "4:52" : "Rounds + reps",
+                  }),
+                ),
+              ),
+              h(
+                "div",
+                { className: "form-row" },
+                h(
+                  "label",
+                  null,
+                  "Numeric value (optional)",
+                  h("input", {
+                    name: "libraryValue",
+                    type: "number",
+                    min: "0",
+                    step: "any",
+                  }),
+                ),
+                h(
+                  "label",
+                  null,
+                  "Unit",
+                  h("input", {
+                    name: "libraryUnit",
+                    placeholder: "sec, kg, reps, cal",
+                  }),
+                ),
+              ),
+              h(
+                "label",
+                null,
+                "Division",
+                h(
+                  "select",
+                  { name: "libraryRxStatus", defaultValue: "not_applicable" },
+                  h("option", { value: "rx" }, "RX"),
+                  h("option", { value: "scaled" }, "Scaled"),
+                  h("option", { value: "not_applicable" }, "Not applicable"),
+                ),
+              ),
+              h(
+                "label",
+                null,
+                "Notes",
+                h("textarea", {
+                  name: "libraryNotes",
+                  rows: "3",
+                  placeholder: "Pacing, substitutions, or next target",
+                }),
+              ),
+              h(
+                "button",
+                { className: "primary-button", type: "submit" },
+                "Save result",
+              ),
+            ),
+          )
+        : null,
+      h(
+        "section",
+        { className: "panel", "aria-labelledby": "libraryHistoryTitle" },
+        h("p", { className: "eyebrow" }, "Saved separately from programmes"),
+        h("h3", { id: "libraryHistoryTitle" }, "Workout history"),
+        history.length
+          ? history
+              .slice(0, 8)
+              .map((log) =>
+                h(
+                  "article",
+                  { className: "history-item", key: log.id },
+                  h("h4", null, `${formatDate(log.date)} - ${log.dayTitle}`),
+                  h("p", null, log.wodScore || "No result"),
+                  log.notes ? h("p", null, log.notes) : null,
+                ),
+              )
+          : h(
+              "div",
+              { className: "empty-state" },
+              "No library workouts completed yet.",
+            ),
+      ),
+    );
+  }
+
+  function LibraryCard({ item, onSelect }) {
+    return h(
+      "article",
+      { className: "history-item" },
+      h(
+        "div",
+        { className: "panel-title" },
+        h("h4", null, item.title),
+        h("span", { className: "tag" }, item.groupName || item.year),
+      ),
+      h("p", null, item.description || item.rx || "Generated workout"),
+      h(
+        "button",
+        {
+          className: "ghost-button",
+          type: "button",
+          onClick: () => onSelect(item),
+        },
+        "Open workout",
+      ),
+    );
+  }
+
   function MovementCard({ movement }) {
     return h(
       "article",
@@ -11276,6 +11834,7 @@
       "moreView",
       "builderView",
       "learnView",
+      "libraryView",
       "proofView",
     ]);
 

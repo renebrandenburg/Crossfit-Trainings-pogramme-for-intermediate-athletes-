@@ -22,6 +22,9 @@
     "structured_score",
     "recommendation_snapshot",
     "rx_status",
+    "library_category_id",
+    "library_item_id",
+    "library_snapshot",
     "notes",
     "mobility_done",
     "created_at",
@@ -82,6 +85,9 @@
     "structured_score",
     "recommendation_snapshot",
     "rx_status",
+    "library_category_id",
+    "library_item_id",
+    "library_snapshot",
     ...WORKOUT_METADATA_COLUMNS,
   ];
   const OPTIONAL_LOG_FIELDS = [
@@ -121,6 +127,21 @@
       hasValue: Boolean,
     },
     {
+      column: "library_category_id",
+      property: "libraryCategoryId",
+      hasValue: Boolean,
+    },
+    {
+      column: "library_item_id",
+      property: "libraryItemId",
+      hasValue: Boolean,
+    },
+    {
+      column: "library_snapshot",
+      property: "librarySnapshot",
+      remoteNeedsValue: true,
+    },
+    {
       column: "workout_source",
       property: "workoutSource",
       hasValue: (value) => Boolean(value && value !== "app"),
@@ -147,7 +168,7 @@
   const ATHLETE_STATE_COLUMNS = "user_id,schema_version,state,updated_at";
   const LOWER_IS_BETTER_PR_IDS = new Set(["row1k", "row2k", "run5k", "murph"]);
   const LEGACY_RECORD_UPDATED_AT = "1970-01-01T00:00:00.000Z";
-  const WORKOUT_SOURCES = new Set(["app", "box", "custom"]);
+  const WORKOUT_SOURCES = new Set(["app", "box", "custom", "library"]);
   const TRAINING_EVENT_KINDS = new Set(["app", "box", "rest"]);
   const TRAINING_EVENT_STATUSES = new Set(["planned", "completed", "skipped"]);
   const READINESS_SORENESS = new Set(["none", "manageable", "high"]);
@@ -606,6 +627,7 @@
       week < 1 ||
       week > 8 ||
       (workoutSource !== "box" &&
+        workoutSource !== "library" &&
         !["green", "amber", "red"].includes(readiness)) ||
       (readiness !== null && !["green", "amber", "red"].includes(readiness)) ||
       (difficulty !== null &&
@@ -679,6 +701,15 @@
         "validate_local_data",
       );
     }
+    if (log.libraryCategoryId) row.library_category_id = log.libraryCategoryId;
+    if (log.libraryItemId) row.library_item_id = log.libraryItemId;
+    if (log.librarySnapshot) {
+      row.library_snapshot = optionalObject(
+        log.librarySnapshot,
+        "Library workout snapshot",
+        "validate_local_data",
+      );
+    }
     return row;
   }
 
@@ -721,6 +752,7 @@
     if (
       !WORKOUT_SOURCES.has(workoutSource) ||
       (workoutSource !== "box" &&
+        workoutSource !== "library" &&
         !["green", "amber", "red"].includes(readiness)) ||
       (readiness !== null && !["green", "amber", "red"].includes(readiness)) ||
       (difficulty !== null &&
@@ -777,6 +809,18 @@
     }
     if (Object.prototype.hasOwnProperty.call(row, "duration_minutes")) {
       log.durationMinutes = durationMinutes;
+    }
+    if (Object.prototype.hasOwnProperty.call(row, "library_category_id")) {
+      log.libraryCategoryId = row.library_category_id || null;
+    }
+    if (Object.prototype.hasOwnProperty.call(row, "library_item_id")) {
+      log.libraryItemId = row.library_item_id || null;
+    }
+    if (Object.prototype.hasOwnProperty.call(row, "library_snapshot")) {
+      log.librarySnapshot = optionalObject(
+        row.library_snapshot,
+        "Library workout snapshot",
+      );
     }
     return log;
   }
