@@ -5,7 +5,6 @@ const { expect } = require("@playwright/test");
 class PlanBuilderPage {
   constructor(page) {
     this.page = page;
-    this.generatorForm = page.locator("#programmeGeneratorForm");
     this.customPlanForm = page.locator("#customPlanForm");
   }
 
@@ -105,73 +104,34 @@ class PlanBuilderPage {
     );
   }
 
-  /**
-   * @param {{
-   *   goal: string,
-   *   days?: string,
-   *   totalDays?: string,
-   *   secondaryGoal?: string,
-   *   weakness?: string,
-   *   athleteLevel?: string,
-   *   duration?: string,
-   *   barMuscleUpLevel?: string,
-   *   boxDays?: string
-   * }} options
-   */
-  async generate({
-    goal,
-    days = "4",
-    totalDays = "4",
-    secondaryGoal,
-    weakness,
+  async generateV2({
+    goal = "mixed",
+    blockType = "mixed_strength",
+    templateId = "mixed_strength_6w",
+    frequency = 2,
+    preferredDays = ["tuesday", "saturday"],
     athleteLevel = "intermediate",
-    duration = "60",
-    barMuscleUpLevel,
-    boxDays,
-  }) {
-    await this.generatorForm.getByLabel("Main goal").selectOption(goal);
-    if (secondaryGoal) {
-      await this.generatorForm
-        .getByLabel("Secondary goal (optional)")
-        .selectOption(secondaryGoal);
-    }
-    await this.generatorForm
-      .getByLabel("Total weekly training")
-      .selectOption(totalDays);
-    await this.generatorForm
-      .getByLabel("App-programmed sessions")
-      .selectOption(days);
-    if (weakness) {
-      await this.generatorForm
-        .getByLabel("Biggest weakness")
-        .selectOption(weakness);
-    }
-    if (barMuscleUpLevel) {
-      await this.generatorForm
-        .getByLabel("Current bar muscle-up level")
-        .selectOption(barMuscleUpLevel);
-    }
-    await this.generatorForm
-      .getByLabel("Max session length")
-      .selectOption(duration);
-    if (boxDays) {
-      await this.generatorForm
-        .getByLabel("I also follow workouts at a CrossFit box")
-        .check();
-      await this.generatorForm
-        .getByLabel("Expected box workouts")
-        .fill(boxDays);
-    }
-    await this.generatorForm
-      .getByLabel("Athlete programming level")
+  } = {}) {
+    const setup = this.page.locator(".v2-programme-setup");
+    await setup.locator('select[name="v2Goal"]').selectOption(goal);
+    await setup.locator('select[name="v2BlockType"]').selectOption(blockType);
+    await setup.locator('select[name="v2TemplateId"]').selectOption(templateId);
+    await setup
+      .locator('select[name="v2AthleteLevel"]')
       .selectOption(athleteLevel);
-    await this.generatorForm
-      .getByRole("button", { name: /(?:Generate|Regenerate) 8-week programme/ })
-      .click();
+    await setup
+      .locator('select[name="v2Frequency"]')
+      .selectOption(String(frequency));
+    for (const checkbox of await setup
+      .locator('input[name="v2PreferredDay"]')
+      .all()) {
+      const selected = preferredDays.includes(await checkbox.inputValue());
+      if (selected) await checkbox.check();
+      else await checkbox.uncheck();
+    }
+    await setup.getByRole("button", { name: /Generate .*block/ }).click();
     await this.page
-      .getByText(
-        /(?:Generated|Regenerated) \d+ sessions\.|Updated to \d+ app sessions per week\./,
-      )
+      .getByText(/Generated a connected \d+-week, \d+-session V2 block\./)
       .waitFor();
   }
 

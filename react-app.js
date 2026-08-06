@@ -596,6 +596,23 @@
     const activeProgrammingEngine = localStateWins
       ? localState?.activeProgrammingEngine
       : remoteState?.activeProgrammingEngine;
+    const preferredWeek = localStateWins
+      ? localState?.selectedWeek
+      : remoteState?.selectedWeek;
+    const selectedWeek =
+      activeProgrammingEngine === "v2" && activeV2ProgramId
+        ? resolveValidWeek(
+            getAvailableProgrammeWeeks(
+              v2Programs.find((program) => program.id === activeV2ProgramId),
+            ),
+            preferredWeek,
+          )
+        : resolvePlanTransition(
+            remoteState?.plans?.find(
+              (plan) => plan.id === remoteState?.activePlanId,
+            ),
+            preferredWeek,
+          ).selectedWeek;
     return {
       ...remoteState,
       v2Programs,
@@ -603,12 +620,7 @@
       v2ProgramRevisions,
       activeProgrammingEngine:
         activeProgrammingEngine === "v2" && activeV2ProgramId ? "v2" : "v1",
-      selectedWeek: resolveValidWeek(
-        getAvailableProgrammeWeeks(
-          v2Programs.find((program) => program.id === activeV2ProgramId),
-        ),
-        localStateWins ? localState?.selectedWeek : remoteState?.selectedWeek,
-      ),
+      selectedWeek,
       v2GenerationPreferences: localStateWins
         ? localState?.v2GenerationPreferences
         : remoteState?.v2GenerationPreferences,
@@ -2003,7 +2015,7 @@
           strength: "mixed_strength_6w",
           endurance: "endurance_capacity_6w",
           gymnastics: "gymnastics_capacity_6w",
-          bar_muscle_up: "bar_muscle_up_6w",
+          bar_muscle_up: "gymnastics_capacity_6w",
           competition: "competition_preparation_6w",
           open: "open_preparation_6w",
           masters_open: "masters_open_preparation_6w",
@@ -2014,22 +2026,28 @@
         const requestedTemplateId =
           settings.templateId || rawPreferences?.templateId || null;
         const templateId =
-          preferences.goal === "competition" ||
-          preferences.blockType === "competition_preparation"
-            ? "competition_preparation_6w"
-            : preferences.goal === "open" ||
-                preferences.blockType === "open_preparation"
-              ? "open_preparation_6w"
-              : (preferences.goal === "masters_open" ||
-                    preferences.blockType === "masters_open_preparation") &&
-                  (!requestedTemplateId ||
-                    requestedTemplateId === "mixed_strength_6w" ||
-                    requestedTemplateId === "masters_open_6w" ||
-                    requestedTemplateId === "masters_open_preparation_six_week")
-                ? "masters_open_preparation_6w"
-                : requestedTemplateId ||
-                  templateByGoal[preferences.goal] ||
-                  "mixed_strength_6w";
+          preferences.goal === "bar_muscle_up" &&
+          (!requestedTemplateId ||
+            requestedTemplateId === "mixed_strength_6w" ||
+            requestedTemplateId === "bar_muscle_up_6w")
+            ? "gymnastics_capacity_6w"
+            : preferences.goal === "competition" ||
+                preferences.blockType === "competition_preparation"
+              ? "competition_preparation_6w"
+              : preferences.goal === "open" ||
+                  preferences.blockType === "open_preparation"
+                ? "open_preparation_6w"
+                : (preferences.goal === "masters_open" ||
+                      preferences.blockType === "masters_open_preparation") &&
+                    (!requestedTemplateId ||
+                      requestedTemplateId === "mixed_strength_6w" ||
+                      requestedTemplateId === "masters_open_6w" ||
+                      requestedTemplateId ===
+                        "masters_open_preparation_six_week")
+                  ? "masters_open_preparation_6w"
+                  : requestedTemplateId ||
+                    templateByGoal[preferences.goal] ||
+                    "mixed_strength_6w";
         const generator =
           v2Api.generateV2Program || v2Api.generateMixedStrengthBlock;
         const program = generator({

@@ -13,12 +13,16 @@ function read(file) {
 }
 
 function deployedAssetNames(workflow) {
-  const copyCommand = workflow.match(/cp ([^\n]+) dist\//);
-  assert.ok(
-    copyCommand,
-    "Pages workflow should copy the static site into dist",
+  const copyCommands = [...workflow.matchAll(/cp ([^\n]+) dist\//g)];
+  assert.ok(copyCommands.length, "Pages workflow should copy assets into dist");
+  return new Set(
+    copyCommands.flatMap((command) =>
+      command[1]
+        .trim()
+        .split(/\s+/)
+        .map((asset) => path.basename(asset)),
+    ),
   );
-  return new Set(copyCommand[1].trim().split(/\s+/));
 }
 
 function localHtmlAssetNames(html) {
@@ -26,6 +30,12 @@ function localHtmlAssetNames(html) {
     [...html.matchAll(/(?:src|href)="\.\/([^"?#]+)[^"]*"/g)].map(
       (match) => match[1],
     ),
+  );
+}
+
+function localServiceWorkerAssetNames(serviceWorker) {
+  return new Set(
+    [...serviceWorker.matchAll(/"\.\/([^"?#]+)"/g)].map((match) => match[1]),
   );
 }
 
@@ -357,6 +367,7 @@ test("GitHub Pages workflow checks and publishes the static app", () => {
   const workflow = read(".github/workflows/pages.yml");
   const deployedAssets = deployedAssetNames(workflow);
   const htmlAssets = localHtmlAssetNames(read("index.html"));
+  const serviceWorkerAssets = localServiceWorkerAssetNames(read("sw.js"));
 
   assert.match(workflow, /Deploy to GitHub Pages/);
   assert.match(workflow, /pull_request:/);
@@ -395,6 +406,10 @@ test("GitHub Pages workflow checks and publishes the static app", () => {
     assert.ok(
       deployedAssets.has(asset),
       `Pages artifact should include local HTML asset ${asset}`,
+    );
+    assert.ok(
+      serviceWorkerAssets.has(asset),
+      `Service worker should cache local HTML asset ${asset}`,
     );
   }
   for (const asset of ["index.html", "sw.js", "icon.svg"]) {

@@ -1,7 +1,7 @@
 "use strict";
 
 const { test, expect } = require("../fixtures/playwright");
-const { overrideProgrammeGenerator } = require("../helpers/app-overrides");
+const { overrideV2ProgrammeGenerator } = require("../helpers/app-overrides");
 const { readActivePlan } = require("../helpers/state");
 const { uniqueTestData } = require("../helpers/data-factory");
 const { AccountPage } = require("../pages/account-page");
@@ -150,13 +150,13 @@ test("expired authentication produces a useful session error", async ({
 });
 
 for (const [label, implementation] of [
-  ["empty", "() => []"],
-  ["malformed", "() => [{ week: 1 }]"],
+  ["empty", "() => null"],
+  ["malformed", '() => ({ engineVersion: "v2" })'],
 ]) {
-  test(`@critical ${label} generator output leaves the current plan unchanged`, async ({
+  test(`@critical ${label} V2 output leaves the current plan unchanged`, async ({
     page,
   }) => {
-    await overrideProgrammeGenerator(page, implementation);
+    await overrideV2ProgrammeGenerator(page, implementation);
     const app = new AppShell(page);
     const builder = new PlanBuilderPage(page);
     await app.open();
@@ -164,12 +164,12 @@ for (const [label, implementation] of [
     await builder.createCustomPlan(uniqueTestData());
     const activePlanBefore = await readActivePlan(page);
 
-    await builder.generatorForm
-      .getByRole("button", { name: /Generate 8-week programme/ })
+    await page
+      .getByRole("button", { name: "Generate six-week V2 block" })
       .click();
     await expect(
       page.getByText(
-        "Programme generation could not produce valid workouts. Your current plan was not changed.",
+        "V2 generation could not satisfy equipment, restriction, duration, and validation rules. No programme was replaced.",
         { exact: true },
       ),
     ).toBeVisible();

@@ -30,11 +30,13 @@ test("@critical V2 generates, renders, regenerates, completes, and reloads a con
   await app.open();
   await builder.open();
 
-  await page
-    .getByRole("button", { name: "Generate six-week V2 block" })
-    .click();
+  await builder.generateV2({
+    frequency: 3,
+    preferredDays: ["monday", "wednesday", "saturday"],
+    athleteLevel: "advanced",
+  });
   const programme = page.getByTestId("v2-programme");
-  await expect(programme.getByTestId("v2-session-card")).toHaveCount(2);
+  await expect(programme.getByTestId("v2-session-card")).toHaveCount(3);
   await expect(programme).toContainText("72–75% of front squat 1RM");
   await expect(programme).toContainText("Working weight");
   await expect(programme).toContainText("90–95 kg");
@@ -46,7 +48,7 @@ test("@critical V2 generates, renders, regenerates, completes, and reloads a con
 
   await app.navigate("Plan");
   const calendar = page.locator("#calendarView");
-  await expect(calendar.getByTestId("v2-session-card")).toHaveCount(2);
+  await expect(calendar.getByTestId("v2-session-card")).toHaveCount(3);
   await expect(calendar).toContainText("72–75% of front squat 1RM");
   await expect(calendar).toContainText("Rest 120 sec");
   await expect(page.getByLabel("Programme week").locator("option")).toHaveCount(
@@ -62,6 +64,16 @@ test("@critical V2 generates, renders, regenerates, completes, and reloads a con
 
   const beforeState = await readAppState(page);
   const beforeProgram = activeV2Program(beforeState);
+  expect(beforeState.v2GenerationPreferences).toMatchObject({
+    preferredDays: ["monday", "wednesday", "saturday"],
+    frequency: 3,
+    athleteLevel: "advanced",
+  });
+  expect(
+    beforeProgram.trainingBlocks[0].trainingWeeks.every(
+      (week) => week.sessions.length === 3,
+    ),
+  ).toBe(true);
   const beforeSession = firstSession(beforeProgram);
   const primaryBefore = beforeSession.exercises.filter(
     (exercise) => exercise.section === "primary",
@@ -121,6 +133,10 @@ test("@critical V2 generates, renders, regenerates, completes, and reloads a con
 
   await page.reload();
   await builder.open();
+  await expect(page.locator('select[name="v2Frequency"]')).toHaveValue("3");
+  await expect(page.locator('select[name="v2AthleteLevel"]')).toHaveValue(
+    "advanced",
+  );
   await expect(page.getByTestId("v2-programme")).toContainText(
     "Completed — progression feedback has been applied.",
   );
@@ -130,6 +146,36 @@ test("@critical V2 generates, renders, regenerates, completes, and reloads a con
   await expect(page.getByTestId("v2-programme")).not.toContainText(
     INVALID_PULL_HOLD,
   );
+});
+
+test("@critical V2 bar muscle-up goal maps to gymnastics progression", async ({
+  page,
+}) => {
+  const app = new AppShell(page);
+  const builder = new PlanBuilderPage(page);
+  await app.open();
+  await builder.open();
+
+  await builder.generateV2({
+    goal: "bar_muscle_up",
+    blockType: "gymnastics_capacity",
+  });
+
+  let program = activeV2Program(await readAppState(page));
+  expect(program.trainingBlocks[0].templateId).toBe("gymnastics_capacity_6w");
+  expect(program.generationRequest.athleteGoals).toEqual(["bar_muscle_up"]);
+  await expect(page.getByTestId("v2-programme")).toContainText(/strict pull/i);
+
+  await page.reload();
+  await builder.open();
+  await expect(page.locator('select[name="v2Goal"]')).toHaveValue(
+    "bar_muscle_up",
+  );
+  await expect(page.locator('select[name="v2TemplateId"]')).toHaveValue(
+    "gymnastics_capacity_6w",
+  );
+  program = activeV2Program(await readAppState(page));
+  expect(program.trainingBlocks[0].templateId).toBe("gymnastics_capacity_6w");
 });
 
 test("@critical Masters/Open V2 uses competition-specific sessions", async ({

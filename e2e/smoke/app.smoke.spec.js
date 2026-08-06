@@ -117,3 +117,39 @@ test("@smoke authenticated state is reusable", async ({ page }) => {
     page.getByText("e2e-athlete@example.test", { exact: true }),
   ).toBeVisible();
 });
+
+test("@smoke generates, saves, and reloads a Workout Library EMOM", async ({
+  page,
+}) => {
+  const app = new AppShell(page);
+  await app.open();
+  await app.navigate("More");
+  await page
+    .getByRole("button", { name: "Workout Library", exact: true })
+    .click();
+
+  const library = page.locator("#libraryView");
+  await expect(
+    library.getByRole("heading", { name: "Workout Library" }),
+  ).toBeVisible();
+  await library.getByRole("button", { name: "Engine", exact: true }).click();
+  await library.getByRole("button", { name: "Generate workout" }).click();
+  await expect(library.locator("#selectedLibraryWorkoutTitle")).toContainText(
+    /40-Minute EMOM/i,
+  );
+  await library.getByLabel("Result").fill("10 rounds + 20 reps");
+  await library.getByRole("button", { name: "Save result" }).click();
+  await expect(
+    page.getByText("Library workout saved.", { exact: true }),
+  ).toBeVisible();
+  await expect(library.getByText("10 rounds + 20 reps")).toBeVisible();
+
+  await page.reload();
+  await app.navigate("More");
+  await page
+    .getByRole("button", { name: "Workout Library", exact: true })
+    .click();
+  await expect(
+    page.locator("#libraryView").getByText("10 rounds + 20 reps"),
+  ).toBeVisible();
+});

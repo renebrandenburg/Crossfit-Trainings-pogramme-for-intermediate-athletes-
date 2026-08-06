@@ -105,9 +105,8 @@ jobs:
       - name: Prepare static site
         run: |
           mkdir -p dist
-          cp build/programming-v2.js programming-v2.js
-          cp build/workout-library.js workout-library.js
-          cp build/programming-v2.js build/workout-library.js index.html styles.css build-info.js local-state-store.js achievements.js movement-catalog.js training-prescriptions.js app.js supabase-config.js supabase-sync.js react-app.js programming-v2.js workout-library.js manifest.webmanifest sw.js icon.svg dist/
+          cp build/programming-v2.js build/workout-library.js dist/
+          cp index.html styles.css build-info.js local-state-store.js achievements.js movement-catalog.js training-prescriptions.js app.js supabase-config.js supabase-sync.js react-app.js manifest.webmanifest sw.js icon.svg dist/
           printf '"use strict";\nwindow.ForgeHourBuild = Object.freeze({ commitSha: "%s" });\n' "${{ github.sha }}" > dist/build-info.js
 
       - name: Configure GitHub Pages

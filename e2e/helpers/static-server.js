@@ -15,6 +15,7 @@ const contentTypes = {
   ".svg": "image/svg+xml",
   ".webmanifest": "application/manifest+json; charset=utf-8",
 };
+const builtAssets = new Set(["programming-v2.js", "workout-library.js"]);
 
 const server = http.createServer(async (request, response) => {
   const requestUrl = new URL(request.url || "/", `http://${host}:${port}`);
@@ -30,8 +31,8 @@ const server = http.createServer(async (request, response) => {
       : decodeURIComponent(requestUrl.pathname).replace(/^\/+/, "");
   const filePath = path.resolve(
     workspaceRoot,
-    relativePath === "programming-v2.js"
-      ? path.join("build", "programming-v2.js")
+    builtAssets.has(relativePath)
+      ? path.join("build", relativePath)
       : relativePath,
   );
   if (
