@@ -1130,6 +1130,58 @@ test("React renders complete V2 strength and skill prescriptions from the valida
   }
 });
 
+test("React passes goal, block, template, level, maxes, and skills into profile-driven V2 generation", async () => {
+  const mounted = mountApp();
+
+  try {
+    openMoreTool(mounted, "Build programme");
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Programming goal"), {
+      target: { value: "general_crossfit" },
+    });
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Training block"), {
+      target: { value: "gymnastics_capacity" },
+    });
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Training template"), {
+      target: { value: "mixed_strength_8w_testing" },
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", {
+        name: "Generate six-week V2 block",
+      }),
+    );
+
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      const program = state.v2Programs.find(
+        (item) => item.id === state.activeV2ProgramId,
+      );
+      assert.equal(program.trainingBlocks[0].durationWeeks, 8);
+      assert.equal(program.programmeProfile.primaryGoal, "general_crossfit");
+      assert.equal(
+        program.programmeProfile.trainingBlock,
+        "gymnastics_capacity",
+      );
+      assert.equal(program.generationRequest.athleteLevel, "intermediate");
+      assert.equal(program.generationRequest.known1RMs.deadlift, 180);
+      assert.equal(program.generationRequest.athleteSkills.chestToBar, 5);
+      assert.equal(program.generationSummary.identityValidation.valid, true);
+      assert.doesNotMatch(
+        program.trainingBlocks[0].trainingWeeks[0].sessions
+          .map((session) => session.objective)
+          .join(" "),
+        /front.squat|snatch/i,
+      );
+    });
+
+    const generationSummary = window.__FORGE_HOUR_V2_GENERATION_SUMMARY__;
+    assert.ok(generationSummary);
+    assert.equal(generationSummary.programmingGoal, "general_crossfit");
+    assert.equal(generationSummary.blockType, "gymnastics_capacity");
+  } finally {
+    mounted.cleanup();
+  }
+});
+
 test("React creates and switches between multiple V2 programmes", async () => {
   const mounted = mountApp();
 

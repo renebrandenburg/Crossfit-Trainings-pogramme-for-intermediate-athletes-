@@ -30,6 +30,7 @@ function generationInput(overrides = {}) {
     maxes: {
       front_squat: 125,
       back_squat: 145,
+      deadlift: 180,
       snatch: 75,
       clean_and_jerk: 100,
       strict_press: 60,
@@ -42,6 +43,14 @@ function generationInput(overrides = {}) {
     },
     weightIncrementKg: 2.5,
     roundingMode: "nearest",
+    skills: {
+      pullUps: 10,
+      chestToBar: 5,
+      toesToBar: 8,
+      barMuscleUps: 0,
+      strictHspu: 0,
+      handstandWalkMeters: 0,
+    },
     ...overrides,
   };
 }
@@ -53,6 +62,27 @@ function generate(overrides = {}) {
 function sessions(program) {
   return program.trainingBlocks[0].trainingWeeks.flatMap(
     (week) => week.sessions,
+  );
+}
+
+function profileProgram(goal, blockType, overrides = {}) {
+  return v2.generateV2Program(
+    generationInput({
+      goal,
+      blockType,
+      templateId: "mixed_strength_8w_testing",
+      sessionCount: 2,
+      programId: v2.stableUuid("profile-program", goal, blockType),
+      ...overrides,
+    }),
+  );
+}
+
+function exposure(program, ...families) {
+  return families.reduce(
+    (total, family) =>
+      total + (program.generationSummary.movementExposures[family] || 0),
+    0,
   );
 }
 
@@ -232,6 +262,191 @@ test("programme types produce materially different six-week workout fingerprints
     programmes[0].trainingBlocks[0].templateId,
     programmes[1].trainingBlocks[0].templateId,
   );
+});
+
+test("programme profiles materially differentiate gymnastics, Olympic, engine, and strength content", () => {
+  const gymnastics = profileProgram("general_crossfit", "gymnastics_capacity");
+  const olympic = profileProgram(
+    "general_crossfit",
+    "olympic_lifting_development",
+  );
+  const engine = profileProgram("endurance", "aerobic_capacity");
+  const strength = profileProgram("strength", "back_squat_strength");
+
+  assert.ok(
+    exposure(
+      gymnastics,
+      "strict_pull",
+      "kipping_pull",
+      "bar_muscle_up",
+      "toes_to_bar",
+      "handstand",
+      "core",
+    ) >
+      exposure(
+        olympic,
+        "strict_pull",
+        "kipping_pull",
+        "bar_muscle_up",
+        "toes_to_bar",
+        "handstand",
+        "core",
+      ),
+  );
+  assert.ok(
+    exposure(olympic, "snatch", "clean", "jerk", "clean_and_jerk") >
+      exposure(gymnastics, "snatch", "clean", "jerk", "clean_and_jerk"),
+  );
+  assert.ok(
+    engine.generationSummary.movementExposures.conditioning_minutes >
+      strength.generationSummary.movementExposures.conditioning_minutes,
+  );
+  assert.ok(
+    exposure(strength, "front_squat", "back_squat", "hinge", "vertical_press") >
+      exposure(engine, "front_squat", "back_squat", "hinge", "vertical_press"),
+  );
+  assert.equal(
+    v2.validateProgrammeDifferentiation([gymnastics, olympic, engine, strength])
+      .valid,
+    true,
+  );
+  assert.equal(
+    new Set(
+      [gymnastics, olympic, engine, strength].map(
+        (program) => program.generationFingerprint,
+      ),
+    ).size,
+    4,
+  );
+});
+
+test("General CrossFit plus gymnastics capacity builds an eight-week gymnastics progression and retest", () => {
+  const program = profileProgram("general_crossfit", "gymnastics_capacity");
+  const block = program.trainingBlocks[0];
+  const allSessions = sessions(program);
+  const firstWeek = block.trainingWeeks[0];
+  const lastWeek = block.trainingWeeks[7];
+  const gymnasticsFamilies = new Set(
+    allSessions.flatMap((session) =>
+      session.exercises
+        .filter(
+          (exercise) =>
+            v2.getMovement(exercise.movementId)?.category === "gymnastics",
+        )
+        .map((exercise) => exercise.movementFamilyId),
+    ),
+  );
+
+  assert.equal(block.durationWeeks, 8);
+  assert.equal(allSessions.length, 16);
+  assert.equal(program.programmeProfile.primaryGoal, "general_crossfit");
+  assert.equal(program.programmeProfile.trainingBlock, "gymnastics_capacity");
+  assert.equal(program.programmeProfile.focus, "gymnastics");
+  assert.ok(
+    block.trainingWeeks.every((week) =>
+      week.sessions.some((session) =>
+        session.exercises.some(
+          (exercise) =>
+            v2.getMovement(exercise.movementId)?.category === "gymnastics",
+        ),
+      ),
+    ),
+  );
+  assert.ok(gymnasticsFamilies.size >= 3);
+  assert.ok(exposure(program, "front_squat", "back_squat") < 8);
+  assert.equal(
+    exposure(program, "snatch", "clean", "jerk", "clean_and_jerk"),
+    0,
+  );
+  assert.doesNotMatch(
+    firstWeek.sessions.map((session) => session.objective).join(" "),
+    /front.squat|snatch/i,
+  );
+  assert.deepEqual(
+    lastWeek.sessions.map((session) => session.sessionType),
+    ["benchmark", "benchmark"],
+  );
+  assert.match(
+    lastWeek.sessions.map((session) => session.objective).join(" "),
+    /retest.*chest-to-bar.*retest.*handstand/i,
+  );
+  assert.ok(
+    allSessions.some((session) =>
+      session.exercises.some(
+        (exercise) => exercise.movementId === "chest_to_bar_pull_up",
+      ),
+    ),
+  );
+  assert.ok(
+    allSessions.some((session) =>
+      session.exercises.some(
+        (exercise) => exercise.movementId === "toes_to_bar",
+      ),
+    ),
+  );
+  assert.equal(program.generationSummary.identityValidation.valid, true);
+  assert.equal(
+    v2.validateProgrammeIdentity(program, program.programmeProfile).valid,
+    true,
+  );
+});
+
+test("identity validation rejects a cosmetic profile relabel", () => {
+  const gymnastics = profileProgram("general_crossfit", "gymnastics_capacity");
+  const olympic = profileProgram(
+    "general_crossfit",
+    "olympic_lifting_development",
+  );
+  const result = v2.validateProgrammeIdentity(
+    gymnastics,
+    olympic.programmeProfile,
+  );
+
+  assert.equal(result.valid, false);
+  assert.ok(result.problems.some((problem) => /snatch/.test(problem)));
+  assert.ok(result.problems.some((problem) => /clean_and_jerk/.test(problem)));
+});
+
+test("athlete level changes gymnastics complexity without changing programme identity", () => {
+  const skills = {
+    pullUps: 15,
+    chestToBar: 10,
+    toesToBar: 12,
+    barMuscleUps: 2,
+    strictHspu: 3,
+    handstandWalkMeters: 10,
+  };
+  const beginner = profileProgram("gymnastics", "gymnastics_capacity", {
+    athleteLevel: "beginner",
+    skills,
+    programId: v2.stableUuid("gymnastics-level", "beginner"),
+  });
+  const advanced = profileProgram("gymnastics", "gymnastics_capacity", {
+    athleteLevel: "advanced",
+    skills,
+    programId: v2.stableUuid("gymnastics-level", "advanced"),
+  });
+
+  assert.equal(beginner.programmeProfile.focus, "gymnastics");
+  assert.equal(advanced.programmeProfile.focus, "gymnastics");
+  assert.equal(
+    sessions(beginner).some((session) =>
+      session.exercises.some(
+        (exercise) => exercise.movementId === "bar_muscle_up",
+      ),
+    ),
+    false,
+  );
+  assert.equal(
+    sessions(advanced).some((session) =>
+      session.exercises.some(
+        (exercise) => exercise.movementId === "bar_muscle_up",
+      ),
+    ),
+    true,
+  );
+  assert.ok(exposure(beginner, "toes_to_bar", "handstand") > 0);
+  assert.ok(exposure(advanced, "toes_to_bar", "handstand") > 0);
 });
 
 test("competition, Open, and Masters/Open use independent programming families", () => {
@@ -702,9 +917,13 @@ test("structured generation logs include programming decisions but exclude athle
 
   assert.equal(record.programId, program.id);
   assert.equal(record.blockType, "mixed_strength");
+  assert.equal(record.programmingGoal, "mixed");
   assert.equal(record.estimatedSessionDurations.length, 12);
   assert.ok(record.selectedMovementFamilies.includes("snatch"));
   assert.ok(record.selectedMovementFamilies.includes("clean_and_jerk"));
+  assert.ok(record.movementExposures.snatch > 0);
+  assert.equal(record.generatedEmphasis !== null, true);
+  assert.deepEqual(record.identityProblems, []);
   assert.equal(record.regenerationScope, "conditioning");
   assert.equal(JSON.stringify(record).includes("notes"), false);
 });

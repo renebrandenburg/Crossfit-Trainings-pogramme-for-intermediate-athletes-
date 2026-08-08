@@ -12,6 +12,7 @@ import type {
 import { VALIDATOR_VERSION } from "./types";
 import { validateMaxTestPrescription } from "./max-testing";
 import { getV2TemplateDefinition } from "./template";
+import { validateProgrammeIdentity } from "./profile";
 
 const PROHIBITED_LANGUAGE = [
   "or similar",
@@ -802,6 +803,7 @@ export function validateTrainingWeek(
 export function validateTrainingBlock(
   block: TrainingBlock,
   path = `blocks.${block.id}`,
+  profile: ProgramV2["programmeProfile"] = undefined,
 ): ValidationResult {
   const issues: ValidationIssue[] = [];
   const expectedDuration =
@@ -824,7 +826,7 @@ export function validateTrainingBlock(
       ...validateTrainingWeek(week, `${path}.trainingWeeks.${index}`).issues,
     );
   });
-  if (block.blockType === "mixed_strength") {
+  if (block.blockType === "mixed_strength" && !profile) {
     const exerciseFamilies = block.trainingWeeks.flatMap((week) =>
       week.sessions.flatMap((session) =>
         session.exercises.map((exercise) => exercise.movementFamilyId),
@@ -865,7 +867,12 @@ export function validateTrainingBlock(
     const legacyMastersTemplate =
       block.blockType === "masters_open_preparation" &&
       block.templateId === "masters_open_preparation_six_week";
-    if (block.templateId !== expectedTemplateId && !legacyMastersTemplate) {
+    const profileDrivenTemplate = Boolean(profile);
+    if (
+      block.templateId !== expectedTemplateId &&
+      !legacyMastersTemplate &&
+      !profileDrivenTemplate
+    ) {
       issues.push(
         issue(
           "OPEN_PREP_WRONG_TEMPLATE",
@@ -1150,9 +1157,29 @@ export function validateProgram(program: ProgramV2): ValidationResult {
   }
   program.trainingBlocks.forEach((block, index) => {
     issues.push(
-      ...validateTrainingBlock(block, `program.trainingBlocks.${index}`).issues,
+      ...validateTrainingBlock(
+        block,
+        `program.trainingBlocks.${index}`,
+        program.programmeProfile,
+      ).issues,
     );
   });
+  if (program.programmeProfile) {
+    const identity = validateProgrammeIdentity(
+      program,
+      program.programmeProfile,
+    );
+    identity.problems.forEach((problem, index) => {
+      issues.push(
+        issue(
+          "PROGRAMME_IDENTITY_MISMATCH",
+          "error",
+          `program.programmeProfile.${index}`,
+          problem,
+        ),
+      );
+    });
+  }
   return result(issues);
 }
 

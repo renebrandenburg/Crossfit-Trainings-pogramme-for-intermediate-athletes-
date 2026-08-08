@@ -7,6 +7,7 @@ interface Window {
     strengthAndSkillBlock: unknown;
     timestamp: string;
   }>;
+  __FORGE_HOUR_V2_GENERATION_SUMMARY__?: import("../src/programming-v2/observability").GenerationLogRecord;
   ForgeHourLocalState?: {
     createLocalStateStore: (
       storage: Storage,

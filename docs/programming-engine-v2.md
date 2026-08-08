@@ -25,7 +25,7 @@ hierarchy is:
 Programme
 └── Training block
     ├── Progression tracks and immutable steps
-    └── Six training weeks
+    └── Six or eight training weeks
         └── Two, three, or four sessions
             ├── Warm-up
             ├── Primary progression
@@ -46,7 +46,10 @@ Core responsibilities:
 - `types.ts`: versioned domain contracts.
 - `catalog.ts`: canonical movement families, purposes, contexts, equipment, and
   clean/snatch separation.
-- `template.ts`: reusable six-week mixed-strength progression steps.
+- `template.ts`: legacy-compatible deterministic template definitions.
+- `profile.ts`: goal + block emphasis, eight-week progression maps, athlete
+  skill-aware movement selection, exposure budgets, identity validation,
+  similarity checks, and generation summaries.
 - `engine.ts`: deterministic session materialization, restrictions, fatigue,
   equipment selection, and duration adjustment.
 - `duration.ts`: calculated work, rest, setup, warm-up-set, transition, and
@@ -61,8 +64,57 @@ Core responsibilities:
 
 ## Generation behaviour
 
-The initial template is a six-week `mixed_strength` block with two sessions per
-week:
+### Programme-identity root-cause audit (2026-08-08)
+
+The programme setup submitted frequency, goal, block, template, athlete level,
+and strength maximums, but only the template selected the progression content.
+`programmingGoal` was copied to generation metadata, while `trainingBlock` was
+used mainly for compatibility checks and saved block metadata. The eight-week
+testing template always selected `TESTING_STRENGTH_TEMPLATE`, which extends the
+same front-squat, snatch, clean-and-jerk, and strict-pull blueprint used by the
+default mixed-strength programme.
+
+The six-week specializations were also transformations of that shared
+blueprint. In particular, the gymnastics transform replaced one secondary
+snatch slot with strict pulling but retained front squat and clean and jerk as
+the primary progressions. Session objectives, warm-ups, accessories, stress,
+and Week 8 tests were chosen from the template ID or session number rather than
+the requested goal and block. Athlete level affected testing eligibility more
+than exercise selection, and skill benchmarks were not passed to V2 at all.
+For three- and four-session weeks, the additional sessions copied one of the
+two core sessions.
+
+The result was structural rather than cosmetic: selecting General CrossFit +
+Gymnastics capacity + the eight-week testing template still materialized the
+mixed-strength progression graph. Renaming sessions or randomizing exercises
+would leave that identity-blind handoff intact.
+
+New profile-driven programmes follow this order:
+
+```text
+goal + training block + template + athlete capabilities
+→ programme profile and movement budget
+→ cycle phases and weekly objectives
+→ session objectives and progression tracks
+→ exercises, conditioning, warm-ups, and accessories
+→ identity validation and persistence validation
+```
+
+The template controls cycle length and whether the final week tests developed
+qualities. Goal establishes the overall programme identity; block applies the
+focus modifier. General CrossFit + Gymnastics therefore remains a CrossFit
+programme but receives weekly vertical pulling, hanging-midline, handstand, and
+support-strength progressions. The same eight-week template with an Olympic,
+engine, strength, or Open profile materializes a different progression graph.
+
+Movement budgets count session exposures before a new programme can be saved.
+The identity validator rejects missing priority families, excess restricted
+families, missing weekly goal work, inadequate engine variety, or missing
+Open-style scored conditioning. Cross-profile tests also reject near-identical
+movement distributions.
+
+The original template remains a six-week `mixed_strength` compatibility block
+with two sessions per week:
 
 - Day 1: front squat, snatch progression, short mixed conditioning, and a small
   trunk/posterior-chain accessory.
@@ -91,8 +143,11 @@ feedback, and free-text sessions. Athletes can create a validated V2 replacement
 from the Builder and roll back to the original V1 plan during rollout. Ambiguous
 V1 text is never invented as structured V2 exercise data.
 
-V2 appears in Today and Calendar as well as Builder. Debug information reports
-the active engine, template, migration status, and V1 compatibility mode.
+V2 appears in Today and Calendar as well as Builder. New programmes store their
+profile and generation summary in their own validated graph; existing saved
+programmes are not rewritten. In local development, the latest note-free
+summary is exposed as `window.__FORGE_HOUR_V2_GENERATION_SUMMARY__`, including
+goal, block, generated emphasis, movement exposures, and identity diagnostics.
 
 ## Regeneration and completion
 
@@ -211,8 +266,6 @@ V1 rather than breaking account hydration.
 
 ## Known limitations and next improvements
 
-- Goal-specific templates currently share the validated six-week materialization
-  fallback while their movement-specific variations are reviewed incrementally.
 - Controlled AI warm-up/conditioning/cue adapters are not enabled. Deterministic
   fallbacks are used exclusively in V2's first rollout.
 - Actual-duration discrepancies are stored but not yet used to tune coefficients.

@@ -963,16 +963,21 @@
 
   function emitV2GenerationLog(program, input) {
     try {
+      const record = v2Api.createGenerationLogRecord(program, input);
+      if (
+        ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
+          window.location.hostname,
+        )
+      ) {
+        window.__FORGE_HOUR_V2_GENERATION_SUMMARY__ = record;
+      }
       if (
         window.localStorage.getItem("forge-hour-v2-debug") !== "true" &&
         window.ForgeHourV2Debug !== true
       ) {
         return;
       }
-      console.info(
-        "[programming-engine-v2]",
-        v2Api.createGenerationLogRecord(program, input),
-      );
+      console.info("[programming-engine-v2]", record);
     } catch (error) {
       console.warn("Could not emit the optional V2 debug record.", error);
     }
@@ -2026,42 +2031,16 @@
         const requestedTemplateId =
           settings.templateId || rawPreferences?.templateId || null;
         const templateId =
-          preferences.goal === "bar_muscle_up" &&
-          (!requestedTemplateId ||
-            requestedTemplateId === "mixed_strength_6w" ||
-            requestedTemplateId === "bar_muscle_up_6w")
-            ? "gymnastics_capacity_6w"
-            : preferences.goal === "competition" ||
-                preferences.blockType === "competition_preparation"
-              ? "competition_preparation_6w"
-              : preferences.goal === "open" ||
-                  preferences.blockType === "open_preparation"
-                ? "open_preparation_6w"
-                : (preferences.goal === "masters_open" ||
-                      preferences.blockType === "masters_open_preparation") &&
-                    (!requestedTemplateId ||
-                      requestedTemplateId === "mixed_strength_6w" ||
-                      requestedTemplateId === "masters_open_6w" ||
-                      requestedTemplateId ===
-                        "masters_open_preparation_six_week")
-                  ? "masters_open_preparation_6w"
-                  : requestedTemplateId ||
-                    templateByGoal[preferences.goal] ||
-                    "mixed_strength_6w";
+          requestedTemplateId ||
+          templateByGoal[preferences.goal] ||
+          "mixed_strength_6w";
         const generator =
           v2Api.generateV2Program || v2Api.generateMixedStrengthBlock;
         const program = generator({
           programId,
           ownerId: remoteUser ? String(remoteUser.id || "") : null,
           generatedAt: now,
-          blockType:
-            templateId === "competition_preparation_6w"
-              ? "competition_preparation"
-              : templateId === "open_preparation_6w"
-                ? "open_preparation"
-                : templateId === "masters_open_preparation_6w"
-                  ? "masters_open_preparation"
-                  : preferences.blockType,
+          blockType: preferences.blockType,
           goal: preferences.goal,
           sessionCount: preferences.frequency,
           templateId,
@@ -2070,6 +2049,7 @@
           maxes: {
             front_squat: Number(submittedMaxes.frontSquat) || null,
             back_squat: Number(submittedMaxes.backSquat) || null,
+            deadlift: Number(submittedMaxes.deadlift) || null,
             snatch: Number(submittedMaxes.snatch) || null,
             clean_and_jerk: Number(submittedMaxes.cleanJerk) || null,
             strict_press: Number(submittedMaxes.strictPress) || null,
@@ -2087,6 +2067,18 @@
             preferences.goal === "olympic_lifting"
               ? ["snatch", "clean_and_jerk"]
               : [],
+          skills: {
+            pullUps: Number(currentState.profile.benchmarks?.pullUps) || 0,
+            chestToBar:
+              Number(currentState.profile.benchmarks?.chestToBar) || 0,
+            toesToBar: Number(currentState.profile.benchmarks?.t2b) || 0,
+            barMuscleUps:
+              Number(currentState.profile.benchmarks?.barMuscleUp) || 0,
+            strictHspu:
+              Number(currentState.profile.benchmarks?.strictHspu) || 0,
+            handstandWalkMeters:
+              Number(currentState.profile.benchmarks?.handstandWalk) || 0,
+          },
           weightIncrementKg: preferences.weightIncrementKg,
           roundingMode: preferences.roundingMode,
         });
@@ -4304,6 +4296,11 @@
             "p",
             { className: "muted-copy" },
             `Generation trace entries: ${window.__FORGE_HOUR_GENERATION_TRACE__?.length || 0}. Inspect window.__FORGE_HOUR_GENERATION_TRACE__ in developer tools for all nine strength-and-skill snapshots.`,
+          ),
+          h(
+            "p",
+            { className: "muted-copy" },
+            "Local V2 generation summary: window.__FORGE_HOUR_V2_GENERATION_SUMMARY__.",
           ),
           h(
             "p",
@@ -7817,6 +7814,7 @@
               maxes: {
                 frontSquat: Number(data.get("v2FrontSquatMax")) || null,
                 backSquat: Number(data.get("v2BackSquatMax")) || null,
+                deadlift: Number(data.get("v2DeadliftMax")) || null,
                 snatch: Number(data.get("v2SnatchMax")) || null,
                 cleanJerk: Number(data.get("v2CleanJerkMax")) || null,
                 strictPress: Number(data.get("v2StrictPressMax")) || null,
@@ -7919,11 +7917,21 @@
               defaultValue: normalizedPreferences.blockType,
             },
             h("option", { value: "mixed_strength" }, "Mixed strength"),
+            h(
+              "option",
+              { value: "back_squat_strength" },
+              "Strength development",
+            ),
             h("option", { value: "aerobic_capacity" }, "Aerobic capacity"),
             h(
               "option",
               { value: "gymnastics_capacity" },
               "Gymnastics capacity",
+            ),
+            h(
+              "option",
+              { value: "olympic_lifting_development" },
+              "Olympic lifting development",
             ),
             h(
               "option",
@@ -8024,6 +8032,7 @@
             [
               ["v2FrontSquatMax", "Front squat", profile.maxes?.frontSquat],
               ["v2BackSquatMax", "Back squat", profile.maxes?.backSquat],
+              ["v2DeadliftMax", "Deadlift", profile.maxes?.deadlift],
               ["v2SnatchMax", "Snatch", profile.maxes?.snatch],
               ["v2CleanJerkMax", "Clean and jerk", profile.maxes?.cleanJerk],
               ["v2StrictPressMax", "Strict press", profile.maxes?.strictPress],

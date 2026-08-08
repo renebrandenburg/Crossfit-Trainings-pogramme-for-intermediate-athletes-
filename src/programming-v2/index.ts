@@ -6,6 +6,7 @@ export * from "./engine";
 export * from "./format";
 export * from "./max-testing";
 export * from "./observability";
+export * from "./profile";
 export * from "./state";
 export * from "./template";
 export * from "./types";

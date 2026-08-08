@@ -46,12 +46,12 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
     {
       id: "mixed_strength_8w_testing",
       blockType: "mixed_strength",
-      name: "Eight-week strength testing block",
-      goal: "Build strength and technical consistency before a planned max assessment week.",
+      name: "Eight-week progression with planned testing",
+      goal: "Develop and retest the qualities selected by the programme profile.",
       supportedFrequencies: [2, 3, 4],
       durationWeeks: 8,
       deloadWeek: 7,
-      templateVersion: "mixed-strength-8w-testing-v1",
+      templateVersion: "profile-8w-testing-v2",
     },
     {
       id: "endurance_capacity_6w",
@@ -760,10 +760,15 @@ export const MIXED_STRENGTH_TEMPLATE: ReadonlyArray<MixedStrengthWeekTemplate> =
 export const TRACK_ORDER: ReadonlyArray<ProgressionTrackType> = Object.freeze([
   "front_squat",
   "back_squat",
+  "hinge",
   "snatch",
   "clean_and_jerk",
+  "upper_body_press",
   "strict_pull",
+  "toes_to_bar",
+  "handstand",
   "gymnastics_skill",
+  "engine",
 ]);
 
 export const TESTING_STRENGTH_TEMPLATE: ReadonlyArray<MixedStrengthWeekTemplate> =

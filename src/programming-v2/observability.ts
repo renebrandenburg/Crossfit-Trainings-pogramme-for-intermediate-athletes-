@@ -1,4 +1,4 @@
-import type { ProgramV2, RegenerationScope } from "./types";
+import type { ProgrammeEmphasis, ProgramV2, RegenerationScope } from "./types";
 
 export interface GenerationLogRecord {
   event: "generated" | "regenerated" | "completed" | "rejected";
@@ -8,6 +8,10 @@ export interface GenerationLogRecord {
   generationFingerprint: string;
   generatorVersion: string;
   blockType: string;
+  programmingGoal: string;
+  generatedEmphasis: ProgrammeEmphasis | null;
+  movementExposures: Record<string, number>;
+  identityProblems: string[];
   currentWeek: number;
   progressionTracks: Array<{
     trackType: string;
@@ -59,6 +63,14 @@ export function createGenerationLogRecord(
     generationFingerprint: program.generationFingerprint || "legacy",
     generatorVersion: program.generatorVersion || "legacy",
     blockType: block.blockType,
+    programmingGoal:
+      program.programmeProfile?.primaryGoal ||
+      program.generationRequest?.athleteGoals?.[0] ||
+      "legacy",
+    generatedEmphasis: program.generationSummary?.generatedEmphasis ?? null,
+    movementExposures: program.generationSummary?.movementExposures ?? {},
+    identityProblems:
+      program.generationSummary?.identityValidation.problems ?? [],
     currentWeek: block.currentWeek,
     progressionTracks: block.progressionTracks.map((track) => ({
       trackType: track.trackType,

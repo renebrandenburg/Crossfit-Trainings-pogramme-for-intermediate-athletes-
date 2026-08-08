@@ -43,6 +43,65 @@ export interface V2GenerationPreferences {
   templateId?: string;
 }
 
+export type ProgrammeDomain =
+  "strength" | "gymnastics" | "olympic" | "conditioning" | "accessory";
+
+export interface ProgrammeEmphasis {
+  strength: number;
+  gymnastics: number;
+  olympic: number;
+  conditioning: number;
+  accessory: number;
+}
+
+export interface MovementExposureTarget {
+  minimum: number;
+  maximum: number;
+}
+
+export interface AthleteSkillLevels {
+  pullUps: number;
+  chestToBar: number;
+  toesToBar: number;
+  barMuscleUps: number;
+  strictHspu: number;
+  handstandWalkMeters: number;
+}
+
+export interface ProgrammeProfile {
+  primaryGoal: V2ProgrammingGoal;
+  secondaryGoals: V2ProgrammingGoal[];
+  trainingBlock: TrainingBlockType;
+  focus: ProgrammeDomain;
+  movementPriorities: MovementFamilyId[];
+  strengthPriority: number;
+  gymnasticsPriority: number;
+  olympicPriority: number;
+  enginePriority: number;
+  skillPriority: number;
+  conditioningPriority: number;
+  testingTargets: string[];
+  movementExposureTargets: Partial<
+    Record<MovementFamilyId, MovementExposureTarget>
+  >;
+  movementLimits: Partial<Record<MovementFamilyId, number>>;
+  progressionPhases: string[];
+  conditioningStyle: "general" | "engine" | "open" | "competition";
+}
+
+export interface ProgrammeIdentityValidation {
+  valid: boolean;
+  problems: string[];
+}
+
+export interface ProgrammeGenerationSummary {
+  programme: V2ProgrammingGoal;
+  block: TrainingBlockType;
+  generatedEmphasis: ProgrammeEmphasis;
+  movementExposures: Record<string, number>;
+  identityValidation: ProgrammeIdentityValidation;
+}
+
 export type TrainingStimulus =
   | "squat"
   | "hinge"
@@ -232,10 +291,13 @@ export interface PersonalRecord {
 export type ProgressionTrackType =
   | "front_squat"
   | "back_squat"
+  | "hinge"
   | "snatch"
   | "clean_and_jerk"
   | "upper_body_press"
   | "strict_pull"
+  | "toes_to_bar"
+  | "handstand"
   | "gymnastics_skill"
   | "engine";
 
@@ -625,6 +687,8 @@ export interface ProgramV2 {
   personalRecords: PersonalRecord[];
   generationSource: "generated" | "fallback" | "mock";
   generationRequest: GenerationRequest;
+  programmeProfile?: ProgrammeProfile;
+  generationSummary?: ProgrammeGenerationSummary;
   generationFingerprint: string;
   generatorVersion: string;
   validation: ValidationResult;
@@ -639,10 +703,12 @@ export interface GenerationRequest {
   sessionsPerWeek: 2 | 3 | 4;
   athleteLevel: "beginner" | "intermediate" | "advanced";
   athleteGoals: string[];
+  trainingBlock?: TrainingBlockType;
   competitionFocus: string | null;
   availableEquipment: string[];
   known1RMs: AthleteMaxes;
   skillPriorities: string[];
+  athleteSkills?: AthleteSkillLevels;
   limitations: MovementRestrictions;
   requestedStartDate: string;
 }
@@ -650,6 +716,7 @@ export interface GenerationRequest {
 export interface AthleteMaxes {
   front_squat?: number | null;
   back_squat?: number | null;
+  deadlift?: number | null;
   snatch?: number | null;
   clean_and_jerk?: number | null;
   strict_press?: number | null;
@@ -680,6 +747,7 @@ export interface GenerateProgramInput {
   movementMaxes?: AthleteMovementMax[];
   competitionFocus?: string | null;
   skillPriorities?: string[];
+  skills?: Partial<AthleteSkillLevels>;
 }
 
 export interface DurationEstimateInput {

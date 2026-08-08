@@ -13,6 +13,11 @@ import {
   type MixedStrengthWeekTemplate,
   type TemplateProgressionStep,
 } from "./template";
+import {
+  buildProfileWeekTemplates,
+  createProgrammeGenerationSummary,
+  createProgrammeProfile,
+} from "./profile";
 import type {
   ConditioningMovement,
   ConditioningPrescription,
@@ -23,6 +28,7 @@ import type {
   MovementFamilyId,
   OpenWorkoutMetadata,
   ProgramV2,
+  ProgrammeProfile,
   ProgressionStep,
   ProgressionTrack,
   ProgressionTrackType,
@@ -77,31 +83,48 @@ function seededIndex(seed: string, length: number): number {
   return hash32(seed) % length;
 }
 
-function maxForTrack(
+function maxForMovement(
   input: GenerateProgramInput,
+  movementId: string,
   trackType: ProgressionTrackType,
 ): number | null {
   const value =
-    trackType === "front_squat"
+    movementId === "front_squat" || trackType === "front_squat"
       ? input.maxes.front_squat
-      : trackType === "back_squat"
+      : movementId === "back_squat" || trackType === "back_squat"
         ? input.maxes.back_squat
-        : trackType === "snatch"
-          ? input.maxes.snatch
-          : trackType === "clean_and_jerk"
-            ? input.maxes.clean_and_jerk
-            : null;
+        : movementId === "deadlift" || trackType === "hinge"
+          ? input.maxes.deadlift
+          : movementId === "snatch" ||
+              movementId.includes("snatch") ||
+              trackType === "snatch"
+            ? input.maxes.snatch
+            : movementId.includes("clean_and_jerk") ||
+                trackType === "clean_and_jerk"
+              ? input.maxes.clean_and_jerk
+              : movementId === "strict_press" ||
+                  trackType === "upper_body_press"
+                ? input.maxes.strict_press
+                : null;
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
     : null;
 }
 
-function referenceLift(trackType: ProgressionTrackType): string | null {
-  if (trackType === "front_squat") return "front squat";
-  if (trackType === "back_squat") return "back squat";
-  if (trackType === "snatch") return "snatch";
-  if (trackType === "clean_and_jerk") return "clean and jerk";
-  if (trackType === "upper_body_press") return "strict press";
+function referenceLift(
+  movementId: string,
+  trackType: ProgressionTrackType,
+): string | null {
+  if (movementId === "front_squat" || trackType === "front_squat")
+    return "front squat";
+  if (movementId === "back_squat" || trackType === "back_squat")
+    return "back squat";
+  if (movementId === "deadlift" || trackType === "hinge") return "deadlift";
+  if (movementId.includes("snatch") || trackType === "snatch") return "snatch";
+  if (movementId.includes("clean_and_jerk") || trackType === "clean_and_jerk")
+    return "clean and jerk";
+  if (movementId === "strict_press" || trackType === "upper_body_press")
+    return "strict press";
   return null;
 }
 
@@ -170,12 +193,19 @@ function createProgressionExercise(
     );
   }
 
-  const referenceMaxKg = maxForTrack(input, templateStep.trackType);
+  const referenceMaxKg = maxForMovement(
+    input,
+    templateStep.movementId,
+    templateStep.trackType,
+  );
   let intensityMethod = templateStep.intensityMethod;
   let intensityValue = templateStep.intensityMin;
   let intensityMax = templateStep.intensityMax;
   let loadKg: number | null = null;
-  const reference = referenceLift(templateStep.trackType);
+  const reference = referenceLift(
+    templateStep.movementId,
+    templateStep.trackType,
+  );
   if (intensityMethod === "percentage_1rm" && referenceMaxKg == null) {
     const [minimumRpe, maximumRpe] = fallbackRpe(templateStep.intensityMin);
     intensityMethod = "rpe";
@@ -379,8 +409,9 @@ function createAccessoryExercise(
   sessionId: string,
   weekNumber: number,
   sessionNumber: 1 | 2,
+  programmeType = "mixed_strength_6w",
 ): ExercisePrescription {
-  const day1Ids = [
+  const defaultDay1Ids = [
     "romanian_deadlift",
     "reverse_lunge",
     "romanian_deadlift",
@@ -388,7 +419,7 @@ function createAccessoryExercise(
     "dead_bug",
     "side_plank",
   ];
-  const day2Ids = [
+  const defaultDay2Ids = [
     "dead_bug",
     "farmer_carry",
     "side_plank",
@@ -396,8 +427,35 @@ function createAccessoryExercise(
     "band_face_pull",
     "dead_bug",
   ];
-  const preferredMovementId =
-    (sessionNumber === 1 ? day1Ids : day2Ids)[weekNumber - 1] ?? "dead_bug";
+  const gymnasticsIds = [
+    "band_face_pull",
+    "farmer_carry",
+    "dead_bug",
+    "side_plank",
+    "band_face_pull",
+    "farmer_carry",
+    "dead_bug",
+    "side_plank",
+  ];
+  const strengthIds = [
+    "reverse_lunge",
+    "farmer_carry",
+    "side_plank",
+    "reverse_lunge",
+    "dead_bug",
+    "farmer_carry",
+    "side_plank",
+    "dead_bug",
+  ];
+  const selectedIds =
+    programmeType === "gymnastics_capacity_6w"
+      ? gymnasticsIds
+      : programmeType === "strength_development_profile"
+        ? strengthIds
+        : sessionNumber === 1
+          ? defaultDay1Ids
+          : defaultDay2Ids;
+  const preferredMovementId = selectedIds[weekNumber - 1] ?? "dead_bug";
   const movementId = movementAllowed(
     preferredMovementId,
     "accessory",
@@ -489,6 +547,10 @@ function conditioningMovement(
   };
 }
 
+function isRecoveryWeek(week: MixedStrengthWeekTemplate): boolean {
+  return /deload|taper|retest|testing|readiness/i.test(week.theme);
+}
+
 function createOpenPreparationConditioning(
   input: GenerateProgramInput,
   sessionId: string,
@@ -534,7 +596,7 @@ function createOpenPreparationConditioning(
   const engineTarget =
     engineId === "run" ? { distanceMeters: 160 } : { calories: 8 };
 
-  if (week.weekNumber === 6) {
+  if (isRecoveryWeek(week)) {
     return {
       ...base,
       format: "intervals",
@@ -608,7 +670,7 @@ function createOpenPreparationConditioning(
       "Repeatable capacity: practise barbell cycling and gymnastics without degradation between efforts.",
     targetDurationMin: null,
     targetDurationMax: null,
-    targetRpe: week.weekNumber === 6 ? 5 : 7,
+    targetRpe: isRecoveryWeek(week) ? 5 : 7,
     movements: repeatable,
     estimatedDurationMinutes: week.day2ConditioningMinutes,
     competitionMetadata,
@@ -668,7 +730,7 @@ function createCompetitionConditioning(
     conditioningMovement("box_step_up", { reps: 10 }),
     conditioningMovement(engineId, { durationSeconds: 60 }),
   ];
-  if (week.weekNumber === 6) {
+  if (isRecoveryWeek(week)) {
     return {
       ...base,
       format: "intervals",
@@ -960,7 +1022,7 @@ function createConditioning(
         estimatedDurationMinutes: 9,
       };
     }
-    if (week.weekNumber === 6) {
+    if (isRecoveryWeek(week)) {
       return {
         ...base,
         format: "zone_2",
@@ -1023,7 +1085,7 @@ function createConditioning(
       estimatedDurationMinutes: week.day2ConditioningMinutes,
     };
   }
-  if ([5, 6].includes(week.weekNumber)) {
+  if (week.weekNumber === 5 || isRecoveryWeek(week)) {
     const seconds = week.day2ConditioningMinutes * 60;
     return {
       ...base,
@@ -1033,13 +1095,12 @@ function createConditioning(
       timeCapMinutes: null,
       workSeconds: null,
       restSeconds: null,
-      intendedStimulus:
-        week.weekNumber === 6
-          ? "Easy conversational work at RPE 4–5 for the full duration."
-          : "Steady aerobic work at RPE 6 with no late-session pace drop.",
+      intendedStimulus: isRecoveryWeek(week)
+        ? "Easy conversational work at RPE 4–5 for the full duration."
+        : "Steady aerobic work at RPE 6 with no late-session pace drop.",
       targetDurationMin: null,
       targetDurationMax: null,
-      targetRpe: week.weekNumber === 6 ? 5 : 6,
+      targetRpe: isRecoveryWeek(week) ? 5 : 6,
       movements: [conditioningMovement(engineId, { durationSeconds: seconds })],
       estimatedDurationMinutes: week.day2ConditioningMinutes,
     };
@@ -1092,26 +1153,51 @@ function createWarmup(
   weekNumber: number,
   sessionNumber: 1 | 2,
   variantSeed: string,
+  programmeType = "mixed_strength_6w",
 ): WarmupPrescription {
   const engineId = engineMovementId(input, `${variantSeed}:warmup`);
   const engineTarget =
     engineId === "run" ? { distanceMeters: 150 } : { durationSeconds: 45 };
   const candidateExercises =
-    sessionNumber === 1
+    programmeType === "gymnastics_capacity_6w"
       ? [
           warmupExercise(engineId, engineTarget),
-          warmupExercise("air_squat", { reps: 8 }),
-          warmupExercise("glute_bridge", { reps: 10 }),
-          warmupExercise("pvc_pass_through", { reps: 8 }),
-          warmupExercise("empty_bar_overhead_squat", { reps: 5 }),
-        ]
-      : [
-          warmupExercise(engineId, engineTarget),
-          warmupExercise("glute_bridge", { reps: 10 }),
           warmupExercise("scapular_pull_up", { reps: 6 }),
           warmupExercise("hollow_hold", { durationSeconds: 15 }),
-          warmupExercise("empty_bar_clean_and_jerk", { reps: 4 }),
-        ];
+          warmupExercise("glute_bridge", { reps: 10 }),
+          warmupExercise("push_up", { reps: 6 }),
+        ]
+      : programmeType === "endurance_capacity_6w"
+        ? [
+            warmupExercise(engineId, engineTarget),
+            warmupExercise("glute_bridge", { reps: 10 }),
+            warmupExercise("air_squat", { reps: 8 }),
+            warmupExercise("burpee", { reps: 4 }),
+            warmupExercise("push_up", { reps: 6 }),
+          ]
+        : programmeType === "strength_development_profile"
+          ? [
+              warmupExercise(engineId, engineTarget),
+              warmupExercise("glute_bridge", { reps: 10 }),
+              warmupExercise("air_squat", { reps: 8 }),
+              warmupExercise("pvc_pass_through", { reps: 8 }),
+              warmupExercise("scapular_pull_up", { reps: 6 }),
+            ]
+          : sessionNumber === 1
+            ? [
+                warmupExercise(engineId, engineTarget),
+                warmupExercise("air_squat", { reps: 8 }),
+                warmupExercise("glute_bridge", { reps: 10 }),
+                warmupExercise("pvc_pass_through", { reps: 8 }),
+                warmupExercise("empty_bar_overhead_squat", { reps: 5 }),
+              ]
+            : [
+                warmupExercise(engineId, engineTarget),
+                warmupExercise("glute_bridge", { reps: 10 }),
+                warmupExercise("scapular_pull_up", { reps: 6 }),
+                warmupExercise("hollow_hold", { durationSeconds: 15 }),
+                warmupExercise("empty_bar_clean_and_jerk", { reps: 4 }),
+              ];
   const exercises = candidateExercises.filter((exercise) =>
     movementAllowed(
       exercise.movementId,
@@ -1127,9 +1213,15 @@ function createWarmup(
     rounds: 2,
     exercises,
     purpose:
-      sessionNumber === 1
-        ? "Prepare squat depth, trunk bracing, overhead position, and the conditioning engine."
-        : "Prepare clean-and-jerk positions, strict pulling, midline control, and the conditioning engine.",
+      programmeType === "gymnastics_capacity_6w"
+        ? "Prepare pulling mechanics, hollow-body control, shoulders, and inversion positions."
+        : programmeType === "endurance_capacity_6w"
+          ? "Raise body temperature and prepare sustainable cyclical and mixed-modal movement."
+          : programmeType === "strength_development_profile"
+            ? "Prepare bracing, squat and hinge positions, shoulders, and strict pulling."
+            : sessionNumber === 1
+              ? "Prepare squat depth, trunk bracing, overhead position, and the conditioning engine."
+              : "Prepare clean-and-jerk positions, strict pulling, midline control, and the conditioning engine.",
   };
 }
 
@@ -1253,21 +1345,21 @@ function createSections(
 }
 
 function sessionStress(
-  weekNumber: number,
+  week: MixedStrengthWeekTemplate,
   sessionNumber: 1 | 2,
   conditioningMinutes: number,
 ): SessionStress {
-  const deload = weekNumber === 6;
+  const deload = isRecoveryWeek(week);
   const lowerBody = deload
     ? 3
     : sessionNumber === 1
-      ? weekNumber >= 4
+      ? week.weekNumber >= 4
         ? 8
         : 7
       : 5;
   const upperBody = deload ? 3 : sessionNumber === 2 ? 6 : 3;
   const grip = deload ? 3 : sessionNumber === 2 ? 6 : 4;
-  const complexity = deload ? 3 : weekNumber >= 4 ? 7 : 5;
+  const complexity = deload ? 3 : week.weekNumber >= 4 ? 7 : 5;
   const conditioning = deload
     ? 3
     : Math.min(8, Math.round(conditioningMinutes / 2));
@@ -1475,8 +1567,12 @@ function sessionObjective(programmeType: string, sessionNumber: 1 | 2): string {
       "Engine development with low-fatigue technical lifting",
     ],
     gymnastics_capacity_6w: [
-      "Squat maintenance and strict gymnastics skill development",
-      "Strict pulling, midline control, and gymnastics capacity",
+      "Vertical pulling, toes-to-bar technique, and gymnastics density",
+      "Handstand pressing, strict press support, and trunk control",
+    ],
+    strength_development_profile: [
+      "Squat and hinge strength progression",
+      "Strict pressing and weighted pulling strength",
     ],
   };
   const selected = objectives[programmeType] || objectives.mixed_strength_6w!;
@@ -1494,6 +1590,9 @@ function sessionStimulus(programmeType: string, sessionNumber: 1 | 2): string {
   }
   if (programmeType === "gymnastics_capacity_6w") {
     return "Strict gymnastics quality, stable positions, and measurable submaximal capacity.";
+  }
+  if (programmeType === "strength_development_profile") {
+    return "Planned compound-strength loading with full rest and technically repeatable repetitions.";
   }
   if (programmeType === "masters_open_6w") {
     return "Durable strength and competition preparation with controlled fatigue and recovery-aware conditioning.";
@@ -1526,6 +1625,7 @@ function sessionStimulus(programmeType: string, sessionNumber: 1 | 2): string {
 function buildGenerationRequest(
   input: GenerateProgramInput,
   template: ReturnType<typeof getV2TemplateDefinition>,
+  profile: ProgrammeProfile,
 ): GenerationRequest {
   return {
     programmeType: template.id,
@@ -1534,10 +1634,19 @@ function buildGenerationRequest(
     sessionsPerWeek: input.sessionCount ?? 2,
     athleteLevel: input.athleteLevel,
     athleteGoals: [input.goal ?? template.blockType],
+    trainingBlock: profile.trainingBlock,
     competitionFocus: input.competitionFocus ?? null,
     availableEquipment: [...input.equipment].sort(),
     known1RMs: { ...input.maxes },
     skillPriorities: [...(input.skillPriorities ?? [])].sort(),
+    athleteSkills: {
+      pullUps: Number(input.skills?.pullUps) || 0,
+      chestToBar: Number(input.skills?.chestToBar) || 0,
+      toesToBar: Number(input.skills?.toesToBar) || 0,
+      barMuscleUps: Number(input.skills?.barMuscleUps) || 0,
+      strictHspu: Number(input.skills?.strictHspu) || 0,
+      handstandWalkMeters: Number(input.skills?.handstandWalkMeters) || 0,
+    },
     limitations: {
       movementIds: [...input.restrictions.movementIds].sort(),
       movementFamilyIds: [...input.restrictions.movementFamilyIds].sort(),
@@ -1616,37 +1725,58 @@ function createSession(
       programmeType,
     );
     exercises.push(exercise);
-    if (getMovement(exercise.movementId)?.category === "gymnastics") {
-      exercises.push(
-        ...createGymnasticsShapeExercises(input, sessionId, exercise),
-      );
-    }
     assignments.push({
       progressionTrackId: track.id,
       progressionStepNumber: stepNumber,
       role: templateStep.role,
     });
   }
+  const gymnasticsAnchor = exercises.find(
+    (exercise) => getMovement(exercise.movementId)?.category === "gymnastics",
+  );
+  if (
+    gymnasticsAnchor &&
+    ![
+      "strength_development_profile",
+      "endurance_capacity_6w",
+      "olympic_lifting_6w",
+      "general_crossfit_6w",
+    ].includes(programmeType) &&
+    !exercises.some((exercise) =>
+      ["core", "toes_to_bar"].includes(exercise.movementFamilyId),
+    )
+  ) {
+    exercises.push(
+      ...createGymnasticsShapeExercises(input, sessionId, gymnasticsAnchor),
+    );
+  }
   exercises.push(
-    createAccessoryExercise(input, sessionId, week.weekNumber, sessionNumber),
+    createAccessoryExercise(
+      input,
+      sessionId,
+      week.weekNumber,
+      sessionNumber,
+      programmeType,
+    ),
   );
   const warmup = createWarmup(
     input,
     sessionId,
     week.weekNumber,
     sessionNumber,
-    input.seed ?? TEMPLATE_VERSION,
+    `${input.seed ?? TEMPLATE_VERSION}:${week.weekNumber}:${sessionNumber}`,
+    programmeType,
   );
   const conditioning = createConditioning(
     input,
     sessionId,
     week,
     sessionNumber,
-    input.seed ?? TEMPLATE_VERSION,
+    `${input.seed ?? TEMPLATE_VERSION}:${week.weekNumber}:${sessionNumber}`,
     programmeType,
   );
   const stress = sessionStress(
-    week.weekNumber,
+    week,
     sessionNumber,
     conditioning.estimatedDurationMinutes,
   );
@@ -1753,6 +1883,8 @@ function createSupplementalSession(
       ...exercise,
       id: stableUuid(sessionId, "exercise", index),
       sessionId,
+      progressionTrackId: null,
+      progressionStepNumber: null,
     })),
     conditioning: base.conditioning
       ? {
@@ -1781,9 +1913,39 @@ export function generateMixedStrengthBlock(
   const template = getV2TemplateDefinition(input.templateId, {
     allowDefault: true,
   });
+  const profile = createProgrammeProfile(input, template.blockType);
   const sessionCount = input.sessionCount ?? 2;
-  const blockId = stableUuid(input.programId, template.id);
-  const weekTemplates = getV2ProgrammeTemplate(template.id);
+  const blockId = stableUuid(
+    input.programId,
+    template.id,
+    profile.primaryGoal,
+    profile.trainingBlock,
+  );
+  const legacyMixedTemplate =
+    profile.primaryGoal === "mixed" &&
+    profile.trainingBlock === "mixed_strength" &&
+    ["mixed_strength_6w", "mixed_strength_8w_testing"].includes(template.id);
+  const weekTemplates = legacyMixedTemplate
+    ? getV2ProgrammeTemplate(template.id)
+    : buildProfileWeekTemplates(profile, input, template.durationWeeks);
+  const programmeType = legacyMixedTemplate
+    ? template.id
+    : profile.trainingBlock === "masters_open_preparation" ||
+        profile.primaryGoal === "masters_open"
+      ? "masters_open_preparation_6w"
+      : profile.conditioningStyle === "open"
+        ? "open_preparation_6w"
+        : profile.conditioningStyle === "competition"
+          ? "competition_preparation_6w"
+          : profile.focus === "gymnastics"
+            ? "gymnastics_capacity_6w"
+            : profile.focus === "olympic"
+              ? "olympic_lifting_6w"
+              : profile.focus === "conditioning"
+                ? "endurance_capacity_6w"
+                : profile.focus === "strength"
+                  ? "strength_development_profile"
+                  : "general_crossfit_6w";
   const tracks = trackMapForBlock(blockId, input.generatedAt, weekTemplates);
   let weeks: TrainingWeek[] = weekTemplates.map((weekTemplate) => {
     const trainingWeekId = stableUuid(blockId, "week", weekTemplate.weekNumber);
@@ -1794,7 +1956,7 @@ export function generateMixedStrengthBlock(
         weekTemplate,
         1,
         tracks,
-        template.id,
+        programmeType,
       ),
       createSession(
         input,
@@ -1802,7 +1964,7 @@ export function generateMixedStrengthBlock(
         weekTemplate,
         2,
         tracks,
-        template.id,
+        programmeType,
       ),
     ];
     const sessions = Array.from({ length: sessionCount }, (_, index) =>
@@ -1824,6 +1986,9 @@ export function generateMixedStrengthBlock(
       sessions,
     };
   });
+  const testingTargets = legacyMixedTemplate
+    ? ["front_squat", "snatch"]
+    : profile.testingTargets;
   if (template.id === "mixed_strength_8w_testing") {
     const priorSessions = weeks
       .flatMap((week) => week.sessions)
@@ -1834,8 +1999,24 @@ export function generateMixedStrengthBlock(
         ...week,
         sessions: week.sessions.map((session) => {
           const movementId =
-            session.sessionNumber === 1 ? "front_squat" : "snatch";
-          const testType = defaultTestType(movementId) ?? "heavy_single";
+            testingTargets[
+              (session.sessionNumber - 1) % testingTargets.length
+            ] ??
+            testingTargets[0] ??
+            "front_squat";
+          const testType = defaultTestType(movementId);
+          const movementName = getMovement(movementId)?.name ?? movementId;
+          if (!testType) {
+            return {
+              ...session,
+              sessionType: "benchmark" as const,
+              objective: `Retest ${movementName} capacity`,
+              intendedStimulus:
+                "Repeat the developed quality under the same movement standard and record a comparable score.",
+              expectedFatigue: "moderate" as const,
+              maxTestPrescription: null,
+            };
+          }
           const storedMax = input.movementMaxes?.find(
             (item) => item.movementId === movementId,
           );
@@ -1890,23 +2071,25 @@ export function generateMixedStrengthBlock(
   const block: TrainingBlock = {
     id: blockId,
     programId: input.programId,
-    blockType: template.blockType,
+    blockType: profile.trainingBlock,
     templateId: template.id,
     plannedSessionCount: sessionCount,
     name: template.name,
-    goal: template.goal,
+    goal: `${profile.primaryGoal.replaceAll("_", " ")} with ${profile.trainingBlock.replaceAll("_", " ")} emphasis`,
     durationWeeks: template.durationWeeks,
     currentWeek: 1,
     status: "active",
     deloadWeek: template.deloadWeek,
     endsWithTest: template.id === "mixed_strength_8w_testing",
     plannedTestMovementIds:
-      template.id === "mixed_strength_8w_testing"
-        ? ["front_squat", "snatch"]
-        : [],
+      template.id === "mixed_strength_8w_testing" ? testingTargets : [],
     testWeekNumber: template.id === "mixed_strength_8w_testing" ? 8 : null,
     testStrategy:
-      template.id === "mixed_strength_8w_testing" ? "true_1rm" : "none",
+      template.id === "mixed_strength_8w_testing"
+        ? testingTargets.every((movementId) => defaultTestType(movementId))
+          ? "true_1rm"
+          : "rep_max"
+        : "none",
     startedAt: input.generatedAt,
     completedAt: null,
     progressionTracks: [...tracks.values()],
@@ -1929,7 +2112,8 @@ export function generateMixedStrengthBlock(
     movementMaxes: input.movementMaxes ?? [],
     personalRecords: [],
     generationSource: "generated",
-    generationRequest: buildGenerationRequest(input, template),
+    generationRequest: buildGenerationRequest(input, template, profile),
+    programmeProfile: profile,
     generationFingerprint: "pending",
     generatorVersion: template.templateVersion,
     validation: {
@@ -1940,13 +2124,21 @@ export function generateMixedStrengthBlock(
     createdAt: input.generatedAt,
     updatedAt: input.generatedAt,
   };
+  const generationSummary = createProgrammeGenerationSummary(draft, profile);
+  if (!generationSummary.identityValidation.valid) {
+    throw new Error(
+      `PROGRAMME_IDENTITY_INVALID:${generationSummary.identityValidation.problems.join("|")}`,
+    );
+  }
   const fingerprint = generationFingerprint(draft);
   const validation = validateProgram({
     ...draft,
+    generationSummary,
     generationFingerprint: fingerprint,
   });
   return assertValidProgram({
     ...draft,
+    generationSummary,
     generationFingerprint: fingerprint,
     validation,
   });
@@ -1955,19 +2147,7 @@ export function generateMixedStrengthBlock(
 export function generateV2Program(input: GenerateProgramInput): ProgramV2 {
   if (!input.templateId)
     throw new Error("GENERATION_REQUEST_MISSING_PROGRAMME_TYPE");
-  const template = getV2TemplateDefinition(input.templateId);
-  if (
-    [
-      "competition_preparation_6w",
-      "open_preparation_6w",
-      "masters_open_preparation_6w",
-    ].includes(template.id) &&
-    input.blockType !== template.blockType
-  ) {
-    throw new Error(
-      `TEMPLATE_BLOCK_TYPE_MISMATCH:${template.id}:${String(input.blockType)}`,
-    );
-  }
+  getV2TemplateDefinition(input.templateId);
   return generateMixedStrengthBlock(input);
 }
 
