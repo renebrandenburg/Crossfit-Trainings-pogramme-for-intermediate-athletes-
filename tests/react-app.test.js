@@ -1238,7 +1238,11 @@ test("React creates and switches between multiple V2 programmes", async () => {
   }
 });
 
-test("React schedules V2 on the athlete's two days and renders structured sessions in Calendar and Today", async () => {
+test("React schedules V2 on the athlete's two days and renders structured sessions in Calendar and Today", async (t) => {
+  t.mock.timers.enable({
+    apis: ["Date"],
+    now: new Date("2026-08-05T12:00:00.000Z"),
+  });
   const mounted = mountApp();
 
   try {
