@@ -137,6 +137,93 @@ test("REG-003 duration corruption is rejected before persistence", () => {
   );
 });
 
+test("REG-013 unsupported persisted templates report the complete generation context", () => {
+  const malformed = structuredClone(
+    generateProfile(
+      "general_crossfit",
+      "gymnastics_capacity",
+      "mixed_strength_8w_testing",
+    ),
+  );
+  delete malformed.trainingBlocks[0].templateId;
+
+  const validation = v2.validateProgram(malformed);
+  const unsupportedTemplate = validation.issues.find(
+    (issue) => issue.code === "UNSUPPORTED_TEMPLATE",
+  );
+
+  assert.equal(validation.valid, false);
+  assert.deepEqual(unsupportedTemplate, {
+    code: "UNSUPPORTED_TEMPLATE",
+    severity: "error",
+    path: `program.trainingBlocks.${malformed.trainingBlocks[0].id}.templateId`,
+    message: "Generated programme uses unsupported template <missing>.",
+    template: null,
+    programmeId: malformed.id,
+    programmeType: "mixed_strength_8w_testing",
+    week: null,
+    day: null,
+    sessionId: null,
+  });
+});
+
+test("REG-013 every independently selectable V2 configuration generates a valid supported template", () => {
+  const goals = [
+    "mixed",
+    "strength",
+    "endurance",
+    "gymnastics",
+    "bar_muscle_up",
+    "masters_open",
+    "competition",
+    "open",
+    "olympic_lifting",
+    "general_crossfit",
+  ];
+  const blockTypes = [
+    "mixed_strength",
+    "back_squat_strength",
+    "aerobic_capacity",
+    "gymnastics_capacity",
+    "olympic_lifting_development",
+    "competition_preparation",
+    "open_preparation",
+    "masters_open_preparation",
+    "deload",
+  ];
+
+  assert.deepEqual(
+    v2.V2_SELECTABLE_TEMPLATES.map((template) => template.id),
+    [
+      "mixed_strength_6w",
+      "mixed_strength_8w_testing",
+      "endurance_capacity_6w",
+      "gymnastics_capacity_6w",
+      "competition_preparation_6w",
+      "open_preparation_6w",
+      "masters_open_preparation_6w",
+      "olympic_lifting_6w",
+      "general_crossfit_6w",
+    ],
+  );
+
+  for (const goal of goals) {
+    for (const blockType of blockTypes) {
+      for (const template of v2.V2_SELECTABLE_TEMPLATES) {
+        const program = generateProfile(
+          goal,
+          blockType,
+          template.id,
+          "selectable-template-matrix",
+        );
+
+        assert.equal(program.trainingBlocks[0].templateId, template.id);
+        assert.equal(v2.validateProgram(program).valid, true);
+      }
+    }
+  }
+});
+
 test("REG-004 programme profiles have explicit, materially different identities", () => {
   const gymnastics = generateProfile("general_crossfit", "gymnastics_capacity");
   const olympic = generateProfile(

@@ -663,6 +663,12 @@ export interface ValidationIssue {
   severity: "error" | "warning";
   path: string;
   message: string;
+  template?: string | null;
+  programmeId?: string | null;
+  programmeType?: string | null;
+  week?: number | null;
+  day?: number | null;
+  sessionId?: string | null;
 }
 
 export interface ValidationResult {

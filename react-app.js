@@ -2016,27 +2016,20 @@
           ? window.crypto.randomUUID()
           : v2Api.stableUuid(createId(), now, "program-v2");
       try {
-        const templateByGoal = {
-          strength: "mixed_strength_6w",
-          endurance: "endurance_capacity_6w",
-          gymnastics: "gymnastics_capacity_6w",
-          bar_muscle_up: "gymnastics_capacity_6w",
-          competition: "competition_preparation_6w",
-          open: "open_preparation_6w",
-          masters_open: "masters_open_preparation_6w",
-          olympic_lifting: "olympic_lifting_6w",
-          general_crossfit: "general_crossfit_6w",
-          mixed: "mixed_strength_6w",
-        };
         const requestedTemplateId =
-          settings.templateId || rawPreferences?.templateId || null;
-        const templateId =
-          requestedTemplateId ||
-          templateByGoal[preferences.goal] ||
-          "mixed_strength_6w";
-        const generator =
-          v2Api.generateV2Program || v2Api.generateMixedStrengthBlock;
-        const program = generator({
+          settings.templateId ||
+          rawPreferences?.templateId ||
+          preferences.templateId;
+        if (!requestedTemplateId) {
+          throw new Error("GENERATION_REQUEST_MISSING_PROGRAMME_TYPE");
+        }
+        const templateId = v2Api.getV2TemplateDefinition(requestedTemplateId, {
+          allowDefault: false,
+        }).id;
+        if (typeof v2Api.generateV2Program !== "function") {
+          throw new Error("V2_PROGRAMME_GENERATOR_UNAVAILABLE");
+        }
+        const program = v2Api.generateV2Program({
           programId,
           ownerId: remoteUser ? String(remoteUser.id || "") : null,
           generatedAt: now,
@@ -7754,6 +7747,8 @@
     onGenerate,
     setupOpen,
     onSetupToggle,
+    requireTemplateSelection = false,
+    submitLabel = null,
   }) {
     const familyOptions = [
       ["front_squat", "Front squat"],
@@ -7779,6 +7774,18 @@
     ];
     const normalizedPreferences =
       v2Api.normalizeV2GenerationPreferences(preferences);
+    const selectableTemplates = v2Api.V2_SELECTABLE_TEMPLATES || [];
+    const requestedTemplateId =
+      program?.trainingBlocks?.[0]?.templateId ||
+      normalizedPreferences.templateId ||
+      "";
+    const selectedTemplateId =
+      !requireTemplateSelection &&
+      selectableTemplates.some(
+        (template) => template.id === requestedTemplateId,
+      )
+        ? requestedTemplateId
+        : "";
     return h(
       "details",
       {
@@ -7799,9 +7806,7 @@
                 frequency: Number(data.get("v2Frequency") || 2),
                 goal: String(data.get("v2Goal") || "mixed"),
                 blockType: String(data.get("v2BlockType") || "mixed_strength"),
-                templateId: String(
-                  data.get("v2TemplateId") || "mixed_strength_6w",
-                ),
+                templateId: String(data.get("v2TemplateId") || ""),
                 athleteLevel: String(
                   data.get("v2AthleteLevel") || "intermediate",
                 ),
@@ -7955,55 +7960,20 @@
             "select",
             {
               name: "v2TemplateId",
-              defaultValue:
-                program?.trainingBlocks?.[0]?.templateId ||
-                normalizedPreferences.templateId ||
-                "mixed_strength_6w",
+              defaultValue: selectedTemplateId,
+              required: true,
             },
             h(
               "option",
-              { value: "mixed_strength_6w" },
-              "Six-week mixed strength",
+              { value: "", disabled: true },
+              "Select a supported V2 template",
             ),
-            h(
-              "option",
-              { value: "general_crossfit_6w" },
-              "Six-week general CrossFit",
-            ),
-            h(
-              "option",
-              { value: "competition_preparation_6w" },
-              "Six-week competition preparation",
-            ),
-            h(
-              "option",
-              { value: "open_preparation_6w" },
-              "Six-week Open preparation",
-            ),
-            h(
-              "option",
-              { value: "masters_open_preparation_6w" },
-              "Six-week Masters/Open preparation",
-            ),
-            h(
-              "option",
-              { value: "olympic_lifting_6w" },
-              "Six-week Olympic lifting",
-            ),
-            h(
-              "option",
-              { value: "endurance_capacity_6w" },
-              "Six-week engine-focused",
-            ),
-            h(
-              "option",
-              { value: "gymnastics_capacity_6w" },
-              "Six-week gymnastics capacity",
-            ),
-            h(
-              "option",
-              { value: "mixed_strength_8w_testing" },
-              "Eight-week progression with planned testing",
+            selectableTemplates.map((template) =>
+              h(
+                "option",
+                { key: template.id, value: template.id },
+                template.name,
+              ),
             ),
           ),
         ),
@@ -8163,9 +8133,10 @@
         h(
           "button",
           { className: "primary-button", type: "submit" },
-          program
-            ? "Generate a new future block"
-            : "Generate six-week V2 block",
+          submitLabel ||
+            (program
+              ? "Generate a new future block"
+              : "Generate six-week V2 block"),
         ),
       ),
     );
@@ -8720,6 +8691,23 @@
     );
   }
 
+  function formatV2ValidationDiagnostic(item) {
+    if (item.code !== "UNSUPPORTED_TEMPLATE") {
+      return `${item.code}: ${item.message}`;
+    }
+    return [
+      item.code,
+      `template ${item.template == null ? "<missing>" : item.template}`,
+      `programme ${item.programmeId || "<missing>"}`,
+      `type ${item.programmeType || "<missing>"}`,
+      item.week == null ? null : `week ${item.week}`,
+      item.day == null ? null : `day ${item.day}`,
+      item.sessionId == null ? null : `session ${item.sessionId}`,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
   function V2ProgramPanel({
     program,
     selectedWeek: selectedWeekValue,
@@ -8734,10 +8722,14 @@
     onRecordMaxAttempt,
     onConfirmMaxUpdate,
   }) {
-    const [setupOpen, setSetupOpen] = ReactRuntime.useState(!program);
+    const validation = program ? v2Api.validateProgram(program) : null;
+    const rejected = Boolean(program && !validation.valid);
+    const [setupOpen, setSetupOpen] = ReactRuntime.useState(
+      !program || rejected,
+    );
     ReactRuntime.useEffect(() => {
-      setSetupOpen(!program);
-    }, [program?.id]);
+      setSetupOpen(!program || rejected);
+    }, [program?.id, rejected]);
     if (!featureFlag.enabled) {
       return h(
         "section",
@@ -8751,11 +8743,13 @@
         ),
       );
     }
-    const validation = program ? v2Api.validateProgram(program) : null;
-    if (program && !validation.valid) {
+    if (rejected) {
       return h(
         "section",
-        { className: "panel v2-programme" },
+        {
+          className: "panel v2-programme",
+          "data-testid": "v2-programme-rejected",
+        },
         h("h3", null, "V2 programme rejected"),
         h(
           "p",
@@ -8768,9 +8762,29 @@
           validation.issues
             .filter((item) => item.severity === "error")
             .map((item) =>
-              h("li", { key: `${item.path}-${item.code}` }, item.code),
+              h(
+                "li",
+                { key: `${item.path}-${item.code}` },
+                formatV2ValidationDiagnostic(item),
+              ),
             ),
         ),
+        h(
+          "p",
+          { className: "muted-copy" },
+          "The rejected programme remains unchanged. Select a supported template to create a replacement.",
+        ),
+        h(V2ProgrammeSetup, {
+          program,
+          profile,
+          preferences,
+          restrictions,
+          onGenerate,
+          setupOpen,
+          onSetupToggle: setSetupOpen,
+          requireTemplateSelection: true,
+          submitLabel: "Generate replacement V2 programme",
+        }),
       );
     }
     const block = program?.trainingBlocks?.[0] || null;

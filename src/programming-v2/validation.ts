@@ -1249,14 +1249,25 @@ export function validateProgram(program: ProgramV2): ValidationResult {
         );
       }
     } catch {
-      issues.push(
-        issue(
+      const actualTemplate = block.templateId ?? null;
+      issues.push({
+        ...issue(
           "UNSUPPORTED_TEMPLATE",
           "error",
           `program.trainingBlocks.${block.id}.templateId`,
-          "Generated programme uses an unsupported template.",
+          `Generated programme uses unsupported template ${
+            actualTemplate === null
+              ? "<missing>"
+              : JSON.stringify(actualTemplate)
+          }.`,
         ),
-      );
+        template: actualTemplate,
+        programmeId: program.id ?? null,
+        programmeType: program.generationRequest?.programmeType ?? null,
+        week: null,
+        day: null,
+        sessionId: null,
+      });
     }
     for (const week of block.trainingWeeks) {
       if (weekIds.has(week.id)) {

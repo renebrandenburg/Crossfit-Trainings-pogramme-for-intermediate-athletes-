@@ -2545,6 +2545,55 @@ test("React persists unrelated week changes when an inactive V2 programme is inv
   }
 });
 
+test("REG-013 React identifies a loaded programme with a missing template and offers explicit replacement", async () => {
+  const source = mountApp();
+  let storedState;
+
+  try {
+    openMoreTool(source, "Build programme");
+    source.fireEvent.click(
+      source.ui.getByRole("button", {
+        name: "Generate six-week V2 block",
+      }),
+    );
+    await source.waitFor(() => {
+      assert.ok(source.readState().activeV2ProgramId);
+    });
+    storedState = source.readState();
+  } finally {
+    source.cleanup();
+  }
+
+  const invalidProgram = storedState.v2Programs.find(
+    (program) => program.id === storedState.activeV2ProgramId,
+  );
+  delete invalidProgram.trainingBlocks[0].templateId;
+
+  const mounted = mountApp({ storedState });
+  try {
+    openMoreTool(mounted, "Build programme");
+
+    assert.ok(
+      mounted.ui.getByRole("heading", { name: "V2 programme rejected" }),
+    );
+    assert.ok(
+      mounted.ui.getByText(
+        new RegExp(
+          `UNSUPPORTED_TEMPLATE.*template <missing>.*programme ${invalidProgram.id}.*type mixed_strength_6w`,
+        ),
+      ),
+    );
+    assert.equal(mounted.ui.getByLabelText("Training template").value, "");
+    assert.ok(
+      mounted.ui.getByRole("option", {
+        name: "Select a supported V2 template",
+      }),
+    );
+  } finally {
+    mounted.cleanup();
+  }
+});
+
 test("React Testing Library preserves the active plan when generation is rejected", async () => {
   const originalConsoleError = console.error;
   console.error = () => undefined;

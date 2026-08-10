@@ -165,6 +165,25 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
     },
   ]);
 
+const SELECTABLE_TEMPLATE_IDS: ReadonlySet<V2TemplateId> = new Set([
+  "mixed_strength_6w",
+  "mixed_strength_8w_testing",
+  "endurance_capacity_6w",
+  "gymnastics_capacity_6w",
+  "competition_preparation_6w",
+  "open_preparation_6w",
+  "masters_open_preparation_6w",
+  "olympic_lifting_6w",
+  "general_crossfit_6w",
+]);
+
+export const V2_SELECTABLE_TEMPLATES: ReadonlyArray<V2TemplateDefinition> =
+  Object.freeze(
+    V2_TEMPLATE_REGISTRY.filter((template) =>
+      SELECTABLE_TEMPLATE_IDS.has(template.id),
+    ),
+  );
+
 export function getV2TemplateDefinition(
   id: string | null | undefined,
   options: { allowDefault?: boolean } = {},

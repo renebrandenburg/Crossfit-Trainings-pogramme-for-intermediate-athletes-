@@ -646,10 +646,16 @@ function createOpenPreparationConditioning(
     engineId === "run" ? { distanceMeters: 160 } : { calories: 8 };
 
   if (isRecoveryWeek(week)) {
+    const durationMinutes = Math.min(
+      14,
+      sessionNumber === 1
+        ? week.day1ConditioningMinutes
+        : week.day2ConditioningMinutes,
+    );
     return {
       ...base,
       format: "intervals",
-      durationMinutes: 8,
+      durationMinutes,
       rounds: 4,
       workSeconds: 30,
       restSeconds: 90,
@@ -657,10 +663,10 @@ function createOpenPreparationConditioning(
       intendedStimulus:
         "Freshness primer: easy repeatable efforts with no soreness or grip failure.",
       targetDurationMin: 6,
-      targetDurationMax: 8,
+      targetDurationMax: durationMinutes,
       targetRpe: 5,
       movements: [conditioningMovement(engineId, { durationSeconds: 30 })],
-      estimatedDurationMinutes: 8,
+      estimatedDurationMinutes: durationMinutes,
       competitionMetadata,
     };
   }
@@ -780,10 +786,16 @@ function createCompetitionConditioning(
     conditioningMovement(engineId, { durationSeconds: 60 }),
   ];
   if (isRecoveryWeek(week)) {
+    const durationMinutes = Math.min(
+      14,
+      sessionNumber === 1
+        ? week.day1ConditioningMinutes
+        : week.day2ConditioningMinutes,
+    );
     return {
       ...base,
       format: "intervals",
-      durationMinutes: 8,
+      durationMinutes,
       rounds: 3,
       workSeconds: 30,
       restSeconds: 90,
@@ -791,10 +803,10 @@ function createCompetitionConditioning(
       intendedStimulus:
         "Taper: retain event rhythm and technical speed without accumulating fatigue.",
       targetDurationMin: 6,
-      targetDurationMax: 8,
+      targetDurationMax: durationMinutes,
       targetRpe: 5,
       movements: [conditioningMovement(engineId, { durationSeconds: 30 })],
-      estimatedDurationMinutes: 8,
+      estimatedDurationMinutes: durationMinutes,
     };
   }
   if (sessionNumber === 1) {

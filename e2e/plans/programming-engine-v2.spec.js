@@ -192,6 +192,65 @@ test("@critical REG-012 V2 goal and block drive content without rewriting the se
   expect(program.programmeProfile.focus).toBe("gymnastics");
 });
 
+test("@critical REG-013 a historical programme with no template is rejected with explicit recovery", async ({
+  page,
+}) => {
+  const app = new AppShell(page);
+  const builder = new PlanBuilderPage(page);
+  await app.open();
+  await builder.open();
+  await builder.generateV2();
+
+  const original = activeV2Program(await readAppState(page));
+  await page.evaluate(() => {
+    const store = window.ForgeHourLocalState.createLocalStateStore(
+      window.localStorage,
+    );
+    const state = store.load();
+    const athlete = state.athleteStateByOwner[state.activeScoreOwner];
+    const program = structuredClone(
+      athlete.v2Programs.find((item) => item.id === state.activeV2ProgramId),
+    );
+    delete program.trainingBlocks[0].templateId;
+    state.activeScoreOwner = "guest";
+    state.v2Programs = [program];
+    state.activeV2ProgramId = program.id;
+    state.activeProgrammingEngine = "v2";
+    state.athleteStateByOwner.guest = {
+      ...state.athleteStateByOwner.guest,
+      v2Programs: [program],
+      activeV2ProgramId: program.id,
+      activeProgrammingEngine: "v2",
+    };
+    store.save(state);
+    window.localStorage.removeItem("forge-hour-e2e-auth-v1");
+  });
+
+  await page.reload();
+  await builder.open();
+  const rejected = page.getByTestId("v2-programme-rejected");
+  await expect(rejected).toContainText("UNSUPPORTED_TEMPLATE");
+  await expect(rejected).toContainText("template <missing>");
+  await expect(rejected).toContainText(`programme ${original.id}`);
+  await expect(rejected).toContainText("type mixed_strength_6w");
+
+  const template = rejected.locator('select[name="v2TemplateId"]');
+  await expect(template).toHaveValue("");
+  await template.selectOption("general_crossfit_6w");
+  await rejected
+    .getByRole("button", { name: "Generate replacement V2 programme" })
+    .click();
+  await expect(page.getByTestId("v2-programme")).toBeVisible();
+
+  const state = await readAppState(page);
+  const replacement = activeV2Program(state);
+  expect(replacement.id).not.toBe(original.id);
+  expect(replacement.trainingBlocks[0].templateId).toBe("general_crossfit_6w");
+  expect(state.v2Programs.some((program) => program.id === original.id)).toBe(
+    true,
+  );
+});
+
 test("@critical Masters/Open V2 uses competition-specific sessions", async ({
   page,
 }) => {

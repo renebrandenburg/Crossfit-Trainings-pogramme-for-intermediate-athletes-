@@ -154,6 +154,20 @@ Protection: Testing Library inspects the persisted generation request, Playwrigh
 
 Status: Protected.
 
+## REG-013 Unsupported V2 template
+
+Problem: A historical V2 programme saved before template identity was required could reload without `trainingBlock.templateId`, fail final validation with `UNSUPPORTED_TEMPLATE`, and expose neither the rejected value nor a safe recovery path.
+
+Root cause: Early V2 snapshots did not persist a template ID. The later strict validator correctly rejected the missing value, but its diagnostic discarded programme context and the React rejection branch hid programme creation.
+
+Protection:
+
+- `tests/regression/programming-v2.regression.test.js` reproduces the missing-template snapshot, asserts the full diagnostic context, and generates the complete independently selectable goal/block/template matrix.
+- `tests/react-app.test.js` reloads the historical shape, verifies the contextual rejection, and requires explicit selection of a supported template before replacement generation.
+- The setup selector is derived from `V2_SELECTABLE_TEMPLATES`; generation resolves that exact ID through the strict registry and has no generic UI or generator fallback.
+
+Status: Protected.
+
 ## CI gate
 
 Pull requests run formatting, lint, type checks, all Node suites, the dedicated regression suite, build, pgTAP database checks, schema lint/type drift checks, and critical Chromium Playwright journeys. Main and scheduled browser jobs run the full suite in Chromium, Firefox, and WebKit.
