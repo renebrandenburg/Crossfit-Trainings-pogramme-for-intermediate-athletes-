@@ -264,7 +264,7 @@ test("programme types produce materially different six-week workout fingerprints
   );
 });
 
-test("programme profiles materially differentiate gymnastics, Olympic, engine, and strength content", () => {
+test("REG-004 programme profiles materially differentiate gymnastics, Olympic, engine, and strength content", () => {
   const gymnastics = profileProgram("general_crossfit", "gymnastics_capacity");
   const olympic = profileProgram(
     "general_crossfit",
@@ -320,7 +320,7 @@ test("programme profiles materially differentiate gymnastics, Olympic, engine, a
   );
 });
 
-test("General CrossFit plus gymnastics capacity builds an eight-week gymnastics progression and retest", () => {
+test("REG-004 General CrossFit plus gymnastics capacity builds an eight-week gymnastics progression and retest", () => {
   const program = profileProgram("general_crossfit", "gymnastics_capacity");
   const block = program.trainingBlocks[0];
   const allSessions = sessions(program);
@@ -683,7 +683,7 @@ test("unknown maxes fall back to bounded RPE without invented kilograms", () => 
   );
 });
 
-test("exact vague gymnastics theme is rejected at the final string guard", () => {
+test("REG-011 exact vague gymnastics theme is rejected at the final string guard", () => {
   const content =
     "Gymnastics skill: hollow and arch control, strict pulling, and midline strength";
   const validation = v2.validateAthleteFacingString(content);
@@ -696,7 +696,7 @@ test("exact vague gymnastics theme is rejected at the final string guard", () =>
   );
 });
 
-test("exact unloaded tall-snatch-pull block returns MISSING_LOAD and MISSING_REST", () => {
+test("REG-010 exact unloaded tall-snatch-pull block returns MISSING_LOAD and MISSING_REST", () => {
   const block = "3 sets: 3 tall snatch pulls + 20-second overhead hold";
   const validation = v2.validateAthleteFacingString(block);
 
@@ -787,9 +787,11 @@ test("labels all-every-minute EMOMs without implying rotation", () => {
   assert.doesNotMatch(rendered, /one movement per minute/);
 });
 
-test("regenerating conditioning preserves progression assignments and duration limits", () => {
+test("REG-008 REG-009 regenerating conditioning is immutable and section-scoped", () => {
   const program = generate();
   const session = sessions(program)[0];
+  const originalProgram = structuredClone(program);
+  const originalSession = structuredClone(session);
   const assignments = structuredClone(session.trackAssignments);
   const exerciseIds = session.exercises
     .filter((exercise) => exercise.progressionTrackId)
@@ -802,6 +804,10 @@ test("regenerating conditioning preserves progression assignments and duration l
   });
   const next = v2.findSession(regenerated.program, session.id);
 
+  assert.deepEqual(program, originalProgram);
+  assert.deepEqual(next.warmup, originalSession.warmup);
+  assert.deepEqual(next.exercises, originalSession.exercises);
+  assert.notDeepEqual(next.conditioning, originalSession.conditioning);
   assert.deepEqual(next.trackAssignments, assignments);
   assert.deepEqual(
     next.exercises
@@ -809,6 +815,9 @@ test("regenerating conditioning preserves progression assignments and duration l
       .map((exercise) => exercise.id),
     exerciseIds,
   );
+  assert.deepEqual(regenerated.changedSectionIds, [
+    `${session.id}-conditioning`,
+  ]);
   assert.ok(next.estimatedDurationMinutes <= 65);
   assert.equal(regenerated.validation.valid, true);
 });
@@ -918,6 +927,7 @@ test("structured generation logs include programming decisions but exclude athle
   assert.equal(record.programId, program.id);
   assert.equal(record.blockType, "mixed_strength");
   assert.equal(record.programmingGoal, "mixed");
+  assert.equal(record.generationSeed, "test-seed");
   assert.equal(record.estimatedSessionDurations.length, 12);
   assert.ok(record.selectedMovementFamilies.includes("snatch"));
   assert.ok(record.selectedMovementFamilies.includes("clean_and_jerk"));

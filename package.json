@@ -14,6 +14,7 @@
     "typecheck": "tsc --project jsconfig.json --pretty false && tsc --project tsconfig.v2.json --pretty false",
     "prepare": "husky",
     "test": "npm run build:v2 && node --test",
+    "test:regression": "npm run build:v2 && node --test tests/regression/*.regression.test.js",
     "test:db:v2:fixture": "npm run build:v2 && node scripts/build-v2-database-integration.js",
     "test:e2e": "playwright test",
     "test:e2e:smoke": "playwright test --project=chromium --grep @smoke",

@@ -58,6 +58,7 @@ function createMockSupabase({
   const authListeners = new Set();
   const data = {
     athlete_states: remote.athlete_states || [],
+    athlete_movement_restrictions: remote.athlete_movement_restrictions || [],
     programming_engine_flags: remote.programming_engine_flags || [],
     workout_logs: remote.workout_logs || [],
     pr_attempts: remote.pr_attempts || [],
@@ -134,6 +135,21 @@ function createMockSupabase({
           };
           return ownerBuilder;
         }
+        if (table === "athlete_movement_restrictions") {
+          return {
+            eq: async (_column, value) => {
+              const result = await selected();
+              return result.error
+                ? result
+                : {
+                    ...result,
+                    data: result.data.filter(
+                      (row) => String(row.user_id) === String(value),
+                    ),
+                  };
+            },
+          };
+        }
         const builder = {
           order: () => builder,
           range: async (from, to) => {
@@ -200,13 +216,13 @@ function createMockSupabase({
     rpc: (name, payload) => {
       calls.push({ type: "rpc", name, payload });
       const configured = rpcResults[name];
-      return ok(
+      return Promise.resolve(
         typeof configured === "function"
           ? configured(payload)
           : configured === undefined
             ? null
             : configured,
-      );
+      ).then((value) => ({ data: value, error: null }));
     },
   };
 
@@ -1130,7 +1146,7 @@ test("React renders complete V2 strength and skill prescriptions from the valida
   }
 });
 
-test("React passes goal, block, template, level, maxes, and skills into profile-driven V2 generation", async () => {
+test("REG-012 React passes the selected goal, block, template, level, maxes, and skills into V2", async () => {
   const mounted = mountApp();
 
   try {
@@ -1182,7 +1198,7 @@ test("React passes goal, block, template, level, maxes, and skills into profile-
   }
 });
 
-test("React creates and switches between multiple V2 programmes", async () => {
+test("REG-001 React creates and switches between multiple V2 programmes", async () => {
   const mounted = mountApp();
 
   try {
@@ -1284,6 +1300,118 @@ test("React creates and switches between multiple V2 programmes", async () => {
       assert.equal(state.v2Programs.length, 0);
       assert.equal(state.activeV2ProgramId, null);
       assert.equal(state.activeProgrammingEngine, "v1");
+    });
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("REG-001 stale V2 sync completion cannot reactivate an older programme", async () => {
+  const delayedSave = deferred();
+  let saveCount = 0;
+  const saveResult = (payload) => {
+    saveCount += 1;
+    if (saveCount === 3) return delayedSave.promise;
+    return {
+      programId: payload.p_program.id,
+      revision: 1,
+      updatedAt: payload.p_program.updatedAt,
+    };
+  };
+  const account = privateAthleteState("V2 Sync Athlete", {
+    ...canonicalPlanState(),
+    plans: [],
+    activePlanId: null,
+  });
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    remote: {
+      athlete_states: [
+        {
+          user_id: "user-1",
+          schema_version: 1,
+          state: account,
+          updated_at: "2026-08-10T07:00:00.000Z",
+        },
+      ],
+      programming_engine_flags: [
+        {
+          user_id: "user-1",
+          v2_enabled: true,
+          rollout_group: "selected_users",
+        },
+      ],
+    },
+    rpcResults: {
+      save_programming_engine_v2: saveResult,
+      save_programming_engine_v2_profile: saveResult,
+    },
+  });
+  const mounted = mountApp({
+    supabaseMock,
+    url: "https://app.example.test/",
+  });
+
+  try {
+    await waitForSignedIn(mounted);
+    openMoreTool(mounted, "Build programme");
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Generate six-week V2 block" }),
+    );
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      assert.equal(state.v2Programs.length, 1);
+      assert.equal(state.v2ProgramRevisions[state.activeV2ProgramId], 1);
+    });
+    const firstProgramId = mounted.readState().activeV2ProgramId;
+
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Create new V2 programme" }),
+    );
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Programming goal"), {
+      target: { value: "strength" },
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Generate a new future block" }),
+    );
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      assert.equal(state.v2Programs.length, 2);
+      assert.equal(state.v2ProgramRevisions[state.activeV2ProgramId], 1);
+    });
+    const secondProgramId = mounted.readState().activeV2ProgramId;
+    const selector = mounted.ui.getByLabelText("Active programme");
+    mounted.fireEvent.change(selector, {
+      target: { value: `v2:${firstProgramId}` },
+    });
+    await mounted.waitFor(() =>
+      assert.equal(mounted.readState().activeV2ProgramId, firstProgramId),
+    );
+
+    const regenerateButton = mounted.ui.getAllByRole("button", {
+      name: "Regenerate conditioning",
+    })[0];
+    mounted.fireEvent.click(regenerateButton);
+    await mounted.waitFor(() => assert.equal(saveCount, 3));
+    assert.equal(regenerateButton.disabled, true);
+    mounted.fireEvent.click(regenerateButton);
+    assert.equal(saveCount, 3);
+    mounted.fireEvent.change(selector, {
+      target: { value: `v2:${secondProgramId}` },
+    });
+    await mounted.waitFor(() =>
+      assert.equal(mounted.readState().activeV2ProgramId, secondProgramId),
+    );
+
+    delayedSave.resolve({
+      programId: firstProgramId,
+      revision: 2,
+      updatedAt: "2026-08-10T08:30:00.000Z",
+    });
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      assert.equal(state.v2ProgramRevisions[firstProgramId], 2);
+      assert.equal(state.activeV2ProgramId, secondProgramId);
     });
   } finally {
     mounted.cleanup();
@@ -2225,7 +2353,7 @@ test("React Testing Library regenerates once and renders the same saved WOD in P
   }
 });
 
-test("React keeps V2 programme, week, calendar, log, and proof selections in sync", async () => {
+test("REG-001 REG-002 React keeps programme and week selection canonical across consumers and reload", async () => {
   const mounted = mountApp();
 
   try {

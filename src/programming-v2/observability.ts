@@ -7,6 +7,7 @@ export interface GenerationLogRecord {
   generationSource: ProgramV2["generationSource"];
   generationFingerprint: string;
   generatorVersion: string;
+  generationSeed: string | null;
   blockType: string;
   programmingGoal: string;
   generatedEmphasis: ProgrammeEmphasis | null;
@@ -62,6 +63,7 @@ export function createGenerationLogRecord(
     generationSource: program.generationSource || "generated",
     generationFingerprint: program.generationFingerprint || "legacy",
     generatorVersion: program.generatorVersion || "legacy",
+    generationSeed: program.generationRequest?.generationSeed ?? null,
     blockType: block.blockType,
     programmingGoal:
       program.programmeProfile?.primaryGoal ||

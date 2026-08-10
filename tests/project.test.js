@@ -420,6 +420,27 @@ test("GitHub Pages workflow checks and publishes the static app", () => {
   }
 });
 
+test("regression policy and pull-request CI make protection mandatory", () => {
+  const packageJson = JSON.parse(read("package.json"));
+  const workflow = read(".github/workflows/e2e.yml");
+  const catalogue = read("docs/REGRESSIONS.md");
+
+  assert.match(packageJson.scripts["test:regression"], /tests\/regression/);
+  assert.match(workflow, /pull-request-critical:[\s\S]*npm run check/);
+  assert.match(
+    workflow,
+    /pull-request-critical:[\s\S]*npm run test:regression/,
+  );
+  assert.match(workflow, /pull-request-critical:[\s\S]*test:e2e:critical/);
+  assert.match(catalogue, /Every production or user-discovered regression/);
+  for (let index = 1; index <= 12; index += 1) {
+    assert.match(
+      catalogue,
+      new RegExp(`REG-${String(index).padStart(3, "0")}`),
+    );
+  }
+});
+
 test("Supabase schema scopes policies to authenticated owners", () => {
   const schema = read("supabase-schema.sql");
   const policies = schema.match(/create policy[\s\S]*?;/g) || [];

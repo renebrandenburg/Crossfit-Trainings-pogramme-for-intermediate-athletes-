@@ -1514,6 +1514,9 @@ export type Database = {
           difficulty: number | null
           duration_minutes: number | null
           id: string
+          library_category_id: string | null
+          library_item_id: string | null
+          library_snapshot: Json | null
           mobility_done: boolean
           movement_patterns: string[]
           notes: string | null
@@ -1540,6 +1543,9 @@ export type Database = {
           difficulty?: number | null
           duration_minutes?: number | null
           id: string
+          library_category_id?: string | null
+          library_item_id?: string | null
+          library_snapshot?: Json | null
           mobility_done?: boolean
           movement_patterns?: string[]
           notes?: string | null
@@ -1566,6 +1572,9 @@ export type Database = {
           difficulty?: number | null
           duration_minutes?: number | null
           id?: string
+          library_category_id?: string | null
+          library_item_id?: string | null
+          library_snapshot?: Json | null
           mobility_done?: boolean
           movement_patterns?: string[]
           notes?: string | null
@@ -1622,6 +1631,10 @@ export type Database = {
         Returns: Json
       }
       save_programming_engine_v2: {
+        Args: { p_expected_revision?: number; p_program: Json }
+        Returns: Json
+      }
+      save_programming_engine_v2_profile: {
         Args: { p_expected_revision?: number; p_program: Json }
         Returns: Json
       }

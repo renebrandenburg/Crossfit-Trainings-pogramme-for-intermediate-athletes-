@@ -447,14 +447,38 @@ function createAccessoryExercise(
     "side_plank",
     "dead_bug",
   ];
+  const olympicDay1Ids = [
+    "side_plank",
+    "snatch_pull",
+    "snatch_pull",
+    "farmer_carry",
+    "snatch_pull",
+    "snatch_pull",
+    "side_plank",
+    "dead_bug",
+  ];
+  const olympicDay2Ids = [
+    "dead_bug",
+    "clean_pull",
+    "clean_pull",
+    "side_plank",
+    "clean_pull",
+    "clean_pull",
+    "farmer_carry",
+    "dead_bug",
+  ];
   const selectedIds =
     programmeType === "gymnastics_capacity_6w"
       ? gymnasticsIds
       : programmeType === "strength_development_profile"
         ? strengthIds
-        : sessionNumber === 1
-          ? defaultDay1Ids
-          : defaultDay2Ids;
+        : programmeType === "olympic_lifting_6w"
+          ? sessionNumber === 1
+            ? olympicDay1Ids
+            : olympicDay2Ids
+          : sessionNumber === 1
+            ? defaultDay1Ids
+            : defaultDay2Ids;
   const preferredMovementId = selectedIds[weekNumber - 1] ?? "dead_bug";
   const movementId = movementAllowed(
     preferredMovementId,
@@ -476,6 +500,15 @@ function createAccessoryExercise(
   const isCarry = movement.familyId === "carry";
   const isHold = movement.isIsometric === true;
   const isLoaded = movement.loadable;
+  const isOlympicPull = ["snatch_pull", "clean_pull"].includes(movement.id);
+  const pullTrackType =
+    movement.id === "snatch_pull" ? "snatch" : "clean_and_jerk";
+  const pullReferenceMax = isOlympicPull
+    ? maxForMovement(input, movement.id, pullTrackType)
+    : null;
+  const pullReferenceLift = isOlympicPull
+    ? referenceLift(movement.id, pullTrackType)
+    : null;
   const exercise: ExercisePrescription = {
     id: stableUuid(sessionId, "accessory"),
     sessionId,
@@ -486,24 +519,40 @@ function createAccessoryExercise(
     movementId: movement.id,
     movementName: movement.name,
     movementFamilyId: movement.familyId,
-    sets: weekNumber === 6 ? 2 : 2,
-    reps: isCarry || isHold ? null : 8,
-    repRangeMin: isLoaded && !isCarry ? 8 : null,
-    repRangeMax: isLoaded && !isCarry ? 10 : null,
+    sets: isOlympicPull ? (weekNumber === 8 ? 2 : 3) : 2,
+    reps: isCarry || isHold ? null : isOlympicPull ? 3 : 8,
+    repRangeMin: isLoaded && !isCarry && !isOlympicPull ? 8 : null,
+    repRangeMax: isLoaded && !isCarry && !isOlympicPull ? 10 : null,
     durationSeconds: isHold ? 25 : null,
     distanceMeters: isCarry ? 30 : null,
     calories: null,
-    intensityMethod: isLoaded ? "rpe" : "bodyweight",
-    intensityValue: isLoaded ? 5 : null,
-    intensityMax: isLoaded ? 6 : null,
-    loadKg: null,
-    referenceMaxKg: null,
-    referenceLift: null,
-    restSeconds: 45,
+    intensityMethod:
+      isOlympicPull && pullReferenceMax != null
+        ? "percentage_1rm"
+        : isLoaded
+          ? "rpe"
+          : "bodyweight",
+    intensityValue:
+      isOlympicPull && pullReferenceMax != null ? 85 : isLoaded ? 5 : null,
+    intensityMax:
+      isOlympicPull && pullReferenceMax != null ? 95 : isLoaded ? 6 : null,
+    loadKg:
+      isOlympicPull && pullReferenceMax != null
+        ? calculateWorkingWeight({
+            maxKg: pullReferenceMax,
+            percentage: 85,
+            incrementKg: input.weightIncrementKg,
+            roundingMode: input.roundingMode,
+          })
+        : null,
+    referenceMaxKg: pullReferenceMax,
+    referenceLift: pullReferenceLift,
+    restSeconds: isOlympicPull ? 75 : 45,
     tempo: movement.id === "romanian_deadlift" ? "31X1" : "controlled",
     pauseDescription: null,
-    technicalIntent:
-      movement.familyId === "carry"
+    technicalIntent: isOlympicPull
+      ? "Finish the pull vertically with the bar close and keep every repetition technically repeatable."
+      : movement.familyId === "carry"
         ? "Walk tall with quiet steps and uninterrupted trunk bracing."
         : "Build resilient trunk and accessory strength without adding excessive fatigue.",
     progressionObjective: null,
@@ -1630,10 +1679,11 @@ function buildGenerationRequest(
   return {
     programmeType: template.id,
     programmeVersion: template.templateVersion,
+    generationSeed: input.seed ?? template.templateVersion,
     cycleLengthWeeks: template.durationWeeks,
     sessionsPerWeek: input.sessionCount ?? 2,
     athleteLevel: input.athleteLevel,
-    athleteGoals: [input.goal ?? template.blockType],
+    athleteGoals: [profile.primaryGoal],
     trainingBlock: profile.trainingBlock,
     competitionFocus: input.competitionFocus ?? null,
     availableEquipment: [...input.equipment].sort(),

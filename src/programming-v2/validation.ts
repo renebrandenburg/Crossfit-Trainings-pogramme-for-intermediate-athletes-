@@ -11,7 +11,7 @@ import type {
 } from "./types";
 import { VALIDATOR_VERSION } from "./types";
 import { validateMaxTestPrescription } from "./max-testing";
-import { getV2TemplateDefinition } from "./template";
+import { V2_TEMPLATE_REGISTRY, getV2TemplateDefinition } from "./template";
 import { validateProgrammeIdentity } from "./profile";
 
 const PROHIBITED_LANGUAGE = [
@@ -780,6 +780,16 @@ export function validateTrainingWeek(
     );
   }
   week.sessions.forEach((session, index) => {
+    if (session.weekNumber !== week.weekNumber) {
+      issues.push(
+        issue(
+          "SESSION_WEEK_NUMBER_MISMATCH",
+          "error",
+          `${path}.sessions.${index}.weekNumber`,
+          "Session week number must match its containing training week.",
+        ),
+      );
+    }
     issues.push(
       ...validateSession(session, `${path}.sessions.${index}`).issues,
     );
@@ -806,22 +816,54 @@ export function validateTrainingBlock(
   profile: ProgramV2["programmeProfile"] = undefined,
 ): ValidationResult {
   const issues: ValidationIssue[] = [];
-  const expectedDuration =
-    block.templateId === "mixed_strength_8w_testing" ? 8 : 6;
+  const template = V2_TEMPLATE_REGISTRY.find(
+    (candidate) => candidate.id === block.templateId,
+  );
   if (
-    block.durationWeeks !== expectedDuration ||
-    block.trainingWeeks.length !== expectedDuration
+    template &&
+    (block.durationWeeks !== template.durationWeeks ||
+      block.trainingWeeks.length !== template.durationWeeks)
   ) {
     issues.push(
       issue(
         "INVALID_BLOCK_DURATION",
         "error",
         `${path}.durationWeeks`,
-        `The ${expectedDuration}-week V2 block requires exactly ${expectedDuration} weeks.`,
+        `The ${template.durationWeeks}-week V2 block requires exactly ${template.durationWeeks} weeks.`,
       ),
     );
   }
   block.trainingWeeks.forEach((week, index) => {
+    if (week.trainingBlockId !== block.id) {
+      issues.push(
+        issue(
+          "WEEK_BLOCK_MISMATCH",
+          "error",
+          `${path}.trainingWeeks.${index}.trainingBlockId`,
+          "Training week does not belong to its containing block.",
+        ),
+      );
+    }
+    if (week.weekNumber !== index + 1) {
+      issues.push(
+        issue(
+          "NON_SEQUENTIAL_WEEK_NUMBER",
+          "error",
+          `${path}.trainingWeeks.${index}.weekNumber`,
+          "Training weeks must be stored in sequential order.",
+        ),
+      );
+    }
+    if (week.plannedSessionCount !== block.plannedSessionCount) {
+      issues.push(
+        issue(
+          "PROGRAMME_FREQUENCY_MISMATCH",
+          "error",
+          `${path}.trainingWeeks.${index}.plannedSessionCount`,
+          "Week frequency must match the training block frequency.",
+        ),
+      );
+    }
     issues.push(
       ...validateTrainingWeek(week, `${path}.trainingWeeks.${index}`).issues,
     );
@@ -1040,6 +1082,29 @@ export function validateProgram(program: ProgramV2): ValidationResult {
       ),
     );
   }
+  if (program.trainingBlocks.length > 1) {
+    issues.push(
+      issue(
+        "INVALID_TRAINING_BLOCK_COUNT",
+        "error",
+        "program.trainingBlocks",
+        "A generated V2 programme must contain exactly one training block.",
+      ),
+    );
+  }
+  if (
+    program.trainingBlocks.length === 1 &&
+    program.activeTrainingBlockId !== program.trainingBlocks[0]?.id
+  ) {
+    issues.push(
+      issue(
+        "ACTIVE_BLOCK_MISMATCH",
+        "error",
+        "program.activeTrainingBlockId",
+        "Active training block must reference the programme's generated block.",
+      ),
+    );
+  }
   if (
     program.generationSource !== undefined &&
     !["generated", "fallback", "mock"].includes(program.generationSource)
@@ -1070,6 +1135,52 @@ export function validateProgram(program: ProgramV2): ValidationResult {
   const weekIds = new Set<string>();
   const sessionIds = new Set<string>();
   for (const block of program.trainingBlocks) {
+    if (program.programmeProfile) {
+      if (
+        program.generationRequest?.athleteGoals?.[0] !==
+        program.programmeProfile.primaryGoal
+      ) {
+        issues.push(
+          issue(
+            "PROGRAMME_GOAL_MISMATCH",
+            "error",
+            "program.generationRequest.athleteGoals",
+            "Requested goal must match the generated programme profile.",
+          ),
+        );
+      }
+      if (
+        block.blockType !== program.programmeProfile.trainingBlock ||
+        (program.generationRequest?.trainingBlock !== undefined &&
+          program.generationRequest.trainingBlock !==
+            program.programmeProfile.trainingBlock)
+      ) {
+        issues.push(
+          issue(
+            "PROGRAMME_BLOCK_MISMATCH",
+            "error",
+            "program.programmeProfile.trainingBlock",
+            "Requested block, generated profile, and saved block must match.",
+          ),
+        );
+      }
+      if (
+        program.generationRequest?.sessionsPerWeek !==
+          block.plannedSessionCount ||
+        block.trainingWeeks.some(
+          (week) => week.sessions.length !== block.plannedSessionCount,
+        )
+      ) {
+        issues.push(
+          issue(
+            "PROGRAMME_FREQUENCY_MISMATCH",
+            "error",
+            "program.generationRequest.sessionsPerWeek",
+            "Requested frequency must match every generated training week.",
+          ),
+        );
+      }
+    }
     if (block.programId !== program.id) {
       issues.push(
         issue(
@@ -1105,6 +1216,35 @@ export function validateProgram(program: ProgramV2): ValidationResult {
             "error",
             "program.generationRequest.programmeType",
             "Generated programme type does not match its block template.",
+          ),
+        );
+      }
+      if (
+        program.generationRequest?.cycleLengthWeeks !== undefined &&
+        program.generationRequest.cycleLengthWeeks !== template.durationWeeks
+      ) {
+        issues.push(
+          issue(
+            "PROGRAMME_DURATION_MISMATCH",
+            "error",
+            "program.generationRequest.cycleLengthWeeks",
+            "Requested duration does not match the generated block template.",
+          ),
+        );
+      }
+      if (
+        (program.generationRequest?.programmeVersion !== undefined &&
+          program.generationRequest.programmeVersion !==
+            template.templateVersion) ||
+        program.templateVersion !== template.templateVersion ||
+        program.generatorVersion !== template.templateVersion
+      ) {
+        issues.push(
+          issue(
+            "PROGRAMME_VERSION_MISMATCH",
+            "error",
+            "program.generationRequest.programmeVersion",
+            "Requested programme version does not match the generated template.",
           ),
         );
       }

@@ -1921,7 +1921,7 @@
             (item) => item.id !== program.id,
           ),
         ],
-        activeV2ProgramId: program.id,
+        activeV2ProgramId: activate ? program.id : current.activeV2ProgramId,
         activeProgrammingEngine: activate
           ? "v2"
           : current.activeProgrammingEngine,
@@ -8585,6 +8585,18 @@
     onConfirmMaxUpdate = () => {},
   }) {
     const rendered = v2Api.formatSessionForDisplay(session);
+    const [regenerating, setRegenerating] = ReactRuntime.useState(false);
+
+    async function regenerate(scope) {
+      if (regenerating) return;
+      setRegenerating(true);
+      try {
+        await onRegenerate(session.id, scope);
+      } finally {
+        setRegenerating(false);
+      }
+    }
+
     return h(
       "article",
       {
@@ -8655,7 +8667,9 @@
               {
                 className: "ghost-button",
                 type: "button",
-                onClick: () => onRegenerate(session.id, "warmup"),
+                disabled: regenerating,
+                "aria-busy": regenerating,
+                onClick: () => regenerate("warmup"),
               },
               "Regenerate warm-up",
             ),
@@ -8664,7 +8678,9 @@
               {
                 className: "ghost-button",
                 type: "button",
-                onClick: () => onRegenerate(session.id, "conditioning"),
+                disabled: regenerating,
+                "aria-busy": regenerating,
+                onClick: () => regenerate("conditioning"),
               },
               "Regenerate conditioning",
             ),
@@ -8673,7 +8689,9 @@
               {
                 className: "ghost-button",
                 type: "button",
-                onClick: () => onRegenerate(session.id, "accessory"),
+                disabled: regenerating,
+                "aria-busy": regenerating,
+                onClick: () => regenerate("accessory"),
               },
               "Regenerate accessory",
             ),
@@ -8682,7 +8700,9 @@
               {
                 className: "ghost-button",
                 type: "button",
-                onClick: () => onRegenerate(session.id, "full_session"),
+                disabled: regenerating,
+                "aria-busy": regenerating,
+                onClick: () => regenerate("full_session"),
               },
               "Regenerate full session",
             ),

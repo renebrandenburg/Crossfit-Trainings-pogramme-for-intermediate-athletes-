@@ -75,6 +75,9 @@ test("@critical V2 generates, renders, regenerates, completes, and reloads a con
     ),
   ).toBe(true);
   const beforeSession = firstSession(beforeProgram);
+  const exercisesBefore = beforeSession.exercises;
+  const warmupBefore = beforeSession.warmup;
+  const conditioningBefore = beforeSession.conditioning;
   const primaryBefore = beforeSession.exercises.filter(
     (exercise) => exercise.section === "primary",
   );
@@ -93,6 +96,9 @@ test("@critical V2 generates, renders, regenerates, completes, and reloads a con
 
   const regenerated = activeV2Program(await readAppState(page));
   const regeneratedSession = firstSession(regenerated);
+  expect(regeneratedSession.exercises).toEqual(exercisesBefore);
+  expect(regeneratedSession.warmup).toEqual(warmupBefore);
+  expect(regeneratedSession.conditioning).not.toEqual(conditioningBefore);
   expect(
     regeneratedSession.exercises.filter(
       (exercise) => exercise.section === "primary",
@@ -100,6 +106,7 @@ test("@critical V2 generates, renders, regenerates, completes, and reloads a con
   ).toEqual(primaryBefore);
   expect(regeneratedSession.trackAssignments).toEqual(assignmentsBefore);
   expect(regeneratedSession.estimatedDurationMinutes).toBeLessThanOrEqual(65);
+  expect(regenerated.validation.valid).toBe(true);
 
   const firstCard = programme.getByTestId("v2-session-card").first();
   await firstCard
@@ -148,7 +155,7 @@ test("@critical V2 generates, renders, regenerates, completes, and reloads a con
   );
 });
 
-test("@critical V2 bar muscle-up goal maps to gymnastics progression", async ({
+test("@critical REG-012 V2 goal and block drive content without rewriting the selected template", async ({
   page,
 }) => {
   const app = new AppShell(page);
@@ -162,8 +169,14 @@ test("@critical V2 bar muscle-up goal maps to gymnastics progression", async ({
   });
 
   let program = activeV2Program(await readAppState(page));
-  expect(program.trainingBlocks[0].templateId).toBe("gymnastics_capacity_6w");
+  expect(program.trainingBlocks[0].templateId).toBe("mixed_strength_6w");
   expect(program.generationRequest.athleteGoals).toEqual(["bar_muscle_up"]);
+  expect(program.generationRequest.trainingBlock).toBe("gymnastics_capacity");
+  expect(program.programmeProfile).toMatchObject({
+    primaryGoal: "bar_muscle_up",
+    trainingBlock: "gymnastics_capacity",
+    focus: "gymnastics",
+  });
   await expect(page.getByTestId("v2-programme")).toContainText(/strict pull/i);
 
   await page.reload();
@@ -172,10 +185,11 @@ test("@critical V2 bar muscle-up goal maps to gymnastics progression", async ({
     "bar_muscle_up",
   );
   await expect(page.locator('select[name="v2TemplateId"]')).toHaveValue(
-    "gymnastics_capacity_6w",
+    "mixed_strength_6w",
   );
   program = activeV2Program(await readAppState(page));
-  expect(program.trainingBlocks[0].templateId).toBe("gymnastics_capacity_6w");
+  expect(program.trainingBlocks[0].templateId).toBe("mixed_strength_6w");
+  expect(program.programmeProfile.focus).toBe("gymnastics");
 });
 
 test("@critical Masters/Open V2 uses competition-specific sessions", async ({
@@ -188,6 +202,9 @@ test("@critical Masters/Open V2 uses competition-specific sessions", async ({
 
   await page.locator('select[name="v2Goal"]').selectOption("masters_open");
   await page
+    .locator('select[name="v2BlockType"]')
+    .selectOption("masters_open_preparation");
+  await page
     .locator('select[name="v2TemplateId"]')
     .selectOption("masters_open_preparation_6w");
   await page
@@ -197,7 +214,6 @@ test("@critical Masters/Open V2 uses competition-specific sessions", async ({
   const programme = page.getByTestId("v2-programme");
   await expect(programme).toContainText("Masters/Open");
   await page.getByRole("button", { name: "Week 4" }).click();
-  await expect(programme).toContainText("Masters Open simulation");
   await expect(programme).toContainText("Pacing:");
   await expect(programme).toContainText("Standards:");
   await expect(programme).toContainText("Score: rounds_reps");
@@ -206,6 +222,23 @@ test("@critical Masters/Open V2 uses competition-specific sessions", async ({
   );
   await expect(programme).not.toContainText("Baseline preview");
   await expect(programme).not.toContainText("rematerialized");
+
+  const program = activeV2Program(await readAppState(page));
+  const weekFour = program.trainingBlocks[0].trainingWeeks[3];
+  expect(program.programmeProfile).toMatchObject({
+    primaryGoal: "masters_open",
+    trainingBlock: "masters_open_preparation",
+    conditioningStyle: "open",
+  });
+  expect(
+    weekFour.sessions.every((session) => session.fatigueFocus === "recovery"),
+  ).toBe(true);
+  expect(
+    weekFour.sessions.some(
+      (session) =>
+        session.conditioning?.competitionMetadata?.competitionStyle === true,
+    ),
+  ).toBe(true);
 
   await app.navigate("Plan");
   await expect(page.getByLabel("Programme week")).toHaveValue("4");
@@ -257,4 +290,115 @@ test("@critical V2 families produce different Week 4 programming", async ({
   await page.reload();
   await builder.open();
   await expect(page.getByTestId("v2-programme")).toContainText("Masters/Open");
+});
+
+test("@critical REG-002 REG-003 eight-week selection is non-sequential and reload-stable", async ({
+  page,
+}) => {
+  const app = new AppShell(page);
+  const builder = new PlanBuilderPage(page);
+  await app.open();
+  await builder.open();
+
+  await builder.generateV2({
+    goal: "general_crossfit",
+    blockType: "gymnastics_capacity",
+    templateId: "mixed_strength_8w_testing",
+  });
+
+  const programme = page.getByTestId("v2-programme");
+  let program = activeV2Program(await readAppState(page));
+  expect(program.trainingBlocks[0].durationWeeks).toBe(8);
+  expect(program.trainingBlocks[0].trainingWeeks).toHaveLength(8);
+  expect(program.programmeProfile.focus).toBe("gymnastics");
+  await expect(
+    page
+      .getByRole("navigation", { name: "V2 training weeks" })
+      .getByRole("button"),
+  ).toHaveCount(8);
+
+  for (const week of [4, 7, 2, 8]) {
+    await page
+      .getByRole("button", { name: `Week ${week}`, exact: true })
+      .click();
+    await expect(programme).toContainText(`Week ${week} – Session 1`);
+    expect((await readAppState(page)).selectedWeek).toBe(week);
+  }
+
+  program = activeV2Program(await readAppState(page));
+  expect(program.trainingBlocks[0].trainingWeeks[7].sessions).toHaveLength(2);
+  await page.reload();
+  await builder.open();
+  await expect(page.getByTestId("v2-programme")).toContainText(
+    "Week 8 – Session 1",
+  );
+  expect((await readAppState(page)).selectedWeek).toBe(8);
+});
+
+test("@critical REG-001 saved V2 programmes switch, rename, delete, and persist", async ({
+  page,
+}) => {
+  const app = new AppShell(page);
+  const builder = new PlanBuilderPage(page);
+  await app.open();
+  await builder.open();
+
+  await builder.generateV2({
+    goal: "general_crossfit",
+    blockType: "gymnastics_capacity",
+    templateId: "gymnastics_capacity_6w",
+  });
+  const gymnasticsId = (await readAppState(page)).activeV2ProgramId;
+  await page.getByLabel("V2 programme name").fill("Gymnastics cycle");
+  await page.getByRole("button", { name: "Save V2 programme name" }).click();
+  await expect(
+    page.getByText("V2 programme renamed.", { exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Create new V2 programme" }).click();
+  await builder.generateV2({
+    goal: "olympic_lifting",
+    blockType: "olympic_lifting_development",
+    templateId: "olympic_lifting_6w",
+  });
+  const weightliftingId = (await readAppState(page)).activeV2ProgramId;
+  await page.getByLabel("V2 programme name").fill("Weightlifting cycle");
+  await page.getByRole("button", { name: "Save V2 programme name" }).click();
+
+  const selector = page.getByLabel("Active programme");
+  await selector.selectOption(`v2:${gymnasticsId}`);
+  let state = await readAppState(page);
+  expect(state.activeV2ProgramId).toBe(gymnasticsId);
+  expect(activeV2Program(state).name).toBe("Gymnastics cycle");
+  expect(activeV2Program(state).programmeProfile.focus).toBe("gymnastics");
+
+  await page.reload();
+  await builder.open();
+  await expect(page.getByLabel("Active programme")).toHaveValue(
+    `v2:${gymnasticsId}`,
+  );
+
+  await page
+    .getByLabel("Active programme")
+    .selectOption(`v2:${weightliftingId}`);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Remove V2 programme" }).click();
+  await expect(
+    page.getByText(
+      "V2 programme removed. Switched to another saved V2 programme.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  state = await readAppState(page);
+  expect(state.activeV2ProgramId).toBe(gymnasticsId);
+  expect(
+    state.v2Programs.some((program) => program.id === weightliftingId),
+  ).toBe(false);
+
+  await page.reload();
+  state = await readAppState(page);
+  expect(
+    state.v2Programs.some((program) => program.id === weightliftingId),
+  ).toBe(false);
+  expect(activeV2Program(state).name).toBe("Gymnastics cycle");
 });

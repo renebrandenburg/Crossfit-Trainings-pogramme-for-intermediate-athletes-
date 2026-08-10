@@ -699,6 +699,7 @@ export interface ProgramV2 {
 export interface GenerationRequest {
   programmeType: string;
   programmeVersion: string;
+  generationSeed?: string;
   cycleLengthWeeks: number;
   sessionsPerWeek: 2 | 3 | 4;
   athleteLevel: "beginner" | "intermediate" | "advanced";

@@ -1473,11 +1473,13 @@
         };
       },
       async saveProgrammingEngineV2(program, expectedRevision = null) {
-        const rpcName = program?.trainingBlocks?.some?.(
-          (block) => block?.templateId === "mixed_strength_8w_testing",
-        )
-          ? "save_programming_engine_v2_testing"
-          : "save_programming_engine_v2";
+        const rpcName = program?.programmeProfile
+          ? "save_programming_engine_v2_profile"
+          : program?.trainingBlocks?.some?.(
+                (block) => block?.templateId === "mixed_strength_8w_testing",
+              )
+            ? "save_programming_engine_v2_testing"
+            : "save_programming_engine_v2";
         const payload = assertObject(program, "V2 programme", rpcName);
         if (
           payload.engineVersion !== "v2" ||
