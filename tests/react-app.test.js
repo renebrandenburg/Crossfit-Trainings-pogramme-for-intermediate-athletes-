@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { JSDOM } = require("jsdom");
 const { cloneDefaultProfile, workoutItemsForSession } = require("../app.js");
+const { INTERMEDIATE_V2_ATHLETE } = require("./fixtures/v2-athletes.js");
 
 function freshRequire(file) {
   const modulePath = require.resolve(file);
@@ -558,6 +559,86 @@ function canonicalPlanState({
     activePlanId: "saved-plan-1",
     selectedWeek: 1,
     logs,
+  };
+}
+
+function historicalEightWeekStrengthState() {
+  const v2 = freshRequire("../build/programming-v2.cjs");
+  const programmeId = "85c58cda-cf7a-45e2-acdd-71f8331dd7a2";
+  const sessionId = "0570808e-8649-4c80-a407-14d62191fd28";
+  const program = v2.generateV2Program({
+    ...INTERMEDIATE_V2_ATHLETE,
+    programId: programmeId,
+    ownerId: null,
+    generatedAt: "2026-08-04T08:37:52.473Z",
+    blockType: "back_squat_strength",
+    goal: "strength",
+    templateId: "mixed_strength_8w_testing",
+    sessionCount: 2,
+    seed: "historical-strength-programme",
+    restrictions: {
+      movementIds: [],
+      movementFamilyIds: [],
+      guidance: null,
+    },
+    weightIncrementKg: 2.5,
+    roundingMode: "nearest",
+  });
+  const persistedVersion = "mixed-strength-6w-v1";
+  program.templateVersion = persistedVersion;
+  program.generatorVersion = persistedVersion;
+  program.generationRequest.programmeVersion = persistedVersion;
+  delete program.programmeProfile;
+  delete program.generationSummary;
+  const block = program.trainingBlocks[0];
+  program.name = "Eight-week strength testing block";
+  block.name = "Eight-week strength testing block";
+  block.currentWeek = 2;
+  const completedSession = block.trainingWeeks[1].sessions[0];
+  completedSession.id = sessionId;
+  completedSession.warmup.sessionId = sessionId;
+  completedSession.conditioning.sessionId = sessionId;
+  completedSession.sections.forEach((section) => {
+    section.sessionId = sessionId;
+  });
+  completedSession.exercises.forEach((exercise) => {
+    exercise.sessionId = sessionId;
+  });
+  completedSession.status = "completed";
+  completedSession.revision = 2;
+  completedSession.feedback = {
+    sessionId,
+    completed: true,
+    sessionRpe: 8,
+    fatigue: 6,
+    painReported: false,
+    durationMinutesActual: completedSession.estimatedDurationMinutes,
+    notes: "Historical progress must survive reload.",
+    completedAt: "2026-08-10T15:57:51.788Z",
+    results: completedSession.trackAssignments.map((assignment) => {
+      const exercise = completedSession.exercises.find(
+        (item) => item.progressionTrackId === assignment.progressionTrackId,
+      );
+      return {
+        prescriptionId: exercise.id,
+        progressionTrackId: assignment.progressionTrackId,
+        completedSets: exercise.sets,
+        completedReps: exercise.reps ?? exercise.repRangeMin,
+        loadKg: exercise.loadKg,
+        achievedRpe: 8,
+        successful: true,
+        painReported: false,
+      };
+    }),
+  };
+  program.validation = v2.validateProgram(program);
+  return {
+    ...canonicalPlanState(),
+    activeProgrammingEngine: "v2",
+    activeV2ProgramId: programmeId,
+    selectedWeek: 2,
+    v2Programs: [program],
+    v2ProgramRevisions: { [programmeId]: 4 },
   };
 }
 
@@ -2497,6 +2578,55 @@ test("REG-001 REG-002 React keeps programme and week selection canonical across 
     }
   } finally {
     if (global.window) mounted.cleanup();
+  }
+});
+
+test("REG-014 React reloads a historical eight-week Strength programme without changing it", async () => {
+  const storedState = historicalEightWeekStrengthState();
+  const originalProgram = structuredClone(storedState.v2Programs[0]);
+  const mounted = mountApp({ storedState });
+
+  try {
+    openMoreTool(mounted, "Build programme");
+    const builder = mounted.view("builderView");
+    await mounted.waitFor(() => {
+      assert.ok(builder.getByTestId("v2-programme"));
+      assert.equal(
+        builder.getByLabelText("Active programme").value,
+        `v2:${originalProgram.id}`,
+      );
+      assert.equal(
+        builder.getByLabelText("V2 programme name").value,
+        "Eight-week strength testing block",
+      );
+      assert.equal(
+        builder.getByRole("button", { name: "Week 2" }).className,
+        "is-active",
+      );
+    });
+    for (let week = 1; week <= 8; week += 1) {
+      assert.ok(builder.getByRole("button", { name: `Week ${week}` }));
+    }
+    assert.equal(builder.queryByText(/PROGRAMME_VERSION_MISMATCH/), null);
+
+    const reloadedState = mounted.readState();
+    const reloadedProgram = reloadedState.v2Programs.find(
+      (program) => program.id === originalProgram.id,
+    );
+    const completedSession =
+      reloadedProgram.trainingBlocks[0].trainingWeeks[1].sessions[0];
+    assert.deepEqual(reloadedProgram, originalProgram);
+    assert.equal(reloadedProgram.trainingBlocks[0].trainingWeeks.length, 8);
+    assert.equal(reloadedProgram.trainingBlocks[0].currentWeek, 2);
+    assert.equal(completedSession.id, "0570808e-8649-4c80-a407-14d62191fd28");
+    assert.equal(completedSession.status, "completed");
+    assert.equal(
+      completedSession.feedback.notes,
+      "Historical progress must survive reload.",
+    );
+    assert.equal(reloadedState.v2ProgramRevisions[originalProgram.id], 4);
+  } finally {
+    mounted.cleanup();
   }
 });
 

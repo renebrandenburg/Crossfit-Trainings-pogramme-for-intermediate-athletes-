@@ -312,6 +312,33 @@ test("REG-004 request, profile, block, and session identity cannot diverge", () 
   }
 });
 
+test("REG-014 historical eight-week programmes remain valid after a generator upgrade", () => {
+  const historical = structuredClone(
+    generateProfile("strength", "back_squat_strength"),
+  );
+  const persistedVersion = "mixed-strength-6w-v1";
+  historical.templateVersion = persistedVersion;
+  historical.generatorVersion = persistedVersion;
+  historical.generationRequest.programmeVersion = persistedVersion;
+  historical.trainingBlocks[0].currentWeek = 2;
+  delete historical.programmeProfile;
+  delete historical.generationSummary;
+  const beforeValidation = structuredClone(historical);
+
+  const loaded = v2.validateProgram(historical);
+
+  assert.equal(loaded.valid, true);
+  assert.equal(
+    loaded.issues.some((issue) => issue.code === "PROGRAMME_VERSION_MISMATCH"),
+    false,
+  );
+  assert.deepEqual(historical, beforeValidation);
+  assert.equal(historical.trainingBlocks[0].trainingWeeks.length, 8);
+  assert.equal(sessions(historical).length, 16);
+  assert.equal(historical.trainingBlocks[0].currentWeek, 2);
+  assert.equal(v2.validateGeneratedProgram(historical).valid, false);
+});
+
 test("REG-005 Open preparation satisfies its programme-level quality contract", () => {
   const program = generateProfile("open", "open_preparation");
   const allSessions = sessions(program);

@@ -55,7 +55,10 @@ import {
   TEMPLATE_VERSION,
   VALIDATOR_VERSION,
 } from "./types";
-import { assertValidProgram, validateProgram } from "./validation";
+import {
+  assertValidGeneratedProgram,
+  validateGeneratedProgram,
+} from "./validation";
 
 function hash32(value: string, seed = 2166136261): number {
   let hash = seed >>> 0;
@@ -2193,12 +2196,12 @@ export function generateMixedStrengthBlock(
     );
   }
   const fingerprint = generationFingerprint(draft);
-  const validation = validateProgram({
+  const validation = validateGeneratedProgram({
     ...draft,
     generationSummary,
     generationFingerprint: fingerprint,
   });
-  return assertValidProgram({
+  return assertValidGeneratedProgram({
     ...draft,
     generationSummary,
     generationFingerprint: fingerprint,

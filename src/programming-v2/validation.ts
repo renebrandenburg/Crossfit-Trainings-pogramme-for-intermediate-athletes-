@@ -1060,7 +1060,10 @@ export function validateTrainingBlock(
   return result(issues);
 }
 
-export function validateProgram(program: ProgramV2): ValidationResult {
+export function validateProgram(
+  program: ProgramV2,
+  options: { requireCurrentTemplateVersion?: boolean } = {},
+): ValidationResult {
   const issues: ValidationIssue[] = [];
   if (program.engineVersion !== "v2" || program.schemaVersion !== 2) {
     issues.push(
@@ -1232,19 +1235,27 @@ export function validateProgram(program: ProgramV2): ValidationResult {
           ),
         );
       }
-      if (
-        (program.generationRequest?.programmeVersion !== undefined &&
-          program.generationRequest.programmeVersion !==
-            template.templateVersion) ||
-        program.templateVersion !== template.templateVersion ||
-        program.generatorVersion !== template.templateVersion
-      ) {
+      const persistedVersions = [
+        program.generationRequest?.programmeVersion,
+        program.generatorVersion,
+      ].filter((version): version is string => version !== undefined);
+      const persistedVersionsDisagree =
+        !program.templateVersion ||
+        persistedVersions.some(
+          (version) => version !== program.templateVersion,
+        );
+      const currentTemplateVersionRequired =
+        options.requireCurrentTemplateVersion === true &&
+        program.templateVersion !== template.templateVersion;
+      if (persistedVersionsDisagree || currentTemplateVersionRequired) {
         issues.push(
           issue(
             "PROGRAMME_VERSION_MISMATCH",
             "error",
             "program.generationRequest.programmeVersion",
-            "Requested programme version does not match the generated template.",
+            persistedVersionsDisagree
+              ? "Persisted programme version metadata is inconsistent."
+              : "Generated programme version does not match the current template.",
           ),
         );
       }
@@ -1339,6 +1350,25 @@ export function assertValidProgram(program: ProgramV2): ProgramV2 {
   if (!validation.valid) {
     const error = new Error(
       `Invalid V2 programme: ${validation.issues
+        .filter((item) => item.severity === "error")
+        .map((item) => item.code)
+        .join(", ")}`,
+    );
+    error.name = "ProgramV2ValidationError";
+    throw error;
+  }
+  return { ...program, validation };
+}
+
+export function validateGeneratedProgram(program: ProgramV2): ValidationResult {
+  return validateProgram(program, { requireCurrentTemplateVersion: true });
+}
+
+export function assertValidGeneratedProgram(program: ProgramV2): ProgramV2 {
+  const validation = validateGeneratedProgram(program);
+  if (!validation.valid) {
+    const error = new Error(
+      `Invalid generated V2 programme: ${validation.issues
         .filter((item) => item.severity === "error")
         .map((item) => item.code)
         .join(", ")}`,

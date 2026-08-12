@@ -2075,7 +2075,7 @@
           weightIncrementKg: preferences.weightIncrementKg,
           roundingMode: preferences.roundingMode,
         });
-        const validation = v2Api.validateProgram(program);
+        const validation = v2Api.validateGeneratedProgram(program);
         if (!validation.valid) {
           throw new Error(
             `V2 validation failed: ${validation.issues

@@ -168,6 +168,19 @@ Protection:
 
 Status: Protected.
 
+## REG-014 Historical generator version mismatch
+
+Problem: An intact historical eight-week Strength programme became hidden after the registered generator version changed, even though all eight weeks, sessions, and completion data remained valid.
+
+Root cause: Persisted provenance fields were required to equal the latest template registry version during loading. Hydration then excluded the otherwise valid local programme.
+
+Protection:
+
+- `tests/regression/programming-v2.regression.test.js` verifies that internally consistent historical provenance remains loadable and immutable while strict new-generation validation still requires the current version.
+- `tests/react-app.test.js` reloads an eight-week historical Strength programme, preserves all weeks, the active week, the exact completed session ID, feedback, and revision, and renders it without `PROGRAMME_VERSION_MISMATCH`.
+
+Status: Protected.
+
 ## CI gate
 
 Pull requests run formatting, lint, type checks, all Node suites, the dedicated regression suite, build, pgTAP database checks, schema lint/type drift checks, and critical Chromium Playwright journeys. Main and scheduled browser jobs run the full suite in Chromium, Firefox, and WebKit.
@@ -187,6 +200,7 @@ The final hardening review deliberately exercises these failure classes:
 | Regenerate conditioning but mutate warm-up/strength/progression                                  | Immutable unit contract and critical Playwright comparison                         |
 | Save a loaded movement without usable guidance                                                   | REG-010 prescription validation                                                    |
 | Save vague gymnastics prose                                                                      | REG-011 actionable-prescription validation                                         |
+| Replace the current generator after an older programme was saved                                 | REG-014 historical snapshot and reload tests                                       |
 | Rename or delete a cycle and reload                                                              | Critical Playwright programme lifecycle flow                                       |
 
 Each attempted break is part of a pull-request CI path; none relies on a screenshot or manual title comparison.
