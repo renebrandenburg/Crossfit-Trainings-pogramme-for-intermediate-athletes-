@@ -13,6 +13,10 @@ import { VALIDATOR_VERSION } from "./types";
 import { validateMaxTestPrescription } from "./max-testing";
 import { V2_TEMPLATE_REGISTRY, getV2TemplateDefinition } from "./template";
 import { validateProgrammeIdentity } from "./profile";
+import {
+  estimateConditioningDuration,
+  validateConditioningStimulus,
+} from "./conditioning";
 
 const PROHIBITED_LANGUAGE = [
   "or similar",
@@ -584,6 +588,88 @@ export function validateConditioningPrescription(
         "Conditioning duration estimate is required.",
       ),
     );
+  }
+  if (conditioning.intent) {
+    const target = conditioning.intent.durationTarget;
+    if (
+      target &&
+      (target.minMinutes !== conditioning.targetDurationMin ||
+        target.maxMinutes !== conditioning.targetDurationMax ||
+        conditioning.intent.timeCapMinutes !== conditioning.timeCapMinutes)
+    ) {
+      issues.push(
+        issue(
+          "CONDITIONING_INTENT_MISMATCH",
+          "error",
+          `${path}.intent`,
+          "Conditioning intent must remain independent and match the programmed target fields.",
+        ),
+      );
+    }
+    if (
+      conditioning.format === "for_time" &&
+      target &&
+      conditioning.timeCapMinutes != null &&
+      conditioning.timeCapMinutes < target.maxMinutes
+    ) {
+      issues.push(
+        issue(
+          "CONDITIONING_CAP_BELOW_TARGET",
+          "error",
+          `${path}.timeCapMinutes`,
+          "Conditioning time cap must be at or above the target finish window.",
+        ),
+      );
+    }
+    const athleteProfile = {
+      level: conditioning.athleteLevel ?? ("intermediate" as const),
+    };
+    const estimateInput = {
+      format: conditioning.format,
+      rounds: conditioning.rounds,
+      durationMinutes: conditioning.durationMinutes,
+      workSeconds: conditioning.workSeconds,
+      restSeconds: conditioning.restSeconds,
+      movements: conditioning.movements,
+      athleteProfile,
+    };
+    const estimate = estimateConditioningDuration(estimateInput);
+    if (
+      !conditioning.durationEstimate ||
+      Math.abs(
+        conditioning.durationEstimate.estimatedSeconds -
+          estimate.estimatedSeconds,
+      ) > 1
+    ) {
+      issues.push(
+        issue(
+          "CONDITIONING_ESTIMATE_STALE",
+          "error",
+          `${path}.durationEstimate`,
+          "Conditioning workload estimate must match the current prescription.",
+        ),
+      );
+    }
+    if (target) {
+      const validation = validateConditioningStimulus(
+        {
+          ...estimateInput,
+          timeCapMinutes: conditioning.timeCapMinutes,
+        },
+        target,
+      );
+      if (!validation.valid) {
+        issues.push(
+          issue(
+            "CONDITIONING_STIMULUS_MISMATCH",
+            "error",
+            `${path}.stimulusValidation`,
+            validation.reason ??
+              "Conditioning workload does not match the target window.",
+          ),
+        );
+      }
+    }
   }
   issues.push(
     ...validateGeneratedLanguage(
