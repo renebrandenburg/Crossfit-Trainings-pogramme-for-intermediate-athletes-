@@ -442,6 +442,89 @@ export interface ConditioningMovement {
   equipment: string[];
 }
 
+export type ConditioningAthleteLevel =
+  | "beginner"
+  | "intermediate"
+  | "advanced"
+  | "rx";
+
+export type ConditioningDomain =
+  | "engine"
+  | "bodyweight"
+  | "gymnastics"
+  | "strength";
+
+export interface MovementPaceProfile {
+  movementId: string;
+  domain: ConditioningDomain;
+  secondsPerRep?: number;
+  secondsPerMeter?: number;
+  secondsPerCalorie?: number;
+  transitionSeconds: number;
+  fatigueFactor: number;
+  uncertainty: number;
+}
+
+export interface AthleteConditioningProfile {
+  level: ConditioningAthleteLevel;
+  domainLevels?: Partial<Record<ConditioningDomain, ConditioningAthleteLevel>>;
+  personalMultiplier?: {
+    value: number;
+    sampleCount: number;
+  };
+}
+
+export interface ConditioningEstimateInput {
+  format: ConditioningFormat;
+  rounds: number | null;
+  durationMinutes?: number | null;
+  workSeconds?: number | null;
+  restSeconds?: number | null;
+  movements: ConditioningMovement[];
+  athleteProfile: AthleteConditioningProfile;
+}
+
+export interface ConditioningDurationEstimate {
+  estimatedSeconds: number;
+  minExpectedSeconds: number;
+  maxExpectedSeconds: number;
+  confidence: "low" | "medium" | "high";
+}
+
+export interface ConditioningIntent {
+  durationTarget: {
+    minMinutes: number;
+    maxMinutes: number;
+  } | null;
+  timeCapMinutes: number | null;
+  intensity: {
+    targetRpe: number | null;
+    maxRpe: number | null;
+  };
+  stimulus: string;
+  pacing: string;
+}
+
+export interface ConditioningValidation {
+  valid: boolean;
+  estimatedDuration: number;
+  targetRange: {
+    min: number;
+    max: number;
+  };
+  deviationPercent: number;
+  reason?: string;
+}
+
+export interface ConditioningPerformance {
+  prescribedTargetMin: number | null;
+  prescribedTargetMax: number | null;
+  estimatedDuration: number;
+  actualDuration: number;
+  athleteRpe: number | null;
+  performanceRatio: number;
+}
+
 export interface ConditioningEmomStation {
   minute: number;
   movement: ConditioningMovement;
@@ -466,6 +549,11 @@ export interface ConditioningPrescription {
   stations: ConditioningEmomStation[];
   scalingOptions: ScalingOption[];
   estimatedDurationMinutes: number;
+  athleteLevel?: ConditioningAthleteLevel;
+  intent?: ConditioningIntent;
+  durationEstimate?: ConditioningDurationEstimate;
+  stimulusValidation?: ConditioningValidation | null;
+  recalibrationAttempts?: number;
   competitionMetadata?: OpenWorkoutMetadata | null;
 }
 
@@ -552,6 +640,8 @@ export interface SessionFeedback {
   fatigue: number | null;
   painReported: boolean;
   durationMinutesActual: number | null;
+  conditioningDurationSecondsActual?: number | null;
+  conditioningPerformance?: ConditioningPerformance | null;
   notes: string | null;
   results: ActualExerciseResult[];
   completedAt: string;
