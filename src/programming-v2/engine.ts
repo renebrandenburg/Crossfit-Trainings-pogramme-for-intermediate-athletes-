@@ -900,7 +900,9 @@ function createMastersOpenConditioning(
     durationMinutes:
       base.durationMinutes == null
         ? null
-        : Math.max(7, Math.round(base.durationMinutes * 0.75)),
+        : isRecoveryWeek(week)
+          ? base.durationMinutes
+          : Math.max(7, Math.round(base.durationMinutes * 0.75)),
     timeCapMinutes:
       base.timeCapMinutes == null
         ? null
