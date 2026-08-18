@@ -32,6 +32,17 @@ export interface GenerationLogRecord {
     section: string;
     minutes: number;
   }>;
+  conditioningStimulusDiagnostics: Array<{
+    conditioningId: string;
+    athleteLevel: string;
+    estimatedDuration: number;
+    targetRange: { min: number; max: number } | null;
+    timeCap: number | null;
+    deviation: number | null;
+    validationResult: "PASS" | "REJECTED" | "NOT_APPLICABLE";
+    confidence: "low" | "medium" | "high";
+    recalibrationAttempts: number;
+  }>;
   equipmentTransitionCount: number;
   validationWarnings: Array<{ code: string; path: string }>;
   validationErrors: Array<{ code: string; path: string }>;
@@ -103,6 +114,28 @@ export function createGenerationLogRecord(
         minutes: section.estimatedDurationMinutes,
       })),
     ),
+    conditioningStimulusDiagnostics: sessions.flatMap((session) => {
+      const conditioning = session.conditioning;
+      if (!conditioning?.durationEstimate) return [];
+      const validation = conditioning.stimulusValidation;
+      return [
+        {
+          conditioningId: conditioning.id,
+          athleteLevel: conditioning.athleteLevel ?? "intermediate",
+          estimatedDuration: conditioning.durationEstimate.estimatedSeconds,
+          targetRange: validation?.targetRange ?? null,
+          timeCap: conditioning.timeCapMinutes,
+          deviation: validation?.deviationPercent ?? null,
+          validationResult: validation
+            ? validation.valid
+              ? "PASS"
+              : "REJECTED"
+            : "NOT_APPLICABLE",
+          confidence: conditioning.durationEstimate.confidence,
+          recalibrationAttempts: conditioning.recalibrationAttempts ?? 0,
+        },
+      ];
+    }),
     equipmentTransitionCount: sessions.reduce(
       (total, session) => total + session.equipmentTransitions.length,
       0,
