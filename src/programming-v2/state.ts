@@ -24,7 +24,10 @@ import {
   proposeMaxUpdate,
 } from "./max-testing";
 import { assertValidProgram, validateProgram } from "./validation";
-import { calibrateConditioningPrescription } from "./conditioning";
+import {
+  calibrateConditioningPrescription,
+  createConditioningPerformance,
+} from "./conditioning";
 
 function cloneProgram(program: ProgramV2): ProgramV2 {
   return structuredClone(program);
@@ -403,12 +406,24 @@ export function applySessionCompletion(
 
   const current = findSession(program, session.id);
   if (!current) throw new Error("Session disappeared during completion.");
+  const conditioningPerformance =
+    current.conditioning &&
+    input.feedback.conditioningDurationSecondsActual != null
+      ? createConditioningPerformance(
+          current.conditioning,
+          input.feedback.conditioningDurationSecondsActual,
+          input.feedback.sessionRpe,
+        )
+      : null;
   const replacement = replaceSession(program, {
     ...current,
     status: input.feedback.completed ? "completed" : "skipped",
     provisional: false,
     revision: current.revision + 1,
-    feedback: input.feedback,
+    feedback: {
+      ...input.feedback,
+      conditioningPerformance,
+    },
     updatedAt,
   });
   program.trainingBlocks = replacement.trainingBlocks;

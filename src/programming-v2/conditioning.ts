@@ -7,6 +7,7 @@ import type {
   ConditioningEstimateInput,
   ConditioningIntent,
   ConditioningMovement,
+  ConditioningPerformance,
   ConditioningPrescription,
   ConditioningValidation,
   MovementPaceProfile,
@@ -484,4 +485,27 @@ export function calibrateConditioningPrescription(
     if (current.stimulusValidation?.valid) return current;
   }
   return current;
+}
+
+export function createConditioningPerformance(
+  conditioning: ConditioningPrescription,
+  actualDurationSeconds: number,
+  athleteRpe: number | null,
+): ConditioningPerformance {
+  if (!Number.isFinite(actualDurationSeconds) || actualDurationSeconds <= 0) {
+    throw new Error("Conditioning duration must be a positive number of seconds.");
+  }
+  const estimatedDuration =
+    conditioning.durationEstimate?.estimatedSeconds ??
+    Math.round(conditioning.estimatedDurationMinutes * 60);
+  const target = conditioning.intent?.durationTarget;
+  return {
+    prescribedTargetMin: target ? target.minMinutes * 60 : null,
+    prescribedTargetMax: target ? target.maxMinutes * 60 : null,
+    estimatedDuration,
+    actualDuration: actualDurationSeconds,
+    athleteRpe,
+    performanceRatio:
+      Math.round((actualDurationSeconds / estimatedDuration) * 1000) / 1000,
+  };
 }

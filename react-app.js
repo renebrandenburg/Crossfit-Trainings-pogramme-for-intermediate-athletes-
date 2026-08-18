@@ -8213,6 +8213,12 @@
             event.preventDefault();
             const data = new FormData(event.currentTarget);
             const painReported = data.get("painReported") === "on";
+            const conditioningMinutes = Number(
+              data.get("conditioningMinutesActual") || 0,
+            );
+            const conditioningSeconds = Number(
+              data.get("conditioningSecondsActual") || 0,
+            );
             const results = session.trackAssignments.map(
               (assignment, index) => {
                 const exercise = progressionExercises[index];
@@ -8265,6 +8271,10 @@
               painReported,
               durationMinutesActual:
                 Number(data.get("durationMinutesActual") || 0) || null,
+              conditioningDurationSecondsActual:
+                session.conditioning?.format === "for_time"
+                  ? conditioningMinutes * 60 + conditioningSeconds
+                  : null,
               notes: String(data.get("notes") || "").trim() || null,
               results,
               completedAt: new Date().toISOString(),
@@ -8378,6 +8388,36 @@
             }),
           ),
         ),
+        session.conditioning?.format === "for_time"
+          ? h(
+              "div",
+              { className: "form-row" },
+              h(
+                "label",
+                null,
+                "Conditioning time (minutes)",
+                h("input", {
+                  type: "number",
+                  min: "0",
+                  name: "conditioningMinutesActual",
+                  required: true,
+                }),
+              ),
+              h(
+                "label",
+                null,
+                "Conditioning time (seconds)",
+                h("input", {
+                  type: "number",
+                  min: "0",
+                  max: "59",
+                  name: "conditioningSecondsActual",
+                  defaultValue: "0",
+                  required: true,
+                }),
+              ),
+            )
+          : null,
         h(
           "label",
           { className: "check-row" },
