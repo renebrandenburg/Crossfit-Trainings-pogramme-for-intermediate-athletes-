@@ -86,6 +86,40 @@ function exposure(program, ...families) {
   );
 }
 
+function conditioningMovement(movementId, target) {
+  const movement = v2.getMovement(movementId);
+  return {
+    movementId,
+    movementName: movement.name,
+    movementFamilyId: movement.familyId,
+    reps: target.reps ?? null,
+    calories: target.calories ?? null,
+    distanceMeters: target.distanceMeters ?? null,
+    durationSeconds: target.durationSeconds ?? null,
+    loadKg: null,
+    percentageReference: null,
+    equipment: movement.equipment,
+  };
+}
+
+function underdosedConditioning(overrides = {}) {
+  return {
+    format: "for_time",
+    rounds: 4,
+    durationMinutes: null,
+    workSeconds: null,
+    restSeconds: null,
+    timeCapMinutes: 11,
+    movements: [
+      conditioningMovement("run", { distanceMeters: 160 }),
+      conditioningMovement("burpee", { reps: 6 }),
+      conditioningMovement("air_squat", { reps: 12 }),
+    ],
+    athleteProfile: { level: "intermediate" },
+    ...overrides,
+  };
+}
+
 test("feature flag enables loopback development without weakening production", () => {
   for (const hostname of ["localhost", "127.0.0.1", "::1", "[::1]"]) {
     assert.deepEqual(
@@ -110,6 +144,110 @@ test("feature flag enables loopback development without weakening production", (
       hostname: "renebrandenburg.github.io",
     }),
     { enabled: true, source: "supabase" },
+  );
+});
+
+test("conditioning estimator rejects the under-dosed 8-10 minute regression workout", () => {
+  const workout = underdosedConditioning();
+  const estimate = v2.estimateConditioningDuration(workout);
+  const validation = v2.validateConditioningStimulus(
+    workout,
+    { minMinutes: 8, maxMinutes: 10 },
+  );
+
+  assert.equal(estimate.confidence, "medium");
+  assert.ok(estimate.estimatedSeconds < 480 * 0.9);
+  assert.equal(validation.valid, false);
+  assert.ok(validation.deviationPercent < -10);
+  assert.match(validation.reason, /below the programmed target window/);
+});
+
+test("conditioning recalibration preserves the 8-10 minute intent and adjusts workload", () => {
+  const { athleteProfile, ...workload } = underdosedConditioning();
+  const prescription = {
+    id: "33333333-3333-4333-a333-333333333333",
+    sessionId: "44444444-4444-4444-a444-444444444444",
+    ...workload,
+    intervalSeconds: null,
+    executionMode: null,
+    stations: [],
+    intendedStimulus: "Continuous moderate-hard effort.",
+    targetDurationMin: 8,
+    targetDurationMax: 10,
+    targetRpe: 8,
+    scalingOptions: [],
+    estimatedDurationMinutes: 11,
+  };
+  const original = structuredClone(prescription);
+  const calibrated = v2.calibrateConditioningPrescription(
+    prescription,
+    athleteProfile,
+  );
+
+  assert.deepEqual(prescription, original);
+  assert.equal(calibrated.targetDurationMin, 8);
+  assert.equal(calibrated.targetDurationMax, 10);
+  assert.equal(calibrated.timeCapMinutes, 11);
+  assert.equal(calibrated.stimulusValidation.valid, true);
+  assert.ok(calibrated.recalibrationAttempts > 0);
+  assert.ok(
+    calibrated.recalibrationAttempts <= v2.MAX_RECALIBRATION_ATTEMPTS,
+  );
+  assert.notDeepEqual(calibrated.movements, original.movements);
+});
+
+test("conditioning stimulus tolerance handles target-window boundaries", () => {
+  const validate = (seconds) =>
+    v2.validateEstimatedConditioningDuration(seconds, {
+      minMinutes: 8,
+      maxMinutes: 10,
+    }).valid;
+
+  assert.equal(validate(7 * 60), false);
+  assert.equal(validate(7 * 60 + 40), true);
+  assert.equal(validate(8 * 60 + 20), true);
+  assert.equal(validate(9 * 60 + 30), true);
+  assert.equal(validate(10 * 60 + 40), true);
+  assert.equal(validate(12 * 60), false);
+});
+
+test("conditioning duration invariants are monotonic and athlete-aware", () => {
+  const base = underdosedConditioning();
+  const estimate = (overrides) =>
+    v2.estimateConditioningDuration({ ...base, ...overrides }).estimatedSeconds;
+  const moreReps = base.movements.map((movement) => ({
+    ...movement,
+    reps: movement.reps == null ? null : movement.reps + 2,
+  }));
+  const moreDistance = base.movements.map((movement) => ({
+    ...movement,
+    distanceMeters:
+      movement.distanceMeters == null ? null : movement.distanceMeters + 40,
+  }));
+
+  assert.ok(estimate({ rounds: 5 }) > estimate({ rounds: 4 }));
+  assert.ok(estimate({ movements: moreReps }) >= estimate({}));
+  assert.ok(estimate({ movements: moreDistance }) > estimate({}));
+  assert.ok(
+    estimate({ athleteProfile: { level: "advanced" } }) <
+      estimate({ athleteProfile: { level: "intermediate" } }),
+  );
+  assert.equal(
+    estimate({
+      athleteProfile: {
+        level: "intermediate",
+        personalMultiplier: { value: 0.8, sampleCount: 4 },
+      },
+    }),
+    estimate({ athleteProfile: { level: "intermediate" } }),
+  );
+  assert.ok(
+    estimate({
+      athleteProfile: {
+        level: "intermediate",
+        personalMultiplier: { value: 0.8, sampleCount: 5 },
+      },
+    }) < estimate({ athleteProfile: { level: "intermediate" } }),
   );
 });
 
@@ -147,6 +285,29 @@ test("generates a connected six-week mixed-strength block", () => {
       ),
     ),
   );
+  assert.ok(
+    generatedSessions.every(
+      (session) =>
+        session.conditioning?.durationEstimate &&
+        (!session.conditioning.stimulusValidation ||
+          session.conditioning.stimulusValidation.valid),
+    ),
+  );
+  assert.ok(
+    generatedSessions.every((session) => {
+      const target = session.conditioning?.intent?.durationTarget;
+      const cap = session.conditioning?.timeCapMinutes;
+      return !target || cap == null || cap >= target.maxMinutes;
+    }),
+  );
+  const regressionSession = generatedSessions.find(
+    (session) => session.weekNumber === 3 && session.sessionNumber === 1,
+  );
+  assert.deepEqual(regressionSession.conditioning.intent.durationTarget, {
+    minMinutes: 8,
+    maxMinutes: 10,
+  });
+  assert.equal(regressionSession.conditioning.timeCapMinutes, 11);
 });
 
 test("calendar adapter schedules all twelve V2 sessions on the athlete's two preferred days", () => {
@@ -870,6 +1031,37 @@ test("successful completion advances tracks and rematerializes only the next lin
   assert.deepEqual(unchangedLater.exercises, laterWeekThree.exercises);
 });
 
+test("completion stores estimated-versus-actual conditioning performance", () => {
+  const program = generate();
+  const session = sessions(program).find(
+    (candidate) => candidate.weekNumber === 3 && candidate.sessionNumber === 1,
+  );
+  const completed = v2.applySessionCompletion({
+    program,
+    sessionId: session.id,
+    expectedRevision: session.revision,
+    feedback: successfulFeedback(session, {
+      conditioningDurationSecondsActual: 405,
+    }),
+  });
+  const stored = v2.findSession(completed.program, session.id).feedback;
+
+  assert.equal(stored.conditioningPerformance.prescribedTargetMin, 480);
+  assert.equal(stored.conditioningPerformance.prescribedTargetMax, 600);
+  assert.equal(
+    stored.conditioningPerformance.estimatedDuration,
+    session.conditioning.durationEstimate.estimatedSeconds,
+  );
+  assert.equal(stored.conditioningPerformance.actualDuration, 405);
+  assert.equal(stored.conditioningPerformance.athleteRpe, 8);
+  assert.equal(
+    stored.conditioningPerformance.performanceRatio,
+    Math.round(
+      (405 / session.conditioning.durationEstimate.estimatedSeconds) * 1000,
+    ) / 1000,
+  );
+});
+
 test("pain pauses affected tracks and blocks their next session", () => {
   const program = generate();
   const first = sessions(program)[0];
@@ -933,6 +1125,14 @@ test("structured generation logs include programming decisions but exclude athle
   assert.ok(record.selectedMovementFamilies.includes("clean_and_jerk"));
   assert.ok(record.movementExposures.snatch > 0);
   assert.equal(record.generatedEmphasis !== null, true);
+  assert.equal(record.conditioningStimulusDiagnostics.length, 12);
+  const stimulus = record.conditioningStimulusDiagnostics.find(
+    (item) => item.targetRange?.min === 480,
+  );
+  assert.equal(stimulus.targetRange.max, 600);
+  assert.equal(stimulus.timeCap, 11);
+  assert.equal(stimulus.validationResult, "PASS");
+  assert.equal(stimulus.confidence, "medium");
   assert.deepEqual(record.identityProblems, []);
   assert.equal(record.regenerationScope, "conditioning");
   assert.equal(JSON.stringify(record).includes("notes"), false);
