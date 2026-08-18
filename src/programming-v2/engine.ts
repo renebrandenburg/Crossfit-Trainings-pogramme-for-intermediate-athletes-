@@ -1548,30 +1548,6 @@ function adjustSessionToDuration(session: TrainingSession): TrainingSession {
   });
   if (next.estimatedDurationMinutes <= 65) return next;
 
-  if (
-    next.conditioning &&
-    next.conditioning.durationMinutes != null &&
-    next.conditioning.targetDurationMin == null &&
-    next.conditioning.targetDurationMax == null &&
-    next.conditioning.estimatedDurationMinutes > 8
-  ) {
-    const reducedMinutes = Math.max(
-      8,
-      next.conditioning.estimatedDurationMinutes - 2,
-    );
-    next = recalculateSession({
-      ...next,
-      conditioning: calibrateConditioningPrescription(
-        {
-          ...next.conditioning,
-          durationMinutes: reducedMinutes,
-        },
-        { level: next.conditioning.athleteLevel ?? "intermediate" },
-      ),
-    });
-  }
-  if (next.estimatedDurationMinutes <= 65) return next;
-
   next = recalculateSession({
     ...next,
     exercises: next.exercises.map((exercise) =>
