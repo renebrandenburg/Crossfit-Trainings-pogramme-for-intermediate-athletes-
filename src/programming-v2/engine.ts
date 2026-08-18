@@ -59,6 +59,7 @@ import {
   assertValidGeneratedProgram,
   validateGeneratedProgram,
 } from "./validation";
+import { calibrateConditioningPrescription } from "./conditioning";
 
 function hash32(value: string, seed = 2166136261): number {
   let hash = seed >>> 0;
@@ -692,7 +693,7 @@ function createOpenPreparationConditioning(
       format: simulation ? "for_time" : "amrap",
       durationMinutes: simulation ? null : week.day1ConditioningMinutes,
       rounds: simulation ? 5 : null,
-      timeCapMinutes: simulation ? (week.weekNumber === 5 ? 18 : 14) : null,
+      timeCapMinutes: simulation ? 18 : null,
       workSeconds: null,
       restSeconds: null,
       intendedStimulus: simulation
@@ -903,7 +904,11 @@ function createMastersOpenConditioning(
     timeCapMinutes:
       base.timeCapMinutes == null
         ? null
-        : Math.max(10, Math.round(base.timeCapMinutes * 0.8)),
+        : Math.max(
+            base.targetDurationMax ?? 0,
+            10,
+            Math.round(base.timeCapMinutes * 0.8),
+          ),
     workSeconds:
       base.workSeconds == null ? null : Math.min(90, base.workSeconds),
     targetRpe: Math.min(7, base.targetRpe ?? 6),
@@ -957,7 +962,7 @@ function measurableConditioningScaling(): ScalingOption[] {
   ];
 }
 
-function createConditioning(
+function createConditioningDraft(
   input: GenerateProgramInput,
   sessionId: string,
   week: MixedStrengthWeekTemplate,
@@ -1189,6 +1194,44 @@ function createConditioning(
     ],
     estimatedDurationMinutes: week.day2ConditioningMinutes,
   };
+}
+
+function createConditioning(
+  input: GenerateProgramInput,
+  sessionId: string,
+  week: MixedStrengthWeekTemplate,
+  sessionNumber: 1 | 2,
+  variantSeed: string,
+  programmeType = "mixed_strength_6w",
+): ConditioningPrescription {
+  for (
+    let generationAttempt = 0;
+    generationAttempt < 2;
+    generationAttempt += 1
+  ) {
+    const seed =
+      generationAttempt === 0 ? variantSeed : `${variantSeed}:regenerated`;
+    const conditioning = calibrateConditioningPrescription(
+      createConditioningDraft(
+        input,
+        sessionId,
+        week,
+        sessionNumber,
+        seed,
+        programmeType,
+      ),
+      { level: input.athleteLevel },
+    );
+    if (
+      !conditioning.stimulusValidation ||
+      conditioning.stimulusValidation.valid
+    ) {
+      return conditioning;
+    }
+  }
+  throw new Error(
+    `Unable to calibrate conditioning for week ${week.weekNumber}, session ${sessionNumber}.`,
+  );
 }
 
 function warmupExercise(
@@ -1503,21 +1546,26 @@ function adjustSessionToDuration(session: TrainingSession): TrainingSession {
   });
   if (next.estimatedDurationMinutes <= 65) return next;
 
-  if (next.conditioning && next.conditioning.estimatedDurationMinutes > 8) {
+  if (
+    next.conditioning &&
+    next.conditioning.durationMinutes != null &&
+    next.conditioning.targetDurationMin == null &&
+    next.conditioning.targetDurationMax == null &&
+    next.conditioning.estimatedDurationMinutes > 8
+  ) {
     const reducedMinutes = Math.max(
       8,
       next.conditioning.estimatedDurationMinutes - 2,
     );
     next = recalculateSession({
       ...next,
-      conditioning: {
-        ...next.conditioning,
-        durationMinutes:
-          next.conditioning.durationMinutes == null ? null : reducedMinutes,
-        timeCapMinutes:
-          next.conditioning.timeCapMinutes == null ? null : reducedMinutes,
-        estimatedDurationMinutes: reducedMinutes,
-      },
+      conditioning: calibrateConditioningPrescription(
+        {
+          ...next.conditioning,
+          durationMinutes: reducedMinutes,
+        },
+        { level: next.conditioning.athleteLevel ?? "intermediate" },
+      ),
     });
   }
   if (next.estimatedDurationMinutes <= 65) return next;

@@ -332,15 +332,23 @@ export function validateConditioningStimulus(
 function conditioningIntent(
   conditioning: ConditioningPrescription,
 ): ConditioningIntent {
+  const fixedDurationTarget =
+    conditioning.format !== "for_time" && conditioning.durationMinutes != null
+      ? {
+          minMinutes: conditioning.durationMinutes,
+          maxMinutes: conditioning.durationMinutes,
+        }
+      : null;
   return {
     durationTarget:
-      conditioning.targetDurationMin != null &&
+      fixedDurationTarget ??
+      (conditioning.targetDurationMin != null &&
       conditioning.targetDurationMax != null
         ? {
             minMinutes: conditioning.targetDurationMin,
             maxMinutes: conditioning.targetDurationMax,
           }
-        : null,
+        : null),
     timeCapMinutes: conditioning.timeCapMinutes,
     intensity: {
       targetRpe: conditioning.targetRpe,
@@ -374,7 +382,12 @@ function adjustWorkload(
   increase: boolean,
 ): ConditioningPrescription {
   const factor = increase ? 1.25 : 0.8;
-  if (attempt === 0 && conditioning.movements.some((item) => item.distanceMeters)) {
+  if (
+    attempt === 0 &&
+    conditioning.movements.some(
+      (item) => item.distanceMeters != null || item.calories != null,
+    )
+  ) {
     return {
       ...conditioning,
       movements: conditioning.movements.map((movement) => ({
@@ -386,6 +399,10 @@ function adjustWorkload(
                 50,
                 Math.round((movement.distanceMeters * factor) / 10) * 10,
               ),
+        calories:
+          movement.calories == null
+            ? null
+            : Math.max(1, Math.round(movement.calories * factor)),
       })),
     };
   }
@@ -398,10 +415,6 @@ function adjustWorkload(
           movement.reps == null
             ? null
             : Math.max(1, Math.round(movement.reps * factor)),
-        calories:
-          movement.calories == null
-            ? null
-            : Math.max(1, Math.round(movement.calories * factor)),
       })),
     };
   }

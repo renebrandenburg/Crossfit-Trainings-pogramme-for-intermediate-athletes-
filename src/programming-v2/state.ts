@@ -24,6 +24,7 @@ import {
   proposeMaxUpdate,
 } from "./max-testing";
 import { assertValidProgram, validateProgram } from "./validation";
+import { calibrateConditioningPrescription } from "./conditioning";
 
 function cloneProgram(program: ProgramV2): ProgramV2 {
   return structuredClone(program);
@@ -157,6 +158,7 @@ function rematerializeNextSection(
 function regenerateConditioning(
   session: TrainingSession,
   seed: string,
+  athleteLevel: ProgramV2["generationRequest"]["athleteLevel"],
 ): TrainingSession {
   if (!session.conditioning) return session;
   const conditioning = session.conditioning;
@@ -185,11 +187,14 @@ function regenerateConditioning(
   return internalEngine.recalculateSession({
     ...session,
     revision: session.revision + 1,
-    conditioning: {
-      ...conditioning,
-      id: stableUuid(session.id, "conditioning", seed),
-      movements,
-    },
+    conditioning: calibrateConditioningPrescription(
+      {
+        ...conditioning,
+        id: stableUuid(session.id, "conditioning", seed),
+        movements,
+      },
+      { level: athleteLevel },
+    ),
   });
 }
 
@@ -250,6 +255,7 @@ export function regenerateSessionSection(
     replacement = regenerateConditioning(
       replacement,
       `${input.seed}:conditioning`,
+      input.program.generationRequest.athleteLevel,
     );
     changedSectionIds.push(`${original.id}-conditioning`);
   }

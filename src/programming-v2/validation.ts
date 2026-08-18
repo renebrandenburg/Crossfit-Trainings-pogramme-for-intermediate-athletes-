@@ -592,10 +592,14 @@ export function validateConditioningPrescription(
   if (conditioning.intent) {
     const target = conditioning.intent.durationTarget;
     if (
-      target &&
-      (target.minMinutes !== conditioning.targetDurationMin ||
-        target.maxMinutes !== conditioning.targetDurationMax ||
-        conditioning.intent.timeCapMinutes !== conditioning.timeCapMinutes)
+      conditioning.intent.timeCapMinutes !== conditioning.timeCapMinutes ||
+      (target &&
+        (conditioning.format === "for_time" ||
+        conditioning.durationMinutes == null
+          ? target.minMinutes !== conditioning.targetDurationMin ||
+            target.maxMinutes !== conditioning.targetDurationMax
+          : target.minMinutes !== conditioning.durationMinutes ||
+            target.maxMinutes !== conditioning.durationMinutes))
     ) {
       issues.push(
         issue(
