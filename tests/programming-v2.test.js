@@ -150,10 +150,10 @@ test("feature flag enables loopback development without weakening production", (
 test("conditioning estimator rejects the under-dosed 8-10 minute regression workout", () => {
   const workout = underdosedConditioning();
   const estimate = v2.estimateConditioningDuration(workout);
-  const validation = v2.validateConditioningStimulus(
-    workout,
-    { minMinutes: 8, maxMinutes: 10 },
-  );
+  const validation = v2.validateConditioningStimulus(workout, {
+    minMinutes: 8,
+    maxMinutes: 10,
+  });
 
   assert.equal(estimate.confidence, "medium");
   assert.ok(estimate.estimatedSeconds < 480 * 0.9);
@@ -190,9 +190,7 @@ test("conditioning recalibration preserves the 8-10 minute intent and adjusts wo
   assert.equal(calibrated.timeCapMinutes, 11);
   assert.equal(calibrated.stimulusValidation.valid, true);
   assert.ok(calibrated.recalibrationAttempts > 0);
-  assert.ok(
-    calibrated.recalibrationAttempts <= v2.MAX_RECALIBRATION_ATTEMPTS,
-  );
+  assert.ok(calibrated.recalibrationAttempts <= v2.MAX_RECALIBRATION_ATTEMPTS);
   assert.notDeepEqual(calibrated.movements, original.movements);
 });
 

@@ -220,12 +220,15 @@ export function estimateConditioningDuration(
   );
   const globalMultiplier = LEVEL_MULTIPLIER[input.athleteProfile.level];
   const transitionSeconds = input.movements.reduce((total, movement) => {
-    const profile = MOVEMENT_PACE_PROFILES[movement.movementId] ?? fallbackPace(movement);
+    const profile =
+      MOVEMENT_PACE_PROFILES[movement.movementId] ?? fallbackPace(movement);
     return total + profile.transitionSeconds * globalMultiplier;
   }, 0);
   const expectedBase =
-    movementEstimates.reduce((total, estimate) => total + estimate.expected, 0) +
-    transitionSeconds;
+    movementEstimates.reduce(
+      (total, estimate) => total + estimate.expected,
+      0,
+    ) + transitionSeconds;
   const minimumBase =
     movementEstimates.reduce((total, estimate) => total + estimate.minimum, 0) +
     transitionSeconds * 0.8;
@@ -238,8 +241,7 @@ export function estimateConditioningDuration(
   );
   const fatigueFactor = weightedWork
     ? movementEstimates.reduce(
-        (total, estimate) =>
-          total + estimate.fatigueFactor * estimate.expected,
+        (total, estimate) => total + estimate.fatigueFactor * estimate.expected,
         0,
       ) / weightedWork
     : 0.03;
@@ -473,11 +475,7 @@ export function calibrateConditioningPrescription(
       break;
     }
     current = attachCalibration(
-      adjustWorkload(
-        current,
-        attempt,
-        validation.deviationPercent < 0,
-      ),
+      adjustWorkload(current, attempt, validation.deviationPercent < 0),
       athleteProfile,
       intent,
       attempt + 1,
@@ -493,7 +491,9 @@ export function createConditioningPerformance(
   athleteRpe: number | null,
 ): ConditioningPerformance {
   if (!Number.isFinite(actualDurationSeconds) || actualDurationSeconds <= 0) {
-    throw new Error("Conditioning duration must be a positive number of seconds.");
+    throw new Error(
+      "Conditioning duration must be a positive number of seconds.",
+    );
   }
   const estimatedDuration =
     conditioning.durationEstimate?.estimatedSeconds ??

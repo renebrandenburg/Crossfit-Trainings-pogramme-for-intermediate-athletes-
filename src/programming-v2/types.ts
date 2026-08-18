@@ -443,16 +443,10 @@ export interface ConditioningMovement {
 }
 
 export type ConditioningAthleteLevel =
-  | "beginner"
-  | "intermediate"
-  | "advanced"
-  | "rx";
+  "beginner" | "intermediate" | "advanced" | "rx";
 
 export type ConditioningDomain =
-  | "engine"
-  | "bodyweight"
-  | "gymnastics"
-  | "strength";
+  "engine" | "bodyweight" | "gymnastics" | "strength";
 
 export interface MovementPaceProfile {
   movementId: string;
