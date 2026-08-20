@@ -135,7 +135,9 @@ test("@critical V2 generates, renders, regenerates, completes, and reloads a con
 
   await app.navigate("Plan");
   await expect(
-    page.locator("#calendarView").getByTestId("v2-session-card").first(),
+    page
+      .locator("#calendarView .calendar-event.status-completed")
+      .getByTestId("v2-session-card"),
   ).toContainText("Completed — progression feedback has been applied.");
 
   await page.reload();

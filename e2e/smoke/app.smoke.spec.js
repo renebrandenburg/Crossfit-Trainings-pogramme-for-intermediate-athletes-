@@ -39,6 +39,61 @@ test("@smoke mobile Today keeps the decision and primary action in view", async 
   expect(bounds.y + bounds.height).toBeLessThanOrEqual(844);
 });
 
+test("@smoke mobile Calendar exposes the relevant workout before programme details", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const app = new AppShell(page);
+  await app.open();
+  await app.navigate("Calendar");
+
+  const calendar = page.locator("#calendarView");
+  const weekNavigation = calendar.getByRole("navigation", {
+    name: "Calendar week navigation",
+  });
+  const workout = calendar.locator('[data-calendar-priority="true"]');
+  const workoutTitle = workout.getByRole("heading").first();
+  const programmeDetails = calendar.locator(".calendar-programme-details");
+
+  await expect(
+    calendar.getByRole("heading", { name: "Calendar" }),
+  ).toBeVisible();
+  await expect(weekNavigation).toBeVisible();
+  await expect(workoutTitle).toBeVisible();
+  await expect(programmeDetails).not.toHaveAttribute("open", "");
+  await expect(
+    page.getByRole("heading", { name: "CrossFit Training Programme" }),
+  ).toHaveCount(0);
+
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 393, height: 852 },
+    { width: 430, height: 932 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const workoutBounds = await workoutTitle.boundingBox();
+    const detailsBounds = await programmeDetails.boundingBox();
+    expect(workoutBounds).not.toBeNull();
+    expect(detailsBounds).not.toBeNull();
+    expect(workoutBounds.y + workoutBounds.height).toBeLessThan(
+      viewport.height,
+    );
+    expect(detailsBounds.y).toBeGreaterThan(workoutBounds.y);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth - window.innerWidth,
+      ),
+    ).toBeLessThanOrEqual(0);
+  }
+
+  await page.evaluate(() => window.scrollTo(0, 600));
+  const stickyBounds = await weekNavigation.boundingBox();
+  expect(stickyBounds).not.toBeNull();
+  expect(stickyBounds.y).toBeGreaterThanOrEqual(0);
+  expect(stickyBounds.y).toBeLessThan(80);
+});
+
 test("@critical Today to Log to Progress remains local-first while offline", async ({
   page,
   context,

@@ -892,7 +892,7 @@
   }
 
   function todayInputValue() {
-    return new Date().toISOString().slice(0, 10);
+    return coachDateValue(new Date());
   }
 
   function normalizeThemePreference(value) {
@@ -2958,28 +2958,31 @@
           "data-sync-state": syncStatus.state,
           "data-sync-message": syncStatus.message,
         },
-        h(
-          "header",
-          { className: "topbar" },
-          h(
-            "div",
-            null,
-            h("p", { className: "eyebrow" }, "Intermediate CrossFit"),
-            h("h1", null, "CrossFit Training Programme"),
-          ),
-          h(
-            "div",
-            { className: "topbar-actions" },
-            h(
-              "div",
-              {
-                className: `status-pill${localSaveError ? " status-error" : ""}`,
-                title: localSaveError || "Changes are saved on this device.",
-              },
-              localSaveError ? "Local save failed" : "Saved locally",
-            ),
-          ),
-        ),
+        activeView !== "calendarView"
+          ? h(
+              "header",
+              { className: "topbar" },
+              h(
+                "div",
+                null,
+                h("p", { className: "eyebrow" }, "Intermediate CrossFit"),
+                h("h1", null, "CrossFit Training Programme"),
+              ),
+              h(
+                "div",
+                { className: "topbar-actions" },
+                h(
+                  "div",
+                  {
+                    className: `status-pill${localSaveError ? " status-error" : ""}`,
+                    title:
+                      localSaveError || "Changes are saved on this device.",
+                  },
+                  localSaveError ? "Local save failed" : "Saved locally",
+                ),
+              ),
+            )
+          : null,
         h(
           "main",
           null,
@@ -3259,6 +3262,7 @@
             ? h(MemoProgramView, {
                 appState: viewState,
                 activeView,
+                storageStatus: localSaveError || "Saved locally",
                 onWeekChange: setSelectedWeek,
                 onLogSession: jumpToLog,
                 onTimerFinish: finishTimerToLog,
@@ -3769,6 +3773,112 @@
           onChange(/** @type {HTMLSelectElement} */ (event.target).value),
       },
       weekOptions(maxWeeks),
+    );
+  }
+
+  function formatCalendarDateRange(start, end) {
+    const formatter = new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+    return `${formatter.format(new Date(`${start}T12:00:00`))} – ${formatter.format(new Date(`${end}T12:00:00`))}`;
+  }
+
+  function prioritizeCalendarEvents(events, today = todayInputValue()) {
+    const workouts = events.filter((event) => event.kind !== "rest");
+    const priority =
+      workouts.find((event) => event.date === today) ||
+      workouts.find(
+        (event) =>
+          event.date > today &&
+          event.status !== "completed" &&
+          event.status !== "skipped",
+      ) ||
+      workouts.filter((event) => event.date < today).at(-1) ||
+      events[0] ||
+      null;
+    const priorityLabel = !priority
+      ? ""
+      : priority.date === today
+        ? "Today"
+        : priority.date > today
+          ? "Next session"
+          : "Most recent";
+    return {
+      priorityId: priority?.id || null,
+      priorityLabel,
+      events: priority
+        ? [priority, ...events.filter((event) => event.id !== priority.id)]
+        : events,
+    };
+  }
+
+  function calendarStatusLabel(event) {
+    if (event.status === "completed") return "✓ Completed";
+    if (event.status === "skipped") return "Skipped";
+    return event.date >= todayInputValue() ? "Upcoming" : "Planned";
+  }
+
+  function WeekNavigator({
+    value,
+    availableWeeks,
+    weekStart,
+    weekEnd,
+    onChange,
+  }) {
+    const weeks = availableWeeks.length ? availableWeeks : [1];
+    const index = Math.max(0, weeks.indexOf(Number(value)));
+    const previousWeek = weeks[index - 1];
+    const nextWeek = weeks[index + 1];
+    return h(
+      "nav",
+      {
+        className: "calendar-week-nav",
+        "aria-label": "Calendar week navigation",
+      },
+      h(
+        "button",
+        {
+          className: "ghost-button calendar-week-button",
+          type: "button",
+          "aria-label": "Previous week",
+          disabled: previousWeek === undefined,
+          onClick: () => onChange(previousWeek),
+        },
+        "‹",
+      ),
+      h(
+        "div",
+        { className: "calendar-week-copy" },
+        h(
+          "div",
+          { className: "calendar-week-picker" },
+          h(WeekSelect, {
+            id: "programWeek",
+            label: "Programme week",
+            value,
+            onChange,
+            maxWeeks: weeks.at(-1),
+          }),
+          h("span", null, `of ${weeks.at(-1)}`),
+        ),
+        h(
+          "p",
+          { className: "calendar-week-range" },
+          formatCalendarDateRange(weekStart, weekEnd),
+        ),
+      ),
+      h(
+        "button",
+        {
+          className: "ghost-button calendar-week-button",
+          type: "button",
+          "aria-label": "Next week",
+          disabled: nextWeek === undefined,
+          onClick: () => onChange(nextWeek),
+        },
+        "›",
+      ),
     );
   }
 
@@ -5616,6 +5726,7 @@
   function ProgramView({
     appState,
     activeView,
+    storageStatus,
     onWeekChange,
     onLogSession,
     onTimerFinish,
@@ -5658,6 +5769,12 @@
         selectedSessionIds.has(event.sessionId) ||
         (event.date >= weekStart && event.date <= weekEnd),
     );
+    const presentedWeek = prioritizeCalendarEvents(weekEvents);
+    const programmeName = activePlan
+      ? isV2
+        ? activePlan.trainingBlocks?.[0]?.name || activePlan.name
+        : activePlan.title || activePlan.name
+      : week?.title || "Eight-week training cycle";
     const toStoredEvent = (event, overrides = {}) => ({
       ...event,
       ...overrides,
@@ -5709,81 +5826,32 @@
         "aria-labelledby": "calendarTitle",
       },
       h(
-        "div",
-        { className: "section-heading" },
-        h(
-          "div",
-          null,
-          h(
-            "p",
-            { className: "eyebrow" },
-            isV2
-              ? "Active periodized V2 programme"
-              : activePlan
-                ? "Active saved programme"
-                : "Dated eight-week cycle",
-          ),
-          h("h2", { id: "calendarTitle" }, "Calendar"),
-        ),
-        h(WeekSelect, {
-          id: "programWeek",
-          label: "Programme week",
-          value: appState.selectedWeek,
-          onChange: onWeekChange,
-          maxWeeks: programming.maxWeeks,
-        }),
+        "header",
+        { className: "calendar-header" },
+        h("h2", { id: "calendarTitle" }, "Calendar"),
       ),
-      h(
-        "section",
-        { className: "panel calendar-controls", "aria-label": "Cycle dates" },
-        h(
-          "label",
-          null,
-          "Cycle starts",
-          h("input", {
-            id: "cycleStartDate",
-            type: "date",
-            value: appState.cycleStartDate,
-            onChange: (event) => onCycleStartChange(event.target.value),
-          }),
-        ),
-        activePlan
-          ? h(
-              "div",
-              null,
-              h(
-                "h3",
-                null,
-                isV2
-                  ? activePlan.trainingBlocks?.[0]?.name ||
-                      "Six-week mixed-strength block"
-                  : activePlan.title || activePlan.name,
-              ),
-              h(
-                "p",
-                { className: "muted-copy" },
-                `${selectedSessions.length} progression session${selectedSessions.length === 1 ? "" : "s"} this week.`,
-              ),
-            )
-          : h(
-              "p",
-              { className: "muted-copy" },
-              `${week?.title || `Week ${appState.selectedWeek}`}. ${week?.note || ""}`,
-            ),
-      ),
+      h(WeekNavigator, {
+        value: appState.selectedWeek,
+        availableWeeks: programming.availableWeeks,
+        weekStart,
+        weekEnd,
+        onChange: onWeekChange,
+      }),
       h(
         "div",
         { className: "calendar-list", id: "calendarList" },
-        weekEvents.length
-          ? weekEvents.map((event) => {
+        presentedWeek.events.length
+          ? presentedWeek.events.map((event) => {
               const session = programmeSessions.find(
                 (item) => item.id === event.sessionId,
               );
               const locked = event.status === "completed";
+              const isPriority = event.id === presentedWeek.priorityId;
               return h(
                 "article",
                 {
-                  className: `panel calendar-event event-${event.kind} status-${event.status}`,
+                  className: `panel calendar-event event-${event.kind} status-${event.status}${isPriority ? " is-priority" : ""}`,
+                  "data-calendar-priority": isPriority ? "true" : undefined,
                   key: event.id,
                 },
                 h(
@@ -5795,11 +5863,15 @@
                     h(
                       "p",
                       { className: "eyebrow" },
-                      `${formatDate(event.date)} · ${event.kind.toUpperCase()}`,
+                      `${isPriority ? `${presentedWeek.priorityLabel} · ` : ""}${formatDate(event.date)} · ${event.kind.toUpperCase()}`,
                     ),
                     h("h3", null, event.title || "Training event"),
                   ),
-                  h("span", { className: "metric-pill" }, event.status),
+                  h(
+                    "span",
+                    { className: "metric-pill" },
+                    calendarStatusLabel(event),
+                  ),
                 ),
                 event.kind === "app" && session
                   ? h("p", { className: "muted-copy" }, session.focus)
@@ -5984,6 +6056,65 @@
               { className: "empty-state" },
               `No events are scheduled for week ${appState.selectedWeek}.`,
             ),
+      ),
+      h(
+        "details",
+        { className: "panel calendar-programme-details" },
+        h(
+          "summary",
+          null,
+          h(
+            "span",
+            { className: "calendar-programme-summary-title" },
+            "Programme details",
+          ),
+          h(
+            "span",
+            { className: "calendar-programme-summary-copy" },
+            `${programmeName} · Week ${appState.selectedWeek} of ${programming.maxWeeks}`,
+          ),
+        ),
+        h(
+          "div",
+          { className: "calendar-programme-details-content" },
+          h(
+            "dl",
+            null,
+            h(
+              "div",
+              null,
+              h("dt", null, "Started"),
+              h("dd", null, formatDate(appState.cycleStartDate)),
+            ),
+            h(
+              "div",
+              null,
+              h("dt", null, "This week"),
+              h(
+                "dd",
+                null,
+                `${selectedSessions.length} session${selectedSessions.length === 1 ? "" : "s"}`,
+              ),
+            ),
+            h(
+              "div",
+              null,
+              h("dt", null, "Storage"),
+              h("dd", null, storageStatus),
+            ),
+          ),
+          h(
+            "label",
+            null,
+            "Cycle start date",
+            h("input", {
+              id: "cycleStartDate",
+              type: "date",
+              value: appState.cycleStartDate,
+              onChange: (event) => onCycleStartChange(event.target.value),
+            }),
+          ),
+        ),
       ),
       h(
         "form",

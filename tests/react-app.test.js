@@ -685,7 +685,11 @@ async function assertPlanSessionAcrossViews(mounted, plan) {
 
   fireEvent.click(ui.getByRole("button", { name: "Calendar" }));
   const programView = view("calendarView");
-  assert.ok(programView.getByRole("heading", { name: plan.title }));
+  assert.ok(
+    programView.getByText(new RegExp(plan.title), {
+      selector: ".calendar-programme-summary-copy",
+    }),
+  );
   assert.equal(
     programView.getByLabelText("Programme week").value,
     String(session.week),
@@ -1571,6 +1575,172 @@ test("React schedules V2 on the athlete's two days and renders structured sessio
   }
 });
 
+test("Calendar prioritizes today's completed workout above collapsed programme details", (t) => {
+  t.mock.timers.enable({
+    apis: ["Date"],
+    now: new Date(2026, 7, 19, 12),
+  });
+  const storedState = canonicalPlanState({
+    logs: [
+      {
+        id: "today-completion",
+        date: "2026-08-19",
+        week: 1,
+        dayId: "wednesday-session",
+        dayTitle: "Wednesday priority session",
+        readiness: "green",
+        wodScore: "Complete",
+        createdAt: "2026-08-19T12:00:00.000Z",
+      },
+    ],
+  });
+  storedState.cycleStartDate = "2026-08-17";
+  storedState.plans[0].sessions = [
+    {
+      ...storedState.plans[0].sessions[0],
+      id: "monday-session",
+      title: "Monday earlier session",
+      preferredDay: "monday",
+    },
+    {
+      ...storedState.plans[0].sessions[0],
+      id: "wednesday-session",
+      title: "Wednesday priority session",
+      preferredDay: "wednesday",
+    },
+  ];
+  const mounted = mountApp({ storedState });
+
+  try {
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Calendar" }),
+    );
+    const calendar = document.getElementById("calendarView");
+    const priority = calendar.querySelector('[data-calendar-priority="true"]');
+    const details = calendar.querySelector(".calendar-programme-details");
+    const persistedBeforeDisclosure = mounted.readState();
+
+    assert.equal(
+      priority.querySelector("h3").textContent,
+      "Wednesday priority session",
+    );
+    assert.match(priority.textContent, /Today/);
+    assert.match(priority.textContent, /✓ Completed/);
+    assert.ok(
+      priority.compareDocumentPosition(details) &
+        mounted.dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    assert.equal(details.open, false);
+    assert.equal(
+      mounted.ui.queryByRole("heading", {
+        name: "CrossFit Training Programme",
+      }),
+      null,
+    );
+
+    mounted.fireEvent.click(details.querySelector("summary"));
+    assert.equal(details.open, true);
+    assert.equal(
+      mounted.view("calendarView").getByLabelText("Cycle start date").value,
+      "2026-08-17",
+    );
+    assert.deepEqual(mounted.readState(), persistedBeforeDisclosure);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("Calendar highlights the next workout and navigates programme week boundaries", async (t) => {
+  t.mock.timers.enable({
+    apis: ["Date"],
+    now: new Date(2026, 7, 19, 12),
+  });
+  const storedState = canonicalPlanState();
+  const baseSession = storedState.plans[0].sessions[0];
+  storedState.cycleStartDate = "2026-08-17";
+  storedState.plans[0].sessions = [
+    {
+      ...baseSession,
+      id: "week-1-monday",
+      title: "Week one earlier workout",
+      preferredDay: "monday",
+    },
+    {
+      ...baseSession,
+      id: "week-1-friday",
+      title: "Week one next workout",
+      preferredDay: "friday",
+    },
+    {
+      ...baseSession,
+      id: "week-2-session",
+      week: 2,
+      title: "Week two workout",
+      preferredDay: "tuesday",
+    },
+    {
+      ...baseSession,
+      id: "week-3-session",
+      week: 3,
+      title: "Week three workout",
+      preferredDay: "thursday",
+    },
+  ];
+  const mounted = mountApp({ storedState });
+
+  try {
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Calendar" }),
+    );
+    const calendar = mounted.view("calendarView");
+    const previous = calendar.getByRole("button", {
+      name: "Previous week",
+    });
+    const next = calendar.getByRole("button", {
+      name: "Next week",
+    });
+    const programmeBeforeNavigation = structuredClone(
+      mounted.readState().plans,
+    );
+
+    assert.equal(previous.disabled, true);
+    assert.match(
+      document.querySelector('[data-calendar-priority="true"]').textContent,
+      /Next session/,
+    );
+    assert.equal(
+      document.querySelector('[data-calendar-priority="true"] h3').textContent,
+      "Week one next workout",
+    );
+
+    mounted.fireEvent.click(next);
+    await mounted.waitFor(() =>
+      assert.equal(
+        document.querySelector('[data-calendar-priority="true"] h3')
+          .textContent,
+        "Week two workout",
+      ),
+    );
+    assert.equal(mounted.ui.getByLabelText("Programme week").value, "2");
+
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Programme week"), {
+      target: { value: "3" },
+    });
+    await mounted.waitFor(() => {
+      assert.equal(
+        document.querySelector('[data-calendar-priority="true"] h3')
+          .textContent,
+        "Week three workout",
+      );
+      assert.equal(next.disabled, true);
+      assert.equal(mounted.readState().selectedWeek, 3);
+    });
+    assert.deepEqual(mounted.readState().plans, programmeBeforeNavigation);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
 test("React can switch between the built-in V1 cycle and V2 without losing the generated block", async () => {
   const mounted = mountApp();
 
@@ -2337,11 +2507,7 @@ test("React Testing Library edits one canonical session across every consumer", 
     });
 
     fireEvent.click(ui.getByRole("button", { name: "Calendar" }));
-    assert.ok(
-      view("calendarView").getByRole("heading", {
-        name: "Renamed canonical programme",
-      }),
-    );
+    assert.ok(view("calendarView").getByText(/Renamed canonical programme/));
     assert.ok(
       view("calendarView").getByText(
         "For time: run, thrusters, and chest-to-bar",
@@ -2523,12 +2689,17 @@ test("REG-001 REG-002 React keeps programme and week selection canonical across 
     await mounted.waitFor(() => {
       assert.equal(mounted.ui.getByLabelText("Programme week").value, "2");
       assert.equal(
-        mounted.ui
-          .getByRole("heading", { name: "Calendar" })
-          .parentElement.parentElement.textContent.includes(
-            "Active periodized V2 programme",
-          ),
-        true,
+        mounted
+          .view("calendarView")
+          .queryByText("Active periodized V2 programme"),
+        null,
+      );
+      assert.equal(
+        mounted
+          .view("calendarView")
+          .getByText("Programme details")
+          .closest("details").open,
+        false,
       );
     });
 

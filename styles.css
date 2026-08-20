@@ -1271,20 +1271,89 @@ textarea:focus {
   margin-top: 12px;
 }
 
-.calendar-controls {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
-  gap: 12px;
-  align-items: end;
+.calendar-header {
+  margin: 12px 0 6px;
 }
 
-.calendar-controls p {
-  margin: 0 0 8px;
+.calendar-header h2 {
+  margin: 0;
+  font-size: clamp(1.5rem, 6vw, 2rem);
+  line-height: 1;
+}
+
+.calendar-week-nav {
+  position: sticky;
+  top: env(safe-area-inset-top);
+  z-index: 9;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--topbar-bg);
+  backdrop-filter: blur(16px);
+}
+
+.calendar-week-button {
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 1.45rem;
+}
+
+.calendar-week-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.calendar-week-button:focus-visible,
+.calendar-programme-details > summary:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.calendar-week-copy {
+  min-width: 0;
+  text-align: center;
+}
+
+.calendar-week-picker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-weight: 850;
+}
+
+.calendar-week-picker select {
+  width: auto;
+  min-width: 104px;
+  min-height: 44px;
+  padding: 8px 10px;
+  font-weight: 850;
+}
+
+.calendar-week-range {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 750;
 }
 
 .calendar-event {
   min-width: 0;
   border-left: 4px solid var(--accent-strong);
+}
+
+.calendar-event.is-priority {
+  border-left-width: 5px;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent) 9%, var(--surface)),
+    var(--surface)
+  );
 }
 
 .calendar-event.event-box {
@@ -1316,6 +1385,55 @@ textarea:focus {
   color: var(--success);
   font-size: 0.8rem;
   font-weight: 800;
+}
+
+.calendar-programme-details > summary {
+  cursor: pointer;
+}
+
+.calendar-programme-summary-title {
+  display: block;
+  font-weight: 900;
+}
+
+.calendar-programme-summary-copy {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.calendar-programme-details-content {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.calendar-programme-details dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.calendar-programme-details dl div {
+  min-width: 0;
+}
+
+.calendar-programme-details dt {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.calendar-programme-details dd {
+  margin: 3px 0 0;
+  font-weight: 800;
+  overflow-wrap: anywhere;
 }
 
 .structured-score {
@@ -1502,7 +1620,6 @@ textarea:focus {
   .sync-form,
   .today-checkin-grid,
   .structured-score-grid,
-  .calendar-controls,
   .calendar-event-actions {
     grid-template-columns: 1fr;
   }
