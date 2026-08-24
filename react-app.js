@@ -2069,6 +2069,7 @@
               Number(currentState.profile.benchmarks?.barMuscleUp) || 0,
             strictHspu:
               Number(currentState.profile.benchmarks?.strictHspu) || 0,
+            ringDips: Number(currentState.profile.benchmarks?.ringDips) || 0,
             handstandWalkMeters:
               Number(currentState.profile.benchmarks?.handstandWalk) || 0,
           },
@@ -5241,6 +5242,10 @@
                   Number(draft.benchmarks.strictHspu) >= 0
                     ? Number(draft.benchmarks.strictHspu)
                     : profile.benchmarks.strictHspu,
+                ringDips:
+                  Number(draft.benchmarks.ringDips) >= 0
+                    ? Number(draft.benchmarks.ringDips)
+                    : profile.benchmarks.ringDips,
                 handstandWalk:
                   Number(draft.benchmarks.handstandWalk) >= 0
                     ? Number(draft.benchmarks.handstandWalk)
@@ -5428,6 +5433,14 @@
           value: draft.benchmarks.strictHspu,
           min: "0",
           onChange: (value) => updateBenchmark("strictHspu", value),
+        }),
+        h(NumberInput, {
+          id: "ringDips",
+          name: "ringDips",
+          label: "Unbroken ring dips",
+          value: draft.benchmarks.ringDips,
+          min: "0",
+          onChange: (value) => updateBenchmark("ringDips", value),
         }),
         h(NumberInput, {
           id: "handstandWalk",
@@ -7917,6 +7930,15 @@
       )
         ? requestedTemplateId
         : "";
+    const [draftTemplateId, setDraftTemplateId] =
+      ReactRuntime.useState(selectedTemplateId);
+    ReactRuntime.useEffect(() => {
+      setDraftTemplateId(selectedTemplateId);
+    }, [selectedTemplateId]);
+    const selectedTemplate = selectableTemplates.find(
+      (template) => template.id === draftTemplateId,
+    );
+    const strictStrengthSelected = draftTemplateId === "strict_strength_8w";
     return h(
       "details",
       {
@@ -7931,13 +7953,22 @@
           onSubmit: (event) => {
             event.preventDefault();
             const data = new FormData(event.currentTarget);
+            const preferredDays = data.getAll("v2PreferredDay").map(String);
             onGenerate({
               preferences: {
-                preferredDays: data.getAll("v2PreferredDay").map(String),
-                frequency: Number(data.get("v2Frequency") || 2),
-                goal: String(data.get("v2Goal") || "mixed"),
-                blockType: String(data.get("v2BlockType") || "mixed_strength"),
-                templateId: String(data.get("v2TemplateId") || ""),
+                preferredDays: strictStrengthSelected
+                  ? preferredDays.slice(0, 2)
+                  : preferredDays,
+                frequency: strictStrengthSelected
+                  ? 2
+                  : Number(data.get("v2Frequency") || 2),
+                goal: strictStrengthSelected
+                  ? "strength"
+                  : String(data.get("v2Goal") || "mixed"),
+                blockType: strictStrengthSelected
+                  ? "mixed_strength"
+                  : String(data.get("v2BlockType") || "mixed_strength"),
+                templateId: draftTemplateId,
                 athleteLevel: String(
                   data.get("v2AthleteLevel") || "intermediate",
                 ),
@@ -7975,7 +8006,7 @@
           h(
             "legend",
             null,
-            `Preferred app days — select ${normalizedPreferences.frequency}`,
+            `Preferred app days — select ${strictStrengthSelected ? 2 : normalizedPreferences.frequency}`,
           ),
           DAY_OF_WEEK_OPTIONS.map((day) =>
             h(
@@ -7999,8 +8030,12 @@
           h(
             "select",
             {
+              key: strictStrengthSelected ? "strict" : "configurable",
               name: "v2Frequency",
-              defaultValue: String(normalizedPreferences.frequency),
+              defaultValue: String(
+                strictStrengthSelected ? 2 : normalizedPreferences.frequency,
+              ),
+              disabled: strictStrengthSelected,
             },
             h("option", { value: "2" }, "2 sessions"),
             h("option", { value: "3" }, "3 sessions"),
@@ -8091,7 +8126,8 @@
             "select",
             {
               name: "v2TemplateId",
-              defaultValue: selectedTemplateId,
+              value: draftTemplateId,
+              onChange: (event) => setDraftTemplateId(event.target.value),
               required: true,
             },
             h(
@@ -8108,6 +8144,29 @@
             ),
           ),
         ),
+        selectedTemplate
+          ? h(
+              "div",
+              { className: "v2-template-summary" },
+              selectedTemplate.description
+                ? h("p", null, selectedTemplate.description)
+                : null,
+              h(
+                "p",
+                { className: "muted-copy" },
+                `${selectedTemplate.durationWeeks} weeks · ${selectedTemplate.supportedFrequencies.join(" or ")} sessions/week${selectedTemplate.sessionDurationMinutes ? ` · ~${selectedTemplate.sessionDurationMinutes} min/session` : ""}`,
+              ),
+              selectedTemplate.focusTags?.length
+                ? h(
+                    "div",
+                    { className: "metric-row" },
+                    selectedTemplate.focusTags.map((tag) =>
+                      h("span", { className: "metric-pill", key: tag }, tag),
+                    ),
+                  )
+                : null,
+            )
+          : null,
         h(
           "label",
           null,

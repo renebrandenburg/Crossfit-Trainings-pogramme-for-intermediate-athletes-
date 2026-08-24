@@ -14,6 +14,7 @@ import {
   type TemplateProgressionStep,
 } from "./template";
 import {
+  buildStrictStrengthWeekTemplates,
   buildProfileWeekTemplates,
   createProgrammeGenerationSummary,
   createProgrammeProfile,
@@ -139,14 +140,56 @@ function fallbackRpe(intensityMin: number | null): [number, number] {
   return [8, 8];
 }
 
-function gymnasticsScaling(): ScalingOption[] {
+function gymnasticsScaling(
+  movementFamilyId: MovementFamilyId,
+  strictStrength = false,
+): ScalingOption[] {
+  if (!strictStrength) {
+    return [
+      {
+        level: "scaled",
+        movementId: "ring_row",
+        movementName: "Ring row",
+        prescriptionAdjustment:
+          "Replace strict pull-ups with 8–12 ring rows per round.",
+        measurableTarget:
+          "Finish every set with two technically sound repetitions in reserve.",
+      },
+    ];
+  }
+  if (movementFamilyId === "handstand") {
+    return [
+      {
+        level: "scaled",
+        movementId: "floor_pike_handstand_push_up",
+        movementName: "Floor pike handstand push-up",
+        prescriptionAdjustment:
+          "Use the same sets and reps with a floor pike variation.",
+        measurableTarget:
+          "Keep two technically sound repetitions in reserve in every set.",
+      },
+    ];
+  }
+  if (movementFamilyId === "horizontal_press") {
+    return [
+      {
+        level: "scaled",
+        movementId: "ring_support_hold",
+        movementName: "Ring support hold",
+        prescriptionAdjustment:
+          "Replace dip repetitions with a 20–30 second stable ring support hold.",
+        measurableTarget:
+          "Maintain locked elbows and controlled shoulders for the full hold.",
+      },
+    ];
+  }
   return [
     {
       level: "scaled",
-      movementId: "ring_row",
-      movementName: "Ring row",
+      movementId: "eccentric_pull_up",
+      movementName: "Eccentric pull-up",
       prescriptionAdjustment:
-        "Replace strict pull-ups with 8–12 ring rows per round.",
+        "Replace strict or weighted pull-ups with controlled 5-second eccentric repetitions.",
       measurableTarget:
         "Finish every set with two technically sound repetitions in reserve.",
     },
@@ -281,9 +324,14 @@ function createProgressionExercise(
                 "Keep ribs down and legs quiet.",
               ],
     scalingOptions:
-      movement.category === "gymnastics"
-        ? gymnasticsScaling()
-        : defaultScaling(movement.name),
+      programmeType === "strict_strength_8w" &&
+      ["strict_pull", "handstand", "horizontal_press"].includes(
+        movement.familyId,
+      )
+        ? gymnasticsScaling(movement.familyId, true)
+        : movement.category === "gymnastics"
+          ? gymnasticsScaling(movement.familyId)
+          : defaultScaling(movement.name),
     equipment: movement.equipment,
     warmupSetCount:
       templateStep.role === "primary"
@@ -451,6 +499,26 @@ function createAccessoryExercise(
     "side_plank",
     "dead_bug",
   ];
+  const strictStrengthDay1Ids = [
+    "band_face_pull",
+    "side_plank",
+    "band_face_pull",
+    "dead_bug",
+    "band_face_pull",
+    "side_plank",
+    "dead_bug",
+    "side_plank",
+  ];
+  const strictStrengthDay2Ids = [
+    "dead_bug",
+    "band_face_pull",
+    "side_plank",
+    "dead_bug",
+    "band_face_pull",
+    "side_plank",
+    "dead_bug",
+    "side_plank",
+  ];
   const olympicDay1Ids = [
     "side_plank",
     "snatch_pull",
@@ -472,17 +540,21 @@ function createAccessoryExercise(
     "dead_bug",
   ];
   const selectedIds =
-    programmeType === "gymnastics_capacity_6w"
-      ? gymnasticsIds
-      : programmeType === "strength_development_profile"
-        ? strengthIds
-        : programmeType === "olympic_lifting_6w"
-          ? sessionNumber === 1
-            ? olympicDay1Ids
-            : olympicDay2Ids
-          : sessionNumber === 1
-            ? defaultDay1Ids
-            : defaultDay2Ids;
+    programmeType === "strict_strength_8w"
+      ? sessionNumber === 1
+        ? strictStrengthDay1Ids
+        : strictStrengthDay2Ids
+      : programmeType === "gymnastics_capacity_6w"
+        ? gymnasticsIds
+        : programmeType === "strength_development_profile"
+          ? strengthIds
+          : programmeType === "olympic_lifting_6w"
+            ? sessionNumber === 1
+              ? olympicDay1Ids
+              : olympicDay2Ids
+            : sessionNumber === 1
+              ? defaultDay1Ids
+              : defaultDay2Ids;
   const preferredMovementId = selectedIds[weekNumber - 1] ?? "dead_bug";
   const movementId = movementAllowed(
     preferredMovementId,
@@ -523,7 +595,13 @@ function createAccessoryExercise(
     movementId: movement.id,
     movementName: movement.name,
     movementFamilyId: movement.familyId,
-    sets: isOlympicPull ? (weekNumber === 8 ? 2 : 3) : 2,
+    sets: isOlympicPull
+      ? weekNumber === 8
+        ? 2
+        : 3
+      : programmeType === "strict_strength_8w" && weekNumber >= 7
+        ? 1
+        : 2,
     reps: isCarry || isHold ? null : isOlympicPull ? 3 : 8,
     repRangeMin: isLoaded && !isCarry && !isOlympicPull ? 8 : null,
     repRangeMax: isLoaded && !isCarry && !isOlympicPull ? 10 : null,
@@ -964,6 +1042,75 @@ function measurableConditioningScaling(): ScalingOption[] {
   ];
 }
 
+function createStrictStrengthConditioning(
+  input: GenerateProgramInput,
+  sessionId: string,
+  week: MixedStrengthWeekTemplate,
+  sessionNumber: 1 | 2,
+  variantSeed: string,
+): ConditioningPrescription {
+  const candidates =
+    sessionNumber === 1
+      ? ["bike", "run", "row"]
+      : ["run", "bike", "row", "ski"];
+  const engineId =
+    candidates.find((movementId) =>
+      movementAllowed(
+        movementId,
+        "conditioning",
+        input.equipment,
+        input.restrictions,
+      ),
+    ) ?? "run";
+  const isMachine = engineId !== "run";
+  const engineTarget = isMachine ? { calories: 8 } : { distanceMeters: 160 };
+  const lowerBodyId = movementAllowed(
+    "box_step_up",
+    "conditioning",
+    input.equipment,
+    input.restrictions,
+  )
+    ? "box_step_up"
+    : "air_squat";
+  const durationMinutes =
+    sessionNumber === 1
+      ? week.day1ConditioningMinutes
+      : week.day2ConditioningMinutes;
+  return {
+    id: stableUuid(sessionId, "conditioning", "strict-strength", variantSeed),
+    sessionId,
+    format: week.weekNumber === 8 ? "zone_2" : "amrap",
+    durationMinutes,
+    rounds: null,
+    intervalSeconds: null,
+    executionMode: null,
+    stations: [],
+    timeCapMinutes: null,
+    workSeconds: null,
+    restSeconds: null,
+    intendedStimulus:
+      week.weekNumber === 8
+        ? "Easy conversational cyclical work at RPE 4–5 after the benchmark."
+        : "Continuous lower-body-dominant conditioning at RPE 6–7 without adding vertical pulling, pressing, or grip fatigue.",
+    targetDurationMin: null,
+    targetDurationMax: null,
+    targetRpe: week.weekNumber === 8 ? 5 : 7,
+    movements:
+      week.weekNumber === 8
+        ? [
+            conditioningMovement(engineId, {
+              durationSeconds: durationMinutes * 60,
+            }),
+          ]
+        : [
+            conditioningMovement(engineId, engineTarget),
+            conditioningMovement(lowerBodyId, { reps: 12 }),
+          ],
+    scalingOptions: measurableConditioningScaling(),
+    estimatedDurationMinutes: durationMinutes,
+  };
+}
+
 function createConditioningDraft(
   input: GenerateProgramInput,
   sessionId: string,
@@ -972,6 +1119,15 @@ function createConditioningDraft(
   variantSeed: string,
   programmeType = "mixed_strength_6w",
 ): ConditioningPrescription {
+  if (programmeType === "strict_strength_8w") {
+    return createStrictStrengthConditioning(
+      input,
+      sessionId,
+      week,
+      sessionNumber,
+      variantSeed,
+    );
+  }
   if (programmeType === "competition_preparation_6w") {
     return createCompetitionConditioning(
       input,
@@ -1268,45 +1424,56 @@ function createWarmup(
   const engineTarget =
     engineId === "run" ? { distanceMeters: 150 } : { durationSeconds: 45 };
   const candidateExercises =
-    programmeType === "gymnastics_capacity_6w"
+    programmeType === "strict_strength_8w"
       ? [
           warmupExercise(engineId, engineTarget),
           warmupExercise("scapular_pull_up", { reps: 6 }),
           warmupExercise("hollow_hold", { durationSeconds: 15 }),
-          warmupExercise("glute_bridge", { reps: 10 }),
-          warmupExercise("push_up", { reps: 6 }),
+          warmupExercise("pvc_pass_through", { reps: 8 }),
+          warmupExercise(
+            weekNumber % 2 === 0 ? "empty_bar_overhead_squat" : "glute_bridge",
+            { reps: weekNumber % 2 === 0 ? 5 : 10 },
+          ),
         ]
-      : programmeType === "endurance_capacity_6w"
+      : programmeType === "gymnastics_capacity_6w"
         ? [
             warmupExercise(engineId, engineTarget),
+            warmupExercise("scapular_pull_up", { reps: 6 }),
+            warmupExercise("hollow_hold", { durationSeconds: 15 }),
             warmupExercise("glute_bridge", { reps: 10 }),
-            warmupExercise("air_squat", { reps: 8 }),
-            warmupExercise("burpee", { reps: 4 }),
             warmupExercise("push_up", { reps: 6 }),
           ]
-        : programmeType === "strength_development_profile"
+        : programmeType === "endurance_capacity_6w"
           ? [
               warmupExercise(engineId, engineTarget),
               warmupExercise("glute_bridge", { reps: 10 }),
               warmupExercise("air_squat", { reps: 8 }),
-              warmupExercise("pvc_pass_through", { reps: 8 }),
-              warmupExercise("scapular_pull_up", { reps: 6 }),
+              warmupExercise("burpee", { reps: 4 }),
+              warmupExercise("push_up", { reps: 6 }),
             ]
-          : sessionNumber === 1
+          : programmeType === "strength_development_profile"
             ? [
                 warmupExercise(engineId, engineTarget),
+                warmupExercise("glute_bridge", { reps: 10 }),
                 warmupExercise("air_squat", { reps: 8 }),
-                warmupExercise("glute_bridge", { reps: 10 }),
                 warmupExercise("pvc_pass_through", { reps: 8 }),
-                warmupExercise("empty_bar_overhead_squat", { reps: 5 }),
-              ]
-            : [
-                warmupExercise(engineId, engineTarget),
-                warmupExercise("glute_bridge", { reps: 10 }),
                 warmupExercise("scapular_pull_up", { reps: 6 }),
-                warmupExercise("hollow_hold", { durationSeconds: 15 }),
-                warmupExercise("empty_bar_clean_and_jerk", { reps: 4 }),
-              ];
+              ]
+            : sessionNumber === 1
+              ? [
+                  warmupExercise(engineId, engineTarget),
+                  warmupExercise("air_squat", { reps: 8 }),
+                  warmupExercise("glute_bridge", { reps: 10 }),
+                  warmupExercise("pvc_pass_through", { reps: 8 }),
+                  warmupExercise("empty_bar_overhead_squat", { reps: 5 }),
+                ]
+              : [
+                  warmupExercise(engineId, engineTarget),
+                  warmupExercise("glute_bridge", { reps: 10 }),
+                  warmupExercise("scapular_pull_up", { reps: 6 }),
+                  warmupExercise("hollow_hold", { durationSeconds: 15 }),
+                  warmupExercise("empty_bar_clean_and_jerk", { reps: 4 }),
+                ];
   const exercises = candidateExercises.filter((exercise) =>
     movementAllowed(
       exercise.movementId,
@@ -1318,19 +1485,28 @@ function createWarmup(
   return {
     id: stableUuid(sessionId, "warmup", variantSeed),
     sessionId,
-    durationMinutes: weekNumber === 6 ? 8 : 9,
+    durationMinutes:
+      programmeType === "strict_strength_8w"
+        ? weekNumber === 8
+          ? 7
+          : 8
+        : weekNumber === 6
+          ? 8
+          : 9,
     rounds: 2,
     exercises,
     purpose:
-      programmeType === "gymnastics_capacity_6w"
-        ? "Prepare pulling mechanics, hollow-body control, shoulders, and inversion positions."
-        : programmeType === "endurance_capacity_6w"
-          ? "Raise body temperature and prepare sustainable cyclical and mixed-modal movement."
-          : programmeType === "strength_development_profile"
-            ? "Prepare bracing, squat and hinge positions, shoulders, and strict pulling."
-            : sessionNumber === 1
-              ? "Prepare squat depth, trunk bracing, overhead position, and the conditioning engine."
-              : "Prepare clean-and-jerk positions, strict pulling, midline control, and the conditioning engine.",
+      programmeType === "strict_strength_8w"
+        ? "Prepare scapular control, hollow-body tension, shoulders, and strict pulling and pressing positions."
+        : programmeType === "gymnastics_capacity_6w"
+          ? "Prepare pulling mechanics, hollow-body control, shoulders, and inversion positions."
+          : programmeType === "endurance_capacity_6w"
+            ? "Raise body temperature and prepare sustainable cyclical and mixed-modal movement."
+            : programmeType === "strength_development_profile"
+              ? "Prepare bracing, squat and hinge positions, shoulders, and strict pulling."
+              : sessionNumber === 1
+                ? "Prepare squat depth, trunk bracing, overhead position, and the conditioning engine."
+                : "Prepare clean-and-jerk positions, strict pulling, midline control, and the conditioning engine.",
   };
 }
 
@@ -1383,6 +1559,7 @@ function sectionDuration(
   section: "primary" | "secondary" | "accessory",
 ): number {
   const selected = exercises.filter((item) => item.section === section);
+  if (!selected.length) return 0;
   const estimate = calculateSessionDuration({
     exercises: selected,
     conditioning: null,
@@ -1514,17 +1691,24 @@ function recalculateSession(session: TrainingSession): TrainingSession {
   );
   const sectionDelta = estimate.totalMinutes - sectionTotal;
   if (Math.abs(sectionDelta) > 0.1) {
-    sections = sections.map((section, index) =>
-      index === sections.length - 1
-        ? {
-            ...section,
-            estimatedDurationMinutes: Math.max(
-              0,
-              section.estimatedDurationMinutes + sectionDelta,
-            ),
-          }
-        : section,
-    );
+    let remainingDelta = sectionDelta;
+    sections = [...sections];
+    for (
+      let index = sections.length - 1;
+      index >= 0 && Math.abs(remainingDelta) > 0.1;
+      index -= 1
+    ) {
+      const section = sections[index]!;
+      const adjustedDuration = Math.max(
+        0,
+        section.estimatedDurationMinutes + remainingDelta,
+      );
+      remainingDelta -= adjustedDuration - section.estimatedDurationMinutes;
+      sections[index] = {
+        ...section,
+        estimatedDurationMinutes: adjustedDuration,
+      };
+    }
   }
   return {
     ...session,
@@ -1538,15 +1722,18 @@ function recalculateSession(session: TrainingSession): TrainingSession {
   };
 }
 
-function adjustSessionToDuration(session: TrainingSession): TrainingSession {
+function adjustSessionToDuration(
+  session: TrainingSession,
+  maximumMinutes = 65,
+): TrainingSession {
   let next = recalculateSession(session);
-  if (next.estimatedDurationMinutes <= 65) return next;
+  if (next.estimatedDurationMinutes <= maximumMinutes) return next;
 
   next = recalculateSession({
     ...next,
     exercises: next.exercises.filter((item) => item.section !== "accessory"),
   });
-  if (next.estimatedDurationMinutes <= 65) return next;
+  if (next.estimatedDurationMinutes <= maximumMinutes) return next;
 
   next = recalculateSession({
     ...next,
@@ -1556,6 +1743,19 @@ function adjustSessionToDuration(session: TrainingSession): TrainingSession {
         : exercise,
     ),
   });
+  if (maximumMinutes < 65) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (next.estimatedDurationMinutes <= maximumMinutes) break;
+      next = recalculateSession({
+        ...next,
+        exercises: next.exercises.map((exercise) =>
+          exercise.section === "secondary" && (exercise.sets ?? 0) > 2
+            ? { ...exercise, sets: (exercise.sets ?? 1) - 1 }
+            : exercise,
+        ),
+      });
+    }
+  }
   return next;
 }
 
@@ -1660,6 +1860,10 @@ function sessionObjective(programmeType: string, sessionNumber: 1 | 2): string {
       "Vertical pulling, toes-to-bar technique, and gymnastics density",
       "Handstand pressing, strict press support, and trunk control",
     ],
+    strict_strength_8w: [
+      "Strict pull-up strength, strict press, and upper-back control",
+      "Strict HSPU strength, dip strength, and submaximal pulling volume",
+    ],
     strength_development_profile: [
       "Squat and hinge strength progression",
       "Strict pressing and weighted pulling strength",
@@ -1680,6 +1884,11 @@ function sessionStimulus(programmeType: string, sessionNumber: 1 | 2): string {
   }
   if (programmeType === "gymnastics_capacity_6w") {
     return "Strict gymnastics quality, stable positions, and measurable submaximal capacity.";
+  }
+  if (programmeType === "strict_strength_8w") {
+    return sessionNumber === 1
+      ? "Heavy but repeatable strict pulling and pressing with 1–3 reps in reserve."
+      : "Controlled gymnastics strength without kipping, failure, or conflicting upper-body conditioning.";
   }
   if (programmeType === "strength_development_profile") {
     return "Planned compound-strength loading with full rest and technically repeatable repetitions.";
@@ -1736,6 +1945,7 @@ function buildGenerationRequest(
       toesToBar: Number(input.skills?.toesToBar) || 0,
       barMuscleUps: Number(input.skills?.barMuscleUps) || 0,
       strictHspu: Number(input.skills?.strictHspu) || 0,
+      ringDips: Number(input.skills?.ringDips) || 0,
       handstandWalkMeters: Number(input.skills?.handstandWalkMeters) || 0,
     },
     limitations: {
@@ -1827,6 +2037,7 @@ function createSession(
   );
   if (
     gymnasticsAnchor &&
+    (programmeType !== "strict_strength_8w" || sessionNumber === 1) &&
     ![
       "strength_development_profile",
       "endurance_capacity_6w",
@@ -1872,26 +2083,42 @@ function createSession(
     conditioning.estimatedDurationMinutes,
   );
   const specializedStress: SessionStress =
-    programmeType === "competition_preparation_6w"
+    programmeType === "strict_strength_8w"
       ? {
           ...stress,
-          lowerBodyVolumeScore: Math.min(10, stress.lowerBodyVolumeScore + 2),
-          skillComplexityScore: Math.min(10, stress.skillComplexityScore + 1),
-          totalStressScore: stress.totalStressScore + 3,
+          lowerBodyVolumeScore: 3,
+          upperBodyVolumeScore: sessionNumber === 1 ? 8 : 9,
+          gripVolumeScore: sessionNumber === 1 ? 8 : 6,
+          skillComplexityScore: sessionNumber === 1 ? 5 : 7,
+          conditioningStressScore: Math.min(6, stress.conditioningStressScore),
+          totalStressScore: sessionNumber === 1 ? 30 : 31,
         }
-      : programmeType === "masters_open_preparation_6w"
+      : programmeType === "competition_preparation_6w"
         ? {
             ...stress,
-            lowerBodyVolumeScore: Math.max(2, stress.lowerBodyVolumeScore - 2),
-            upperBodyVolumeScore: Math.max(2, stress.upperBodyVolumeScore - 2),
-            gripVolumeScore: Math.max(2, stress.gripVolumeScore - 2),
-            conditioningStressScore: Math.max(
-              2,
-              stress.conditioningStressScore - 1,
-            ),
-            totalStressScore: Math.max(8, stress.totalStressScore - 7),
+            lowerBodyVolumeScore: Math.min(10, stress.lowerBodyVolumeScore + 2),
+            skillComplexityScore: Math.min(10, stress.skillComplexityScore + 1),
+            totalStressScore: stress.totalStressScore + 3,
           }
-        : stress;
+        : programmeType === "masters_open_preparation_6w"
+          ? {
+              ...stress,
+              lowerBodyVolumeScore: Math.max(
+                2,
+                stress.lowerBodyVolumeScore - 2,
+              ),
+              upperBodyVolumeScore: Math.max(
+                2,
+                stress.upperBodyVolumeScore - 2,
+              ),
+              gripVolumeScore: Math.max(2, stress.gripVolumeScore - 2),
+              conditioningStressScore: Math.max(
+                2,
+                stress.conditioningStressScore - 1,
+              ),
+              totalStressScore: Math.max(8, stress.totalStressScore - 7),
+            }
+          : stress;
   const base: TrainingSession = {
     id: sessionId,
     trainingWeekId,
@@ -1902,23 +2129,35 @@ function createSession(
     intendedStimulus: sessionStimulus(programmeType, sessionNumber),
     expectedFatigue: expectedFatigue(specializedStress),
     fatigueFocus:
-      programmeType === "masters_open_preparation_6w"
-        ? "recovery"
-        : sessionNumber === 1
-          ? "lower_body"
-          : "mixed",
+      programmeType === "strict_strength_8w"
+        ? sessionNumber === 1
+          ? "grip"
+          : "upper_body"
+        : programmeType === "masters_open_preparation_6w"
+          ? "recovery"
+          : sessionNumber === 1
+            ? "lower_body"
+            : "mixed",
     communityWorkoutAdvice:
-      programmeType === "competition_preparation_6w"
-        ? "Allow full recovery before the next event; record the event score and lifting quality."
-        : programmeType === "open_preparation_6w"
-          ? "Protect movement standards and transitions; avoid adding extra grip work before this session."
-          : programmeType === "masters_open_preparation_6w"
-            ? "Use the recovery interval fully and reduce impact or grip volume at the first sign of technical decline."
-            : sessionNumber === 1
-              ? "Avoid placing this session directly after a heavy squat or high-volume jumping community workout."
-              : "Avoid placing this session directly after grip-intensive pulling or high-volume overhead work.",
+      programmeType === "strict_strength_8w"
+        ? "Avoid extra kipping pull-ups, muscle-ups, dips, or HSPU before this session; keep all strength work submaximal unless this is a defined test."
+        : programmeType === "competition_preparation_6w"
+          ? "Allow full recovery before the next event; record the event score and lifting quality."
+          : programmeType === "open_preparation_6w"
+            ? "Protect movement standards and transitions; avoid adding extra grip work before this session."
+            : programmeType === "masters_open_preparation_6w"
+              ? "Use the recovery interval fully and reduce impact or grip volume at the first sign of technical decline."
+              : sessionNumber === 1
+                ? "Avoid placing this session directly after a heavy squat or high-volume jumping community workout."
+                : "Avoid placing this session directly after grip-intensive pulling or high-volume overhead work.",
     durationTargetMinutes:
-      week.weekNumber === 6 ? 52 : sessionNumber === 1 ? 57 : 59,
+      programmeType === "strict_strength_8w"
+        ? 60
+        : week.weekNumber === 6
+          ? 52
+          : sessionNumber === 1
+            ? 57
+            : 59,
     estimatedDurationMinutes: 0,
     durationValidationStatus: "within_target",
     provisional: false,
@@ -1936,7 +2175,10 @@ function createSession(
     createdAt: input.generatedAt,
     updatedAt: input.generatedAt,
   };
-  return adjustSessionToDuration(base);
+  return adjustSessionToDuration(
+    base,
+    programmeType === "strict_strength_8w" ? 60 : 65,
+  );
 }
 
 function createSupplementalSession(
@@ -2006,6 +2248,11 @@ export function generateMixedStrengthBlock(
   });
   const profile = createProgrammeProfile(input, template.blockType);
   const sessionCount = input.sessionCount ?? 2;
+  if (!template.supportedFrequencies.includes(sessionCount)) {
+    throw new Error(
+      `UNSUPPORTED_TEMPLATE_FREQUENCY:${template.id}:${sessionCount}`,
+    );
+  }
   const blockId = stableUuid(
     input.programId,
     template.id,
@@ -2016,27 +2263,33 @@ export function generateMixedStrengthBlock(
     profile.primaryGoal === "mixed" &&
     profile.trainingBlock === "mixed_strength" &&
     ["mixed_strength_6w", "mixed_strength_8w_testing"].includes(template.id);
-  const weekTemplates = legacyMixedTemplate
-    ? getV2ProgrammeTemplate(template.id)
-    : buildProfileWeekTemplates(profile, input, template.durationWeeks);
-  const programmeType = legacyMixedTemplate
-    ? template.id
-    : profile.trainingBlock === "masters_open_preparation" ||
-        profile.primaryGoal === "masters_open"
-      ? "masters_open_preparation_6w"
-      : profile.conditioningStyle === "open"
-        ? "open_preparation_6w"
-        : profile.conditioningStyle === "competition"
-          ? "competition_preparation_6w"
-          : profile.focus === "gymnastics"
-            ? "gymnastics_capacity_6w"
-            : profile.focus === "olympic"
-              ? "olympic_lifting_6w"
-              : profile.focus === "conditioning"
-                ? "endurance_capacity_6w"
-                : profile.focus === "strength"
-                  ? "strength_development_profile"
-                  : "general_crossfit_6w";
+  const weekTemplates =
+    template.id === "strict_strength_8w"
+      ? buildStrictStrengthWeekTemplates(input)
+      : legacyMixedTemplate
+        ? getV2ProgrammeTemplate(template.id)
+        : buildProfileWeekTemplates(profile, input, template.durationWeeks);
+  const programmeType =
+    template.id === "strict_strength_8w"
+      ? template.id
+      : legacyMixedTemplate
+        ? template.id
+        : profile.trainingBlock === "masters_open_preparation" ||
+            profile.primaryGoal === "masters_open"
+          ? "masters_open_preparation_6w"
+          : profile.conditioningStyle === "open"
+            ? "open_preparation_6w"
+            : profile.conditioningStyle === "competition"
+              ? "competition_preparation_6w"
+              : profile.focus === "gymnastics"
+                ? "gymnastics_capacity_6w"
+                : profile.focus === "olympic"
+                  ? "olympic_lifting_6w"
+                  : profile.focus === "conditioning"
+                    ? "endurance_capacity_6w"
+                    : profile.focus === "strength"
+                      ? "strength_development_profile"
+                      : "general_crossfit_6w";
   const tracks = trackMapForBlock(blockId, input.generatedAt, weekTemplates);
   let weeks: TrainingWeek[] = weekTemplates.map((weekTemplate) => {
     const trainingWeekId = stableUuid(blockId, "week", weekTemplate.weekNumber);
@@ -2080,7 +2333,11 @@ export function generateMixedStrengthBlock(
   const testingTargets = legacyMixedTemplate
     ? ["front_squat", "snatch"]
     : profile.testingTargets;
-  if (template.id === "mixed_strength_8w_testing") {
+  const testingTemplate = [
+    "mixed_strength_8w_testing",
+    "strict_strength_8w",
+  ].includes(template.id);
+  if (testingTemplate) {
     const priorSessions = weeks
       .flatMap((week) => week.sessions)
       .filter((session) => session.weekNumber < 8);
@@ -2171,16 +2428,14 @@ export function generateMixedStrengthBlock(
     currentWeek: 1,
     status: "active",
     deloadWeek: template.deloadWeek,
-    endsWithTest: template.id === "mixed_strength_8w_testing",
-    plannedTestMovementIds:
-      template.id === "mixed_strength_8w_testing" ? testingTargets : [],
-    testWeekNumber: template.id === "mixed_strength_8w_testing" ? 8 : null,
-    testStrategy:
-      template.id === "mixed_strength_8w_testing"
-        ? testingTargets.every((movementId) => defaultTestType(movementId))
-          ? "true_1rm"
-          : "rep_max"
-        : "none",
+    endsWithTest: testingTemplate,
+    plannedTestMovementIds: testingTemplate ? testingTargets : [],
+    testWeekNumber: testingTemplate ? 8 : null,
+    testStrategy: testingTemplate
+      ? testingTargets.every((movementId) => defaultTestType(movementId))
+        ? "true_1rm"
+        : "rep_max"
+      : "none",
     startedAt: input.generatedAt,
     completedAt: null,
     progressionTracks: [...tracks.values()],

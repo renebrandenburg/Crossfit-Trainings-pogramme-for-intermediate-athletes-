@@ -16,6 +16,7 @@ const INTERMEDIATE_V2_ATHLETE = Object.freeze({
     toesToBar: 8,
     barMuscleUps: 0,
     strictHspu: 0,
+    ringDips: 6,
     handstandWalkMeters: 0,
   }),
   equipment: Object.freeze([

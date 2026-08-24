@@ -396,6 +396,64 @@ test("@critical REG-002 REG-003 eight-week selection is non-sequential and reloa
   expect((await readAppState(page)).selectedWeek).toBe(8);
 });
 
+test("@critical Strict Strength generates, benchmarks, and reloads its selected week", async ({
+  page,
+}) => {
+  const app = new AppShell(page);
+  const builder = new PlanBuilderPage(page);
+  await app.open();
+  await builder.open();
+
+  await builder.generateV2({
+    goal: "strength",
+    blockType: "mixed_strength",
+    templateId: "strict_strength_8w",
+    frequency: 2,
+    preferredDays: ["tuesday", "saturday"],
+  });
+
+  const programme = page.getByTestId("v2-programme");
+  await expect(
+    page
+      .getByRole("navigation", { name: "V2 training weeks" })
+      .getByRole("button"),
+  ).toHaveCount(8);
+  await expect(programme.getByTestId("v2-session-card")).toHaveCount(2);
+  await expect(programme).toContainText(/Strict pull-up/i);
+  let program = activeV2Program(await readAppState(page));
+  expect(program.trainingBlocks[0].templateId).toBe("strict_strength_8w");
+  expect(program.trainingBlocks[0].trainingWeeks).toHaveLength(8);
+  expect(
+    program.trainingBlocks[0].trainingWeeks.every(
+      (week) =>
+        week.sessions.length === 2 &&
+        week.sessions.every(
+          (session) => session.estimatedDurationMinutes <= 60,
+        ),
+    ),
+  ).toBe(true);
+
+  await page.getByRole("button", { name: "Week 8", exact: true }).click();
+  await expect(programme).toContainText(
+    "Test · pulling and pressing benchmarks",
+  );
+  await expect(programme).toContainText(/Retest Strict pull-up capacity/i);
+  await expect(programme).toContainText(/Test Strict press true 1rm/i);
+  expect((await readAppState(page)).selectedWeek).toBe(8);
+
+  await page.reload();
+  await builder.open();
+  await expect(page.locator('select[name="v2TemplateId"]')).toHaveValue(
+    "strict_strength_8w",
+  );
+  await expect(page.getByTestId("v2-programme")).toContainText(
+    "Week 8 – Session 1",
+  );
+  program = activeV2Program(await readAppState(page));
+  expect(program.trainingBlocks[0].templateId).toBe("strict_strength_8w");
+  expect((await readAppState(page)).selectedWeek).toBe(8);
+});
+
 test("@critical REG-001 saved V2 programmes switch, rename, delete, and persist", async ({
   page,
 }) => {

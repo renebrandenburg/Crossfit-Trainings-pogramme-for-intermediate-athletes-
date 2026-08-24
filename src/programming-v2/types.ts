@@ -65,8 +65,11 @@ export interface AthleteSkillLevels {
   toesToBar: number;
   barMuscleUps: number;
   strictHspu: number;
+  ringDips: number;
   handstandWalkMeters: number;
 }
+
+export type StrictPullupLevel = "developing" | "bodyweight" | "weighted";
 
 export interface ProgrammeProfile {
   primaryGoal: V2ProgrammingGoal;
@@ -298,6 +301,7 @@ export type ProgressionTrackType =
   | "strict_pull"
   | "toes_to_bar"
   | "handstand"
+  | "dip"
   | "gymnastics_skill"
   | "engine";
 

@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const v2 = require("../build/programming-v2.cjs");
+const strictStrengthSnapshot = require("./fixtures/strict-strength-8w.snapshot.json");
 
 const EQUIPMENT = [
   "barbell",
@@ -49,6 +50,7 @@ function generationInput(overrides = {}) {
       toesToBar: 8,
       barMuscleUps: 0,
       strictHspu: 0,
+      ringDips: 6,
       handstandWalkMeters: 0,
     },
     ...overrides,
@@ -57,6 +59,22 @@ function generationInput(overrides = {}) {
 
 function generate(overrides = {}) {
   return v2.generateMixedStrengthBlock(generationInput(overrides));
+}
+
+function generateStrict(overrides = {}) {
+  const base = generationInput();
+  return v2.generateV2Program({
+    ...base,
+    ...overrides,
+    programId:
+      overrides.programId ||
+      v2.stableUuid("strict-strength", JSON.stringify(overrides.skills || {})),
+    goal: "strength",
+    blockType: "mixed_strength",
+    templateId: "strict_strength_8w",
+    sessionCount: 2,
+    skills: { ...base.skills, ...(overrides.skills || {}) },
+  });
 }
 
 function sessions(program) {
@@ -363,6 +381,7 @@ test("V2 template registry covers supported goals and frequencies", () => {
     [
       "mixed_strength_6w",
       "mixed_strength_8w_testing",
+      "strict_strength_8w",
       "endurance_capacity_6w",
       "gymnastics_capacity_6w",
       "bar_muscle_up_6w",
@@ -389,6 +408,183 @@ test("V2 template registry covers supported goals and frequencies", () => {
       ),
     );
   }
+});
+
+test("Strict Strength creates a complete progressive eight-week programme", () => {
+  const program = generateStrict();
+  const block = program.trainingBlocks[0];
+  const allSessions = sessions(program);
+  const interferingFamilies = new Set([
+    "strict_pull",
+    "kipping_pull",
+    "bar_muscle_up",
+    "ring_muscle_up",
+    "handstand",
+    "vertical_press",
+    "horizontal_press",
+  ]);
+
+  assert.equal(block.templateId, "strict_strength_8w");
+  assert.equal(block.trainingWeeks.length, 8);
+  assert.ok(block.trainingWeeks.every((week) => week.sessions.length === 2));
+  assert.ok(
+    allSessions.every(
+      (session) =>
+        session.estimatedDurationMinutes <= 60 &&
+        session.conditioning.estimatedDurationMinutes >= 10 &&
+        session.conditioning.estimatedDurationMinutes <= 15,
+    ),
+  );
+  assert.ok(
+    allSessions.every((session) =>
+      session.conditioning.movements.every(
+        (movement) => !interferingFamilies.has(movement.movementFamilyId),
+      ),
+    ),
+  );
+  assert.ok(
+    allSessions
+      .flatMap((session) => session.exercises)
+      .filter((exercise) => v2.getMovement(exercise.movementId)?.loadable)
+      .every(
+        (exercise) =>
+          exercise.intensityMethod !== "none" &&
+          exercise.intensityMethod !== "bodyweight" &&
+          exercise.intensityValue != null,
+      ),
+  );
+  assert.ok(
+    new Set(
+      block.trainingWeeks.map((week) =>
+        JSON.stringify(
+          week.sessions.flatMap((session) =>
+            session.exercises
+              .filter((exercise) => exercise.progressionTrackId)
+              .map((exercise) => [
+                exercise.movementId,
+                exercise.sets,
+                exercise.reps,
+                exercise.intensityValue,
+              ]),
+          ),
+        ),
+      ),
+    ).size >= 6,
+  );
+  assert.deepEqual(block.plannedTestMovementIds, [
+    "strict_pull_up",
+    "strict_press",
+  ]);
+  assert.deepEqual(
+    block.trainingWeeks[7].sessions.map((session) => session.sessionType),
+    ["benchmark", "max_test"],
+  );
+  const pullingBenchmark = block.trainingWeeks[7].sessions[0].exercises.find(
+    (exercise) => exercise.section === "primary",
+  );
+  assert.equal(pullingBenchmark.movementId, "strict_pull_up");
+  assert.equal(pullingBenchmark.sets, 1);
+  assert.equal(pullingBenchmark.repRangeMin, 1);
+  assert.match(
+    block.trainingWeeks[7].sessions[0].objective,
+    /Retest Strict pull-up/,
+  );
+  assert.equal(program.validation.valid, true);
+});
+
+test("Strict Strength movement ladders respect the athlete's current ability", () => {
+  const developing = generateStrict({
+    skills: { pullUps: 2, strictHspu: 0, ringDips: 0 },
+  });
+  const capable = generateStrict({
+    athleteLevel: "advanced",
+    skills: { pullUps: 14, strictHspu: 10, ringDips: 12 },
+  });
+  const movementIds = (program) =>
+    new Set(
+      sessions(program).flatMap((session) =>
+        session.exercises.map((exercise) => exercise.movementId),
+      ),
+    );
+  const developingMovements = movementIds(developing);
+  const capableMovements = movementIds(capable);
+
+  assert.equal(v2.strictPullupLevel({ skills: { pullUps: 2 } }), "developing");
+  assert.equal(v2.strictPullupLevel({ skills: { pullUps: 5 } }), "bodyweight");
+  assert.equal(v2.strictPullupLevel({ skills: { pullUps: 14 } }), "weighted");
+  assert.equal(developingMovements.has("weighted_pull_up"), false);
+  assert.equal(
+    developingMovements.has("deficit_strict_handstand_push_up"),
+    false,
+  );
+  assert.equal(developingMovements.has("weighted_dip"), false);
+  assert.ok(
+    developingMovements.has("assisted_strict_pull_up") ||
+      developingMovements.has("eccentric_pull_up"),
+  );
+  assert.equal(capableMovements.has("weighted_pull_up"), true);
+  assert.equal(capableMovements.has("deficit_strict_handstand_push_up"), true);
+  assert.equal(capableMovements.has("weighted_dip"), true);
+});
+
+test("Strict Strength validation rejects structural and duration regressions", () => {
+  const malformed = structuredClone(generateStrict());
+  malformed.trainingBlocks[0].trainingWeeks[0].sessions[0].estimatedDurationMinutes = 61;
+  malformed.trainingBlocks[0].trainingWeeks[1].sessions.pop();
+
+  const validation = v2.validateProgram(malformed);
+
+  assert.equal(validation.valid, false);
+  assert.ok(
+    validation.issues.some(
+      (issue) => issue.code === "STRICT_STRENGTH_SESSION_TOO_LONG",
+    ),
+  );
+  assert.ok(
+    validation.issues.some(
+      (issue) => issue.code === "STRICT_STRENGTH_SESSION_COUNT",
+    ),
+  );
+});
+
+test("Strict Strength deterministic fixture remains stable", () => {
+  const program = generateStrict({
+    programId: "11111111-1111-4111-a111-111111111111",
+    generatedAt: "2026-08-22T10:00:00.000Z",
+    seed: "strict-strength-fixture",
+    maxes: { ...generationInput().maxes, strict_press: 70 },
+    skills: {
+      pullUps: 5,
+      chestToBar: 0,
+      toesToBar: 0,
+      barMuscleUps: 0,
+      strictHspu: 0,
+      ringDips: 6,
+      handstandWalkMeters: 0,
+    },
+  });
+  const block = program.trainingBlocks[0];
+  const summary = {
+    templateId: block.templateId,
+    name: program.name,
+    weeks: block.trainingWeeks.map((week) => ({
+      week: week.weekNumber,
+      theme: week.theme,
+      sessions: week.sessions.map((session) => ({
+        type: session.sessionType,
+        duration: session.estimatedDurationMinutes,
+        progression: session.exercises
+          .filter((exercise) => exercise.progressionTrackId)
+          .map(
+            (exercise) =>
+              `${exercise.movementId}:${exercise.sets}x${exercise.reps}:${exercise.intensityMethod}:${exercise.intensityValue}`,
+          ),
+        conditioningMinutes: session.conditioning.estimatedDurationMinutes,
+      })),
+    })),
+  };
+
+  assert.deepEqual(summary, strictStrengthSnapshot);
 });
 
 test("programme types produce materially different six-week workout fingerprints", () => {

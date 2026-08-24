@@ -1,0 +1,206 @@
+{
+  "templateId": "strict_strength_8w",
+  "name": "Strict Strength — 8 Weeks",
+  "weeks": [
+    {
+      "week": 1,
+      "theme": "Foundation · strict positions and scapular control",
+      "sessions": [
+        {
+          "type": "normal",
+          "duration": 51,
+          "progression": [
+            "strict_pull_up:4x3:rir:2",
+            "strict_press:4x6:percentage_1rm:65"
+          ],
+          "conditioningMinutes": 10
+        },
+        {
+          "type": "normal",
+          "duration": 47,
+          "progression": [
+            "floor_pike_handstand_push_up:4x5:rir:2",
+            "ring_dip:3x4:rir:2",
+            "strict_pull_up:3x2:rir:2"
+          ],
+          "conditioningMinutes": 12
+        }
+      ]
+    },
+    {
+      "week": 2,
+      "theme": "Foundation · repeatable strict volume",
+      "sessions": [
+        {
+          "type": "normal",
+          "duration": 51,
+          "progression": [
+            "strict_pull_up:4x3:rir:2",
+            "strict_press:4x6:percentage_1rm:68"
+          ],
+          "conditioningMinutes": 10
+        },
+        {
+          "type": "normal",
+          "duration": 49,
+          "progression": [
+            "floor_pike_handstand_push_up:4x6:rir:2",
+            "ring_dip:4x4:rir:2",
+            "strict_pull_up:3x2:rir:2"
+          ],
+          "conditioningMinutes": 12
+        }
+      ]
+    },
+    {
+      "week": 3,
+      "theme": "Volume · pulling and pressing accumulation",
+      "sessions": [
+        {
+          "type": "normal",
+          "duration": 56,
+          "progression": [
+            "strict_pull_up:5x3:rir:2",
+            "strict_press:5x5:percentage_1rm:70"
+          ],
+          "conditioningMinutes": 10
+        },
+        {
+          "type": "normal",
+          "duration": 53,
+          "progression": [
+            "pike_handstand_push_up:5x6:rir:2",
+            "ring_dip:4x4:rir:2",
+            "strict_pull_up:4x2:rir:2"
+          ],
+          "conditioningMinutes": 12
+        }
+      ]
+    },
+    {
+      "week": 4,
+      "theme": "Volume · higher quality work capacity",
+      "sessions": [
+        {
+          "type": "normal",
+          "duration": 56,
+          "progression": [
+            "strict_pull_up:5x3:rir:2",
+            "strict_press:5x4:percentage_1rm:75"
+          ],
+          "conditioningMinutes": 10
+        },
+        {
+          "type": "normal",
+          "duration": 55,
+          "progression": [
+            "pike_handstand_push_up:5x7:rir:2",
+            "ring_dip:5x4:rir:2",
+            "strict_pull_up:4x2:rir:2"
+          ],
+          "conditioningMinutes": 12
+        }
+      ]
+    },
+    {
+      "week": 5,
+      "theme": "Intensification · harder variations and loading",
+      "sessions": [
+        {
+          "type": "normal",
+          "duration": 60,
+          "progression": [
+            "tempo_strict_pull_up:5x3:rir:2",
+            "strict_press:5x4:percentage_1rm:78"
+          ],
+          "conditioningMinutes": 10
+        },
+        {
+          "type": "normal",
+          "duration": 55,
+          "progression": [
+            "wall_strict_hspu_eccentric:5x2:rir:2",
+            "tempo_ring_dip:5x4:rir:2",
+            "tempo_strict_pull_up:4x2:rir:2"
+          ],
+          "conditioningMinutes": 12
+        }
+      ]
+    },
+    {
+      "week": 6,
+      "theme": "Intensification · heavy strict strength",
+      "sessions": [
+        {
+          "type": "normal",
+          "duration": 58,
+          "progression": [
+            "tempo_strict_pull_up:5x3:rir:2",
+            "strict_press:5x3:percentage_1rm:82"
+          ],
+          "conditioningMinutes": 10
+        },
+        {
+          "type": "normal",
+          "duration": 50,
+          "progression": [
+            "wall_strict_hspu_eccentric:4x2:rir:2",
+            "tempo_ring_dip:4x4:rir:2",
+            "tempo_strict_pull_up:4x2:rir:2"
+          ],
+          "conditioningMinutes": 12
+        }
+      ]
+    },
+    {
+      "week": 7,
+      "theme": "Peak · high intensity and reduced accessories",
+      "sessions": [
+        {
+          "type": "normal",
+          "duration": 47,
+          "progression": [
+            "tempo_strict_pull_up:3x2:rir:2",
+            "strict_press:3x2:percentage_1rm:87"
+          ],
+          "conditioningMinutes": 10
+        },
+        {
+          "type": "normal",
+          "duration": 45,
+          "progression": [
+            "wall_strict_hspu_eccentric:3x2:rir:2",
+            "tempo_ring_dip:3x4:rir:2",
+            "tempo_strict_pull_up:3x1:rir:2"
+          ],
+          "conditioningMinutes": 12
+        }
+      ]
+    },
+    {
+      "week": 8,
+      "theme": "Test · pulling and pressing benchmarks",
+      "sessions": [
+        {
+          "type": "benchmark",
+          "duration": 39,
+          "progression": [
+            "strict_pull_up:1xnull:bodyweight:null",
+            "strict_press:3x1:percentage_1rm:85"
+          ],
+          "conditioningMinutes": 10
+        },
+        {
+          "type": "max_test",
+          "duration": 41,
+          "progression": [
+            "wall_strict_hspu_eccentric:3x2:rir:2",
+            "ring_dip:3x4:rir:2",
+            "tempo_strict_pull_up:3x1:rir:2"
+          ],
+          "conditioningMinutes": 10
+        }
+      ]
+    }
+  ]
+}

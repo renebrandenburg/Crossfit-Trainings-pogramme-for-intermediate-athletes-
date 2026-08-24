@@ -2,6 +2,7 @@ import { getMovement } from "./catalog";
 import type {
   ConditioningPrescription,
   ExercisePrescription,
+  MovementFamilyId,
   ProgramV2,
   TrainingBlock,
   TrainingSession,
@@ -900,6 +901,244 @@ export function validateTrainingWeek(
   return result(issues);
 }
 
+export function validateStrictStrengthBlock(
+  block: TrainingBlock,
+  path = `blocks.${block.id}`,
+): ValidationResult {
+  if (block.templateId !== "strict_strength_8w") return result([]);
+  const issues: ValidationIssue[] = [];
+  if (
+    block.durationWeeks !== 8 ||
+    block.trainingWeeks.length !== 8 ||
+    block.plannedSessionCount !== 2
+  ) {
+    issues.push(
+      issue(
+        "STRICT_STRENGTH_STRUCTURE",
+        "error",
+        path,
+        "Strict Strength requires exactly eight weeks and two sessions per week.",
+      ),
+    );
+  }
+
+  const weekSignatures = new Set<string>();
+  for (const week of block.trainingWeeks) {
+    if (week.sessions.length !== 2) {
+      issues.push(
+        issue(
+          "STRICT_STRENGTH_SESSION_COUNT",
+          "error",
+          `${path}.trainingWeeks.${week.weekNumber}.sessions`,
+          "Strict Strength requires exactly two sessions each week.",
+        ),
+      );
+    }
+    const pullingExposures = week.sessions.filter((session) =>
+      session.exercises.some(
+        (exercise) =>
+          exercise.progressionTrackId &&
+          exercise.movementFamilyId === "strict_pull",
+      ),
+    ).length;
+    if (pullingExposures < 2) {
+      issues.push(
+        issue(
+          "STRICT_STRENGTH_PULLING_EXPOSURE",
+          "error",
+          `${path}.trainingWeeks.${week.weekNumber}`,
+          "Each Strict Strength week requires two strict-pulling exposures.",
+        ),
+      );
+    }
+    const primaryPressing = week.sessions.some((session) =>
+      session.exercises.some(
+        (exercise) =>
+          exercise.section === "primary" &&
+          ["vertical_press", "handstand", "horizontal_press"].includes(
+            exercise.movementFamilyId,
+          ),
+      ),
+    );
+    if (!primaryPressing) {
+      issues.push(
+        issue(
+          "STRICT_STRENGTH_PRESSING_EXPOSURE",
+          "error",
+          `${path}.trainingWeeks.${week.weekNumber}`,
+          "Each Strict Strength week requires a primary strict-pressing exposure.",
+        ),
+      );
+    }
+
+    for (const session of week.sessions) {
+      if (session.estimatedDurationMinutes > 60) {
+        issues.push(
+          issue(
+            "STRICT_STRENGTH_SESSION_TOO_LONG",
+            "error",
+            `${path}.trainingWeeks.${week.weekNumber}.sessions.${session.sessionNumber}.estimatedDurationMinutes`,
+            "Strict Strength sessions may not exceed 60 minutes.",
+          ),
+        );
+      }
+      const conditioningMinutes =
+        session.conditioning?.estimatedDurationMinutes ?? 0;
+      if (conditioningMinutes < 10 || conditioningMinutes > 15) {
+        issues.push(
+          issue(
+            "STRICT_STRENGTH_CONDITIONING_DURATION",
+            "error",
+            `${path}.trainingWeeks.${week.weekNumber}.sessions.${session.sessionNumber}.conditioning`,
+            "Strict Strength conditioning must remain between 10 and 15 minutes.",
+          ),
+        );
+      }
+      const conditioningFamilies = new Set(
+        session.conditioning?.movements.map(
+          (movement) => movement.movementFamilyId,
+        ) ?? [],
+      );
+      const interferingFamilies: MovementFamilyId[] = [
+        "strict_pull",
+        "kipping_pull",
+        "bar_muscle_up",
+        "ring_muscle_up",
+        "handstand",
+        "vertical_press",
+        "horizontal_press",
+      ];
+      if (
+        interferingFamilies.some((family) => conditioningFamilies.has(family))
+      ) {
+        issues.push(
+          issue(
+            "STRICT_STRENGTH_CONDITIONING_INTERFERENCE",
+            "error",
+            `${path}.trainingWeeks.${week.weekNumber}.sessions.${session.sessionNumber}.conditioning`,
+            "Conditioning may not duplicate the session's strict pulling or pressing stress.",
+          ),
+        );
+      }
+      if (
+        week.weekNumber < 8 &&
+        session.exercises.some(
+          (exercise) =>
+            exercise.progressionTrackId &&
+            !exercise.stoppingRule?.toLowerCase().includes("reserve"),
+        )
+      ) {
+        issues.push(
+          issue(
+            "STRICT_STRENGTH_MISSING_RIR_GUIDANCE",
+            "error",
+            `${path}.trainingWeeks.${week.weekNumber}.sessions.${session.sessionNumber}.exercises`,
+            "Strict Strength progression work requires explicit reps-in-reserve guidance.",
+          ),
+        );
+      }
+    }
+
+    weekSignatures.add(
+      JSON.stringify(
+        week.sessions.flatMap((session) =>
+          session.exercises
+            .filter((exercise) => exercise.progressionTrackId)
+            .map((exercise) => [
+              exercise.movementId,
+              exercise.sets,
+              exercise.reps,
+              exercise.durationSeconds,
+              exercise.intensityMethod,
+              exercise.intensityValue,
+            ]),
+        ),
+      ),
+    );
+  }
+
+  if (weekSignatures.size < 6) {
+    issues.push(
+      issue(
+        "STRICT_STRENGTH_INSUFFICIENT_PROGRESSION",
+        "error",
+        `${path}.trainingWeeks`,
+        "Strict Strength weeks must progress through volume, difficulty, loading, or testing.",
+      ),
+    );
+  }
+
+  const averageLoadedIntensity = (weekNumbers: number[]): number => {
+    const values = block.trainingWeeks
+      .filter((week) => weekNumbers.includes(week.weekNumber))
+      .flatMap((week) => week.sessions)
+      .flatMap((session) => session.exercises)
+      .filter(
+        (exercise) =>
+          exercise.progressionTrackId &&
+          getMovement(exercise.movementId)?.loadable &&
+          exercise.intensityValue != null,
+      )
+      .map((exercise) =>
+        exercise.intensityMethod === "rpe"
+          ? (exercise.intensityValue ?? 0) * 10
+          : (exercise.intensityValue ?? 0),
+      );
+    return values.length
+      ? values.reduce((sum, value) => sum + value, 0) / values.length
+      : 0;
+  };
+  if (averageLoadedIntensity([5, 6, 7]) < averageLoadedIntensity([1, 2])) {
+    issues.push(
+      issue(
+        "STRICT_STRENGTH_INTENSITY_REGRESSION",
+        "error",
+        `${path}.trainingWeeks`,
+        "Weeks 5–7 must not be less intense than the foundation weeks.",
+      ),
+    );
+  }
+
+  const testWeek = block.trainingWeeks.find((week) => week.weekNumber === 8);
+  const testMovementIds = new Set(block.plannedTestMovementIds);
+  const hasPullingBenchmark = testWeek?.sessions.some(
+    (session) =>
+      ["strict_pull_up", "weighted_pull_up"].includes(
+        session.maxTestPrescription?.movementId ?? "",
+      ) ||
+      (session.sessionType === "benchmark" &&
+        /strict pull|weighted pull/i.test(session.objective)),
+  );
+  const hasPressingBenchmark = testWeek?.sessions.some(
+    (session) =>
+      session.maxTestPrescription?.movementId === "strict_press" ||
+      (session.sessionType === "benchmark" &&
+        /strict press/i.test(session.objective)),
+  );
+  if (
+    !testWeek ||
+    !["strict_pull_up", "weighted_pull_up"].some((movementId) =>
+      testMovementIds.has(movementId),
+    ) ||
+    !testMovementIds.has("strict_press") ||
+    !hasPullingBenchmark ||
+    !hasPressingBenchmark ||
+    !testWeek.sessions.every((session) =>
+      ["benchmark", "max_test"].includes(session.sessionType),
+    )
+  ) {
+    issues.push(
+      issue(
+        "STRICT_STRENGTH_MISSING_BENCHMARKS",
+        "error",
+        `${path}.trainingWeeks.8`,
+        "Week 8 requires one pulling benchmark and one pressing benchmark.",
+      ),
+    );
+  }
+  return result(issues);
+}
+
 export function validateTrainingBlock(
   block: TrainingBlock,
   path = `blocks.${block.id}`,
@@ -958,6 +1197,7 @@ export function validateTrainingBlock(
       ...validateTrainingWeek(week, `${path}.trainingWeeks.${index}`).issues,
     );
   });
+  issues.push(...validateStrictStrengthBlock(block, path).issues);
   if (block.blockType === "mixed_strength" && !profile) {
     const exerciseFamilies = block.trainingWeeks.flatMap((week) =>
       week.sessions.flatMap((session) =>

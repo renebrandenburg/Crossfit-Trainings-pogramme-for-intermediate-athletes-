@@ -41,7 +41,7 @@ test("@smoke creates a plan and preserves its selected values after refresh", as
   });
 
   await overview.open();
-  await expect(overview.heading(data.planName)).toBeVisible();
+  await expect(overview.programmeDetails(data.planName)).toBeVisible();
   await page.getByLabel("Programme week").selectOption("2");
   await expect(
     page.getByRole("heading", { name: data.sessionTitle }),
@@ -49,7 +49,7 @@ test("@smoke creates a plan and preserves its selected values after refresh", as
 
   await page.reload();
   await overview.open();
-  await expect(overview.heading(data.planName)).toBeVisible();
+  await expect(overview.programmeDetails(data.planName)).toBeVisible();
   await expect(
     page.getByRole("heading", { name: data.sessionTitle }),
   ).toBeVisible();

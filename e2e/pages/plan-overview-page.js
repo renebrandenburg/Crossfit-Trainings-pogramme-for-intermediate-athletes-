@@ -11,8 +11,10 @@ class PlanOverviewPage {
       .click();
   }
 
-  heading(name) {
-    return this.page.getByRole("heading", { name, exact: true });
+  programmeDetails(name) {
+    return this.page.locator(".calendar-programme-details").filter({
+      hasText: name,
+    });
   }
 }
 

@@ -197,6 +197,7 @@ test("REG-013 every independently selectable V2 configuration generates a valid 
     [
       "mixed_strength_6w",
       "mixed_strength_8w_testing",
+      "strict_strength_8w",
       "endurance_capacity_6w",
       "gymnastics_capacity_6w",
       "competition_preparation_6w",

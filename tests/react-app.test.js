@@ -1283,6 +1283,134 @@ test("REG-012 React passes the selected goal, block, template, level, maxes, and
   }
 });
 
+test("React selects, switches, and reloads Strict Strength without overwriting General Strength", async () => {
+  const mounted = mountApp();
+  let persisted;
+  let strictProgramId;
+  let generalProgramId;
+
+  try {
+    openMoreTool(mounted, "Build programme");
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Programming goal"), {
+      target: { value: "strength" },
+    });
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Training template"), {
+      target: { value: "mixed_strength_8w_testing" },
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", {
+        name: "Generate six-week V2 block",
+      }),
+    );
+    await mounted.waitFor(() => {
+      assert.equal(mounted.readState().v2Programs.length, 1);
+    });
+    generalProgramId = mounted.readState().activeV2ProgramId;
+
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Create new V2 programme" }),
+    );
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Training template"), {
+      target: { value: "strict_strength_8w" },
+    });
+    assert.ok(
+      mounted.ui.getByText(
+        /Build raw pulling and pressing strength for stronger gymnastics/,
+      ),
+    );
+    assert.equal(mounted.ui.getByLabelText("Weekly app sessions").value, "2");
+    assert.equal(
+      mounted.ui.getByLabelText("Weekly app sessions").disabled,
+      true,
+    );
+    assert.ok(
+      mounted.ui.getByText("8 weeks · 2 sessions/week · ~60 min/session"),
+    );
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", {
+        name: "Generate a new future block",
+      }),
+    );
+
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      assert.equal(state.v2Programs.length, 2);
+      const program = state.v2Programs.find(
+        (item) => item.id === state.activeV2ProgramId,
+      );
+      assert.equal(program.trainingBlocks[0].templateId, "strict_strength_8w");
+      assert.equal(program.trainingBlocks[0].trainingWeeks.length, 8);
+      assert.equal(
+        program.trainingBlocks[0].trainingWeeks[0].sessions.length,
+        2,
+      );
+      assert.equal(program.generationRequest.athleteSkills.ringDips, 0);
+      assert.match(
+        mounted.view("builderView").getByTestId("v2-programme").textContent,
+        /Strict pull-up/i,
+      );
+    });
+    strictProgramId = mounted.readState().activeV2ProgramId;
+
+    mounted.fireEvent.click(
+      mounted.view("builderView").getByRole("button", { name: "Week 5" }),
+    );
+    await mounted.waitFor(() => {
+      assert.equal(mounted.readState().selectedWeek, 5);
+      assert.match(
+        mounted.view("builderView").getByTestId("v2-programme").textContent,
+        /Tempo strict pull-up/i,
+      );
+    });
+
+    const selector = mounted.ui.getByLabelText("Active programme");
+    mounted.fireEvent.change(selector, {
+      target: { value: `v2:${generalProgramId}` },
+    });
+    await mounted.waitFor(() => {
+      assert.equal(mounted.readState().activeV2ProgramId, generalProgramId);
+    });
+    mounted.fireEvent.change(selector, {
+      target: { value: `v2:${strictProgramId}` },
+    });
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      assert.equal(state.activeV2ProgramId, strictProgramId);
+      assert.equal(state.selectedWeek, 5);
+      assert.deepEqual(
+        state.v2Programs.map((program) => program.trainingBlocks[0].templateId),
+        ["strict_strength_8w", "mixed_strength_8w_testing"],
+      );
+    });
+    persisted = mounted.readState();
+  } finally {
+    mounted.cleanup();
+  }
+
+  const reloaded = mountApp({ storedState: persisted });
+  try {
+    openMoreTool(reloaded, "Build programme");
+    await reloaded.waitFor(() => {
+      assert.equal(
+        reloaded.ui.getByLabelText("Active programme").value,
+        `v2:${strictProgramId}`,
+      );
+      assert.equal(reloaded.readState().selectedWeek, 5);
+      assert.equal(
+        reloaded.view("builderView").getByRole("button", { name: "Week 5" })
+          .className,
+        "is-active",
+      );
+      assert.match(
+        reloaded.view("builderView").getByTestId("v2-programme").textContent,
+        /Tempo strict pull-up/i,
+      );
+    });
+  } finally {
+    reloaded.cleanup();
+  }
+});
+
 test("REG-001 React creates and switches between multiple V2 programmes", async () => {
   const mounted = mountApp();
 

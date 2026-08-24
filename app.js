@@ -28,6 +28,7 @@ const DEFAULT_PROFILE = {
     barMuscleUp: 0,
     ringMuscleUp: 0,
     strictHspu: 0,
+    ringDips: 0,
     handstandWalk: 0,
     doubleUnders: 30,
   },

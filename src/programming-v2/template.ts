@@ -8,6 +8,7 @@ import type {
 export type V2TemplateId =
   | "mixed_strength_6w"
   | "mixed_strength_8w_testing"
+  | "strict_strength_8w"
   | "endurance_capacity_6w"
   | "gymnastics_capacity_6w"
   | "bar_muscle_up_6w"
@@ -29,6 +30,9 @@ export interface V2TemplateDefinition {
   durationWeeks: number;
   deloadWeek: number | null;
   templateVersion: string;
+  description?: string;
+  focusTags?: ReadonlyArray<string>;
+  sessionDurationMinutes?: number;
 }
 
 export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
@@ -52,6 +56,26 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
       durationWeeks: 8,
       deloadWeek: 7,
       templateVersion: "profile-8w-testing-v2",
+    },
+    {
+      id: "strict_strength_8w",
+      blockType: "mixed_strength",
+      name: "Strict Strength — 8 Weeks",
+      goal: "Build raw pulling and pressing strength for stronger gymnastics and better overall CrossFit performance.",
+      supportedFrequencies: [2],
+      durationWeeks: 8,
+      deloadWeek: null,
+      templateVersion: "strict-strength-8w-v1",
+      description:
+        "Build raw pulling and pressing strength for stronger gymnastics and better overall CrossFit performance.",
+      focusTags: [
+        "Pull-ups",
+        "Pressing",
+        "HSPU",
+        "Dips",
+        "Gymnastics strength",
+      ],
+      sessionDurationMinutes: 60,
     },
     {
       id: "endurance_capacity_6w",
@@ -168,6 +192,7 @@ export const V2_TEMPLATE_REGISTRY: ReadonlyArray<V2TemplateDefinition> =
 const SELECTABLE_TEMPLATE_IDS: ReadonlySet<V2TemplateId> = new Set([
   "mixed_strength_6w",
   "mixed_strength_8w_testing",
+  "strict_strength_8w",
   "endurance_capacity_6w",
   "gymnastics_capacity_6w",
   "competition_preparation_6w",
@@ -786,6 +811,7 @@ export const TRACK_ORDER: ReadonlyArray<ProgressionTrackType> = Object.freeze([
   "strict_pull",
   "toes_to_bar",
   "handstand",
+  "dip",
   "gymnastics_skill",
   "engine",
 ]);

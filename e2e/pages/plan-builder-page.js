@@ -119,9 +119,11 @@ class PlanBuilderPage {
     await setup
       .locator('select[name="v2AthleteLevel"]')
       .selectOption(athleteLevel);
-    await setup
-      .locator('select[name="v2Frequency"]')
-      .selectOption(String(frequency));
+    if (templateId !== "strict_strength_8w") {
+      await setup
+        .locator('select[name="v2Frequency"]')
+        .selectOption(String(frequency));
+    }
     for (const checkbox of await setup
       .locator('input[name="v2PreferredDay"]')
       .all()) {

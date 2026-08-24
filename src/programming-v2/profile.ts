@@ -10,6 +10,7 @@ import type {
   ProgrammeProfile,
   ProgramV2,
   ProgressionTrackType,
+  StrictPullupLevel,
   TrainingBlockType,
   V2ProgrammingGoal,
 } from "./types";
@@ -203,6 +204,17 @@ const PHASES: Record<ProgrammeDomain, string[]> = {
   ],
 };
 
+const STRICT_STRENGTH_PHASES = [
+  "foundation and strict movement quality",
+  "foundation volume and scapular control",
+  "strict strength volume",
+  "volume progression",
+  "weighted intensification",
+  "heavy strict strength",
+  "peak strength with reduced accessory volume",
+  "pulling and pressing benchmarks",
+];
+
 const GOAL_DOMAIN: Record<V2ProgrammingGoal, ProgrammeDomain> = {
   strength: "strength",
   endurance: "conditioning",
@@ -289,8 +301,18 @@ export function normalizeAthleteSkills(
     toesToBar: number(value?.toesToBar),
     barMuscleUps: number(value?.barMuscleUps),
     strictHspu: number(value?.strictHspu),
+    ringDips: number(value?.ringDips),
     handstandWalkMeters: number(value?.handstandWalkMeters),
   };
+}
+
+export function strictPullupLevel(
+  input: GenerateProgramInput,
+): StrictPullupLevel {
+  const pullUps = normalizeAthleteSkills(input.skills).pullUps;
+  if (pullUps <= 3) return "developing";
+  if (pullUps < 12) return "bodyweight";
+  return "weighted";
 }
 
 function gymnasticsPullingMovement(
@@ -399,8 +421,11 @@ export function createProgrammeProfile(
   input: GenerateProgramInput,
   fallbackBlockType: TrainingBlockType,
 ): ProgrammeProfile {
-  const primaryGoal = input.goal ?? "mixed";
-  const trainingBlock = input.blockType ?? fallbackBlockType;
+  const strictStrength = input.templateId === "strict_strength_8w";
+  const primaryGoal = strictStrength ? "strength" : (input.goal ?? "mixed");
+  const trainingBlock = strictStrength
+    ? "mixed_strength"
+    : (input.blockType ?? fallbackBlockType);
   const focus = blockFocus(trainingBlock, primaryGoal);
   const emphasis = normalizedEmphasis(primaryGoal, trainingBlock);
   const skills = normalizeAthleteSkills(input.skills);
@@ -413,17 +438,24 @@ export function createProgrammeProfile(
   const openProfile =
     ["open", "masters_open"].includes(primaryGoal) ||
     ["open_preparation", "masters_open_preparation"].includes(trainingBlock);
-  const testingTargets = openProfile
-    ? [gymnasticsTest, gymnasticsMidlineMovement(input)]
-    : focus === "gymnastics"
-      ? [gymnasticsTest, handstandMovement(input, 8)]
-      : focus === "olympic"
-        ? ["snatch", "clean_and_jerk"]
-        : focus === "strength"
-          ? ["back_squat", "strict_press"]
-          : focus === "conditioning"
-            ? ["row", "bike"]
-            : ["back_squat", gymnasticsTest];
+  const testingTargets = strictStrength
+    ? [
+        strictPullupLevel(input) === "weighted"
+          ? "weighted_pull_up"
+          : "strict_pull_up",
+        "strict_press",
+      ]
+    : openProfile
+      ? [gymnasticsTest, gymnasticsMidlineMovement(input)]
+      : focus === "gymnastics"
+        ? [gymnasticsTest, handstandMovement(input, 8)]
+        : focus === "olympic"
+          ? ["snatch", "clean_and_jerk"]
+          : focus === "strength"
+            ? ["back_squat", "strict_press"]
+            : focus === "conditioning"
+              ? ["row", "bike"]
+              : ["back_squat", gymnasticsTest];
   const conditioningStyle = openProfile
     ? "open"
     : primaryGoal === "competition" ||
@@ -448,7 +480,15 @@ export function createProgrammeProfile(
           ],
     trainingBlock,
     focus,
-    movementPriorities: priorities(focus),
+    movementPriorities: strictStrength
+      ? [
+          "strict_pull",
+          "vertical_press",
+          "handstand",
+          "horizontal_press",
+          "core",
+        ]
+      : priorities(focus),
     strengthPriority: emphasis.strength,
     gymnasticsPriority: emphasis.gymnastics,
     olympicPriority: emphasis.olympic,
@@ -456,9 +496,20 @@ export function createProgrammeProfile(
     skillPriority: Math.max(emphasis.gymnastics, emphasis.olympic),
     conditioningPriority: emphasis.conditioning,
     testingTargets,
-    movementExposureTargets: exposureTargets(focus),
-    movementLimits: movementLimits(focus),
-    progressionPhases: [...PHASES[focus]],
+    movementExposureTargets: strictStrength
+      ? {
+          strict_pull: { minimum: 16, maximum: 16 },
+          vertical_press: { minimum: 8, maximum: 8 },
+          handstand: { minimum: 8, maximum: 8 },
+          horizontal_press: { minimum: 8, maximum: 8 },
+        }
+      : exposureTargets(focus),
+    movementLimits: strictStrength
+      ? { kipping_pull: 0, toes_to_bar: 0, bar_muscle_up: 0 }
+      : movementLimits(focus),
+    progressionPhases: strictStrength
+      ? [...STRICT_STRENGTH_PHASES]
+      : [...PHASES[focus]],
     conditioningStyle,
   };
 }
@@ -475,6 +526,7 @@ function progressionStep(
     reps?: number | null;
     repRangeMin?: number | null;
     repRangeMax?: number | null;
+    durationSeconds?: number | null;
     intensityMethod?: TemplateProgressionStep["intensityMethod"];
     intensityMin?: number | null;
     intensityMax?: number | null;
@@ -496,7 +548,7 @@ function progressionStep(
     reps: options.reps ?? null,
     repRangeMin: options.repRangeMin ?? null,
     repRangeMax: options.repRangeMax ?? null,
-    durationSeconds: null,
+    durationSeconds: options.durationSeconds ?? null,
     intensityMethod: options.intensityMethod ?? "bodyweight",
     intensityMin: options.intensityMin ?? null,
     intensityMax: options.intensityMax ?? null,
@@ -549,6 +601,285 @@ function gymnasticsOptions(
       "Stop before movement quality, hollow-body position, or rep speed deteriorates.",
     minutes,
   };
+}
+
+function strictPressOptions(
+  weekNumber: number,
+): Parameters<typeof progressionStep>[6] {
+  const sets = [4, 4, 5, 5, 5, 5, 3, 3];
+  const reps = [6, 6, 5, 4, 4, 3, 2, 1];
+  const minimums = [65, 68, 70, 75, 78, 82, 87, 85];
+  const maximums = [70, 72, 75, 80, 82, 85, 92, 90];
+  return {
+    sets: sets[weekNumber - 1] ?? 4,
+    reps: reps[weekNumber - 1] ?? 4,
+    intensityMethod: "percentage_1rm",
+    intensityMin: minimums[weekNumber - 1] ?? 70,
+    intensityMax: maximums[weekNumber - 1] ?? 75,
+    restSeconds: weekNumber >= 5 ? 120 : 90,
+    intent: "Press from a braced trunk and finish over the mid-foot.",
+    objective: "Build measurable strict-press strength for HSPU development.",
+    stoppingRule:
+      "Leave 1–2 reps in reserve; stop before a grinding repetition.",
+    minutes: weekNumber === 7 ? 11 : 13,
+  };
+}
+
+function strictPullOptions(
+  input: GenerateProgramInput,
+  weekNumber: number,
+  secondary: boolean,
+): { movementId: string; options: Parameters<typeof progressionStep>[6] } {
+  const skills = normalizeAthleteSkills(input.skills);
+  const level = strictPullupLevel(input);
+  const hasBand = input.equipment.some((item) => item.toLowerCase() === "band");
+  let movementId = "strict_pull_up";
+  let reps = [3, 4, 4, 5, 4, 3, 2, 2][weekNumber - 1] ?? 3;
+  let intensityMethod: "bodyweight" | "rir" | "rpe" = "rir";
+  let intensityMin: number | null = 2;
+  let intensityMax: number | null = null;
+  const bodyweightBenchmark =
+    weekNumber === 8 && !secondary && level !== "weighted";
+
+  if (bodyweightBenchmark) {
+    movementId =
+      skills.pullUps > 0
+        ? "strict_pull_up"
+        : hasBand
+          ? "assisted_strict_pull_up"
+          : "eccentric_pull_up";
+    reps = 0;
+    intensityMethod = "bodyweight";
+    intensityMin = null;
+  } else if (level === "developing") {
+    movementId =
+      weekNumber <= 2 && hasBand
+        ? "assisted_strict_pull_up"
+        : skills.pullUps > 0 && weekNumber >= 4
+          ? "strict_pull_up"
+          : "eccentric_pull_up";
+    reps = movementId === "strict_pull_up" ? 1 : Math.min(3, weekNumber + 1);
+  } else if (level === "bodyweight") {
+    movementId =
+      weekNumber >= 5
+        ? skills.pullUps >= 10 && weekNumber === 7
+          ? "strict_chest_to_bar_pull_up"
+          : "tempo_strict_pull_up"
+        : "strict_pull_up";
+    reps = Math.min(reps, Math.max(2, skills.pullUps - 2));
+  } else if (weekNumber >= 5 && weekNumber <= 8) {
+    movementId = "weighted_pull_up";
+    reps = weekNumber >= 7 ? 2 : 3;
+    intensityMethod = "rpe";
+    intensityMin = weekNumber >= 7 ? 8 : 7;
+    intensityMax = weekNumber >= 7 ? 9 : 8;
+  } else {
+    movementId = weekNumber >= 3 ? "tempo_strict_pull_up" : "strict_pull_up";
+    reps = weekNumber === 1 ? 5 : 4;
+  }
+
+  return {
+    movementId,
+    options: {
+      sets: bodyweightBenchmark
+        ? 1
+        : Math.max(
+            3,
+            [4, 4, 5, 5, 5, 5, 3, 3][weekNumber - 1]! - (secondary ? 1 : 0),
+          ),
+      reps: bodyweightBenchmark
+        ? null
+        : secondary
+          ? Math.max(1, reps - 1)
+          : reps,
+      repRangeMin: bodyweightBenchmark ? 1 : null,
+      repRangeMax: bodyweightBenchmark ? Math.max(3, skills.pullUps + 3) : null,
+      intensityMethod,
+      intensityMin,
+      intensityMax,
+      restSeconds: secondary ? 75 : weekNumber >= 5 ? 120 : 90,
+      intent:
+        "Start from an active hang, keep the trunk hollow, and use no kip.",
+      objective: bodyweightBenchmark
+        ? "Test one maximum-quality strict pulling set and record completed repetitions."
+        : secondary
+          ? "Accumulate a second weekly strict-pulling exposure without failure."
+          : "Progress strict pulling from controlled bodyweight work to appropriate loading.",
+      stoppingRule: bodyweightBenchmark
+        ? "End the benchmark when the chin no longer clears the bar without kipping; record only strict repetitions."
+        : "Leave 1–3 reps in reserve and stop when rep speed slows.",
+      minutes: secondary ? 7 : weekNumber === 7 ? 13 : 15,
+    },
+  };
+}
+
+function strictHspuOptions(
+  input: GenerateProgramInput,
+  weekNumber: number,
+): { movementId: string; options: Parameters<typeof progressionStep>[6] } {
+  const skills = normalizeAthleteSkills(input.skills);
+  const hasBox = input.equipment.some((item) => item.toLowerCase() === "box");
+  let movementId = "floor_pike_handstand_push_up";
+  if (skills.strictHspu === 0) {
+    movementId =
+      weekNumber >= 5
+        ? "wall_strict_hspu_eccentric"
+        : weekNumber >= 3 && hasBox
+          ? "pike_handstand_push_up"
+          : "floor_pike_handstand_push_up";
+  } else if (
+    skills.strictHspu >= 8 &&
+    input.athleteLevel !== "beginner" &&
+    weekNumber >= 5 &&
+    weekNumber <= 7
+  ) {
+    movementId = "deficit_strict_handstand_push_up";
+  } else {
+    movementId =
+      weekNumber <= 2 && skills.strictHspu < 3
+        ? "wall_strict_hspu_eccentric"
+        : "strict_handstand_push_up";
+  }
+  const reps =
+    movementId === "wall_strict_hspu_eccentric"
+      ? 2
+      : movementId === "strict_handstand_push_up"
+        ? Math.max(1, Math.min(4, skills.strictHspu - 1))
+        : ([5, 6, 6, 7, 4, 4, 3, 3][weekNumber - 1] ?? 4);
+  return {
+    movementId,
+    options: {
+      sets: [4, 4, 5, 5, 5, 4, 3, 3][weekNumber - 1] ?? 4,
+      reps,
+      intensityMethod: "rir",
+      intensityMin: 2,
+      restSeconds: weekNumber >= 5 ? 105 : 90,
+      intent: "Keep the shoulders stacked and control the full range.",
+      objective:
+        "Progress strict inverted pressing without kipping or failure.",
+      stoppingRule:
+        "Leave about 2 reps in reserve; stop if the head or spine position changes.",
+      minutes: weekNumber === 7 ? 11 : 13,
+    },
+  };
+}
+
+function dipOptions(
+  input: GenerateProgramInput,
+  weekNumber: number,
+): { movementId: string; options: Parameters<typeof progressionStep>[6] } {
+  const ringDips = normalizeAthleteSkills(input.skills).ringDips;
+  const hasBand = input.equipment.some((item) => item.toLowerCase() === "band");
+  let movementId = "ring_dip";
+  if (ringDips === 0) {
+    movementId =
+      weekNumber >= 3 && hasBand ? "assisted_ring_dip" : "ring_support_hold";
+  } else if (ringDips >= 8 && weekNumber >= 5 && weekNumber <= 7) {
+    movementId = "weighted_dip";
+  } else if (weekNumber >= 5 && weekNumber <= 7) {
+    movementId = "tempo_ring_dip";
+  }
+  const isHold = movementId === "ring_support_hold";
+  const loaded = movementId === "weighted_dip";
+  return {
+    movementId,
+    options: {
+      sets: [3, 4, 4, 5, 5, 4, 3, 3][weekNumber - 1] ?? 4,
+      reps: isHold
+        ? null
+        : movementId === "assisted_ring_dip"
+          ? 4
+          : Math.max(1, Math.min(6, ringDips - 2)),
+      durationSeconds: isHold ? (weekNumber === 1 ? 20 : 30) : null,
+      intensityMethod: loaded ? "rpe" : "rir",
+      intensityMin: loaded ? (weekNumber >= 7 ? 8 : 7) : 2,
+      intensityMax: loaded ? (weekNumber >= 7 ? 9 : 8) : null,
+      restSeconds: loaded ? 120 : 75,
+      intent: "Keep the rings close, shoulders controlled, and lockout stable.",
+      objective:
+        "Progress support strength into controlled dip strength and loading.",
+      stoppingRule:
+        "Leave 1–3 reps in reserve; stop before shoulder position deteriorates.",
+      minutes: weekNumber === 7 ? 7 : 9,
+    },
+  };
+}
+
+export function buildStrictStrengthWeekTemplates(
+  input: GenerateProgramInput,
+): ReadonlyArray<MixedStrengthWeekTemplate> {
+  const themes = [
+    "Foundation · strict positions and scapular control",
+    "Foundation · repeatable strict volume",
+    "Volume · pulling and pressing accumulation",
+    "Volume · higher quality work capacity",
+    "Intensification · harder variations and loading",
+    "Intensification · heavy strict strength",
+    "Peak · high intensity and reduced accessories",
+    "Test · pulling and pressing benchmarks",
+  ];
+  return Object.freeze(
+    themes.map((theme, index) => {
+      const weekNumber = index + 1;
+      const primaryPull = strictPullOptions(input, weekNumber, false);
+      const secondaryPull = strictPullOptions(input, weekNumber, true);
+      const hspu = strictHspuOptions(input, weekNumber);
+      const dip = dipOptions(input, weekNumber);
+      return {
+        weekNumber,
+        theme,
+        day1ConditioningMinutes: 10,
+        day2ConditioningMinutes: weekNumber === 8 ? 10 : 12,
+        steps: [
+          progressionStep(
+            weekNumber,
+            1,
+            "primary",
+            "strict_pull",
+            "strict_pull",
+            primaryPull.movementId,
+            primaryPull.options,
+          ),
+          progressionStep(
+            weekNumber,
+            1,
+            "secondary",
+            "upper_body_press",
+            "vertical_press",
+            "strict_press",
+            strictPressOptions(weekNumber),
+          ),
+          progressionStep(
+            weekNumber,
+            2,
+            "primary",
+            "handstand",
+            "handstand",
+            hspu.movementId,
+            hspu.options,
+          ),
+          progressionStep(
+            weekNumber,
+            2,
+            "secondary",
+            "dip",
+            "horizontal_press",
+            dip.movementId,
+            dip.options,
+          ),
+          progressionStep(
+            weekNumber,
+            2,
+            "secondary",
+            "gymnastics_skill",
+            "strict_pull",
+            secondaryPull.movementId,
+            secondaryPull.options,
+          ),
+        ],
+      };
+    }),
+  );
 }
 
 function profileSteps(
