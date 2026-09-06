@@ -195,6 +195,10 @@ function regenerateConditioning(
         ...conditioning,
         id: stableUuid(session.id, "conditioning", seed),
         movements,
+        stations: (conditioning.stations ?? []).map((station, index) => ({
+          ...station,
+          movement: movements[index] ?? station.movement,
+        })),
       },
       { level: athleteLevel },
     ),

@@ -1107,6 +1107,39 @@ test("renders rotating EMOMs with explicit minute assignments", () => {
   assert.doesNotMatch(rendered, /EMOM: .*?, .*?,/);
 });
 
+test("regenerating EMOMs preserves valid minute assignments and the original session", () => {
+  for (const executionMode of ["rotate", "all-every-minute"]) {
+    const program = generate();
+    const session = sessions(program).find(
+      (candidate) =>
+        candidate.weekNumber === 2 && candidate.sessionNumber === 1,
+    );
+    session.conditioning.executionMode = executionMode;
+    session.conditioning.rounds = executionMode === "rotate" ? 3 : 9;
+    const before = structuredClone(program);
+    const result = v2.regenerateSessionSection({
+      program,
+      sessionId: session.id,
+      scope: "conditioning",
+      seed: "rotate-emom",
+    });
+    const next = v2.findSession(result.program, session.id).conditioning;
+    assert.equal(result.validation.valid, true);
+    assert.notDeepEqual(next.movements, session.conditioning.movements);
+    assert.deepEqual(
+      next.stations.map((station) => station.movement),
+      next.movements,
+    );
+    assert.deepEqual(
+      next.stations.map((station) => station.minute),
+      [1, 2, 3],
+    );
+    assert.equal(next.rounds, session.conditioning.rounds);
+    assert.equal(next.executionMode, executionMode);
+    assert.deepEqual(program, before);
+  }
+});
+
 test("rejects rotating EMOMs whose duration cannot complete a round", () => {
   const program = generate();
   const session = sessions(program).find(
