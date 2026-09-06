@@ -439,6 +439,15 @@ test("@critical Strict Strength generates, benchmarks, and reloads its selected 
   );
   await expect(programme).toContainText(/Retest Strict pull-up capacity/i);
   await expect(programme).toContainText(/Test Strict press true 1rm/i);
+  const maxTestCard = programme.getByTestId("v2-session-card").filter({
+    hasText: "Test Strict press true 1rm",
+  });
+  await expect(maxTestCard).toContainText("Planned attempts:");
+  await expect(maxTestCard).toContainText("Stopping rules:");
+  await expect(maxTestCard).toContainText("58 min");
+  await expect(maxTestCard).not.toContainText("Primary progression");
+  await expect(maxTestCard).not.toContainText("Secondary progression");
+  await expect(maxTestCard).not.toContainText("Conditioning");
   expect((await readAppState(page)).selectedWeek).toBe(8);
 
   await page.reload();
@@ -449,6 +458,8 @@ test("@critical Strict Strength generates, benchmarks, and reloads its selected 
   await expect(page.getByTestId("v2-programme")).toContainText(
     "Week 8 – Session 1",
   );
+  await expect(maxTestCard).toContainText("Planned attempts:");
+  await expect(maxTestCard).not.toContainText("Primary progression");
   program = activeV2Program(await readAppState(page));
   expect(program.trainingBlocks[0].templateId).toBe("strict_strength_8w");
   expect((await readAppState(page)).selectedWeek).toBe(8);

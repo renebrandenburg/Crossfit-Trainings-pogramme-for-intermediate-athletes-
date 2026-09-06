@@ -331,16 +331,22 @@ export function formatSessionForDisplay(
     });
   }
   sections.push(exerciseSection(session, "accessory", "Accessory or cooldown"));
+  // Testing prescriptions include their own build-up and attempts. Older saved
+  // sessions also retain the template workout; it is not additional test work.
+  const maxTest =
+    session.sessionType === "max_test" ? session.maxTestPrescription : null;
   return {
     id: session.id,
     weekNumber: session.weekNumber,
     sessionNumber: session.sessionNumber,
     heading: `Week ${session.weekNumber} – Session ${session.sessionNumber}`,
     objective: session.objective,
-    estimatedTime: `${session.estimatedDurationMinutes} min`,
+    estimatedTime: `${maxTest?.estimatedDurationMinutes ?? session.estimatedDurationMinutes} min`,
     fatigue: `${session.expectedFatigue}, ${session.fatigueFocus.replaceAll("_", " ")}`,
     provisional: session.provisional,
     communityWorkoutAdvice: session.communityWorkoutAdvice,
-    sections,
+    sections: maxTest
+      ? sections.filter((section) => section.id === `${session.id}-max-test`)
+      : sections,
   };
 }

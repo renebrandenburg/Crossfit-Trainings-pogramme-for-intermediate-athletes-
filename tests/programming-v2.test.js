@@ -1355,6 +1355,38 @@ test("eight-week testing template creates explicit test sessions in week eight",
   assert.equal(v2.validateProgram(program).valid, true);
 });
 
+test("max-test display replaces inherited template work, including saved sessions", () => {
+  const program = generate({ templateId: "mixed_strength_8w_testing" });
+  for (const original of program.trainingBlocks[0].trainingWeeks[7].sessions) {
+    const session = JSON.parse(JSON.stringify(original));
+    const before = structuredClone(session);
+    const rendered = v2.formatSessionForDisplay(session);
+    assert.deepEqual(
+      rendered.sections.map((section) => section.title),
+      ["Max test"],
+    );
+    assert.equal(
+      rendered.estimatedTime,
+      `${session.maxTestPrescription.estimatedDurationMinutes} min`,
+    );
+    const text = rendered.sections[0].lines.join("\n");
+    assert.match(text, /Warm-up and build-up:/);
+    assert.match(text, /Planned attempts:/);
+    assert.match(text, /personal record attempt/);
+    assert.match(text, /Stopping rules:/);
+    assert.match(text, /Fallback:/);
+    assert.deepEqual(session, before);
+  }
+  const training = v2.formatSessionForDisplay(
+    program.trainingBlocks[0].trainingWeeks[0].sessions[0],
+  );
+  assert.ok(
+    training.sections.some(
+      (section) => section.title === "Primary progression",
+    ),
+  );
+});
+
 test("max-test calculations enforce estimates and the two-failure stopping rule", () => {
   assert.equal(v2.calculateEstimatedOneRepMax(100, 5, "epley"), 116.7);
   assert.equal(v2.calculateEstimatedOneRepMax(100, 5, "brzycki"), 112.5);
