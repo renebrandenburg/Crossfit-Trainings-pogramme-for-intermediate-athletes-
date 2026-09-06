@@ -1605,7 +1605,7 @@
     const finishTimerToLog = ReactRuntime.useCallback(
       (session, timerResult, competitionProof = null) => {
         const week = clamp(Number(session.week) || appState.selectedWeek, 1, 8);
-        const dayId = session.logDayId || session.id;
+        const dayId = session.id;
         setPendingTimerResult({
           ...timerResult,
           competitionProof,
