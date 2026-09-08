@@ -465,6 +465,40 @@ test("@critical Strict Strength generates, benchmarks, and reloads its selected 
   expect((await readAppState(page)).selectedWeek).toBe(8);
 });
 
+test("@critical mixed test week shows all lifts and conditioning after reload", async ({
+  page,
+}, testInfo) => {
+  const app = new AppShell(page);
+  const builder = new PlanBuilderPage(page);
+  await app.open();
+  await builder.open();
+  await builder.generateV2({
+    templateId: "mixed_strength_8w_testing",
+    frequency: 2,
+    preferredDays: ["tuesday", "saturday"],
+  });
+  await page.getByRole("button", { name: "Week 8", exact: true }).click();
+  const programme = page.getByTestId("v2-programme");
+  const cards = programme.getByTestId("v2-session-card");
+  await expect(cards).toHaveCount(2);
+  await expect(cards.nth(0)).toContainText("Max test: Snatch");
+  await expect(cards.nth(0)).toContainText("Max test: Front squat");
+  await expect(cards.nth(1)).toContainText("Max test: Clean and jerk");
+  await expect(cards.nth(1)).toContainText("30-minute EMOM");
+  await expect(cards.nth(0)).toContainText("65 min");
+  await expect(cards.nth(1)).toContainText("65 min");
+  await expect(programme).not.toContainText("Primary progression");
+  await expect(programme.locator(".v2-max-test")).toHaveCount(3);
+  await page.screenshot({
+    path: testInfo.outputPath("mixed-test-week.png"),
+    fullPage: true,
+  });
+  await page.reload();
+  await builder.open();
+  await expect(cards.nth(0)).toContainText("Max test: Front squat");
+  await expect(cards.nth(1)).toContainText("30-minute EMOM");
+});
+
 test("@critical REG-001 saved V2 programmes switch, rename, delete, and persist", async ({
   page,
 }) => {

@@ -3,6 +3,7 @@ import {
   findSession,
   internalEngine,
   replaceSession,
+  applyMixedTestWeekPlan,
 } from "./engine";
 import type {
   CompletionInput,
@@ -16,12 +17,14 @@ import type {
   RegenerationInput,
   RegenerationResult,
   TrainingSession,
+  MaxTestPrescription,
 } from "./types";
 import {
   applyMaxAttemptResult,
   calculateMaxTestEligibility,
   maxSourceForTest,
   proposeMaxUpdate,
+  sessionMaxTests,
 } from "./max-testing";
 import { assertValidProgram, validateProgram } from "./validation";
 import {
@@ -256,6 +259,47 @@ export function regenerateSessionSection(
   if (original.status === "completed") {
     throw new Error("Completed sessions cannot be regenerated.");
   }
+  if (
+    original.weekNumber === 8 &&
+    input.scope === "full_session" &&
+    input.program.generationRequest.programmeType ===
+      "mixed_strength_8w_testing" &&
+    input.program.generationRequest.sessionsPerWeek === 2 &&
+    (!input.program.programmeProfile ||
+      (input.program.programmeProfile.primaryGoal === "mixed" &&
+        input.program.programmeProfile.trainingBlock === "mixed_strength"))
+  ) {
+    const program = cloneProgram(input.program);
+    if (applyMixedTestWeekPlan(program)) {
+      program.updatedAt = new Date().toISOString();
+      const block = program.trainingBlocks.find(
+        (item) => item.id === program.activeTrainingBlockId,
+      )!;
+      block.updatedAt = program.updatedAt;
+      block.trainingWeeks
+        .find((week) => week.weekNumber === 8)!
+        .sessions.forEach((session) => {
+          session.updatedAt = program.updatedAt;
+        });
+    }
+    const validation = validateProgram(program);
+    if (!validation.valid) throw new Error("TEST_WEEK_PLAN_INVALID");
+    return {
+      program: { ...program, validation },
+      validation,
+      changedSectionIds: program.trainingBlocks.flatMap((block) =>
+        block.trainingWeeks
+          .filter((week) => week.weekNumber === 8)
+          .flatMap((week) =>
+            week.sessions.flatMap((session) =>
+              session.sections.map((section) => section.id),
+            ),
+          ),
+      ),
+    };
+  }
+  if (original.testWeekPlanVersion === 1)
+    throw new Error("TEST_WEEK_SECTIONS_ARE_FIXED");
   let replacement = original;
   const changedSectionIds: string[] = [];
   if (input.scope === "conditioning" || input.scope === "full_session") {
@@ -469,6 +513,16 @@ export function applySessionCompletion(
   };
 }
 
+function replaceMaxTest(session: TrainingSession, test: MaxTestPrescription) {
+  return session.maxTestPrescription?.id === test.id
+    ? { maxTestPrescription: test }
+    : {
+        additionalMaxTestPrescriptions: (
+          session.additionalMaxTestPrescriptions ?? []
+        ).map((item) => (item.id === test.id ? test : item)),
+      };
+}
+
 export function recordMaxAttempt(input: MaxAttemptInput): ProgramV2 {
   assertValidProgram(input.program);
   const program = cloneProgram(input.program);
@@ -479,18 +533,22 @@ export function recordMaxAttempt(input: MaxAttemptInput): ProgramV2 {
   if (session.status === "completed") {
     throw new Error("Completed sessions cannot record attempts.");
   }
+  const prescription = input.prescriptionId
+    ? sessionMaxTests(session).find((test) => test.id === input.prescriptionId)
+    : session.maxTestPrescription;
+  if (!prescription) throw new Error("MAX_TEST_PRESCRIPTION_NOT_FOUND");
   const refreshedEligibility = calculateMaxTestEligibility({
-    movementId: session.maxTestPrescription.movementId,
-    athleteLevel: session.maxTestPrescription.athleteLevel,
+    movementId: prescription.movementId,
+    athleteLevel: prescription.athleteLevel,
     sessions: allSessions(program),
   });
   const updatedSession = {
     ...session,
     revision: session.revision + 1,
-    maxTestPrescription: {
-      ...applyMaxAttemptResult(session.maxTestPrescription, input.result),
+    ...replaceMaxTest(session, {
+      ...applyMaxAttemptResult(prescription, input.result),
       eligibility: refreshedEligibility,
-    },
+    }),
     updatedAt: new Date().toISOString(),
   };
   const replacement = replaceSession(program, updatedSession);
@@ -503,7 +561,12 @@ export function confirmMaxUpdate(input: MaxUpdateInput): ProgramV2 {
   assertValidProgram(input.program);
   const program = cloneProgram(input.program);
   const session = findSession(program, input.sessionId);
-  const prescription = session?.maxTestPrescription;
+  const prescription =
+    session && input.prescriptionId
+      ? sessionMaxTests(session).find(
+          (test) => test.id === input.prescriptionId,
+        )
+      : session?.maxTestPrescription;
   if (!session || !prescription) throw new Error("MAX_TEST_SESSION_REQUIRED");
   const update = proposeMaxUpdate(
     prescription,
@@ -565,10 +628,10 @@ export function confirmMaxUpdate(input: MaxUpdateInput): ProgramV2 {
   const updatedSession = {
     ...session,
     revision: session.revision + 1,
-    maxTestPrescription: {
+    ...replaceMaxTest(session, {
       ...prescription,
       maxUpdate: update,
-    },
+    }),
     updatedAt: input.confirmedAt,
   };
   program.trainingBlocks = replaceSession(

@@ -1379,7 +1379,7 @@ test("eight-week testing template creates explicit test sessions in week eight",
       session.maxTestPrescription?.testType,
     ]),
     [
-      ["max_test", "true_1rm"],
+      ["max_test", "technical_1rm"],
       ["max_test", "technical_1rm"],
     ],
   );
@@ -1394,14 +1394,21 @@ test("max-test display replaces inherited template work, including saved session
     const session = JSON.parse(JSON.stringify(original));
     const before = structuredClone(session);
     const rendered = v2.formatSessionForDisplay(session);
-    assert.deepEqual(
-      rendered.sections.map((section) => section.title),
-      ["Max test"],
-    );
     assert.equal(
-      rendered.estimatedTime,
-      `${session.maxTestPrescription.estimatedDurationMinutes} min`,
+      rendered.sections.filter((section) =>
+        section.title.startsWith("Max test:"),
+      ).length,
+      v2.sessionMaxTests(session).length,
     );
+    assert.ok(
+      rendered.sections.every(
+        (section) =>
+          !["Primary progression", "Secondary progression", "Warm-up"].includes(
+            section.title,
+          ),
+      ),
+    );
+    assert.equal(rendered.estimatedTime, "65 min");
     const text = rendered.sections[0].lines.join("\n");
     assert.match(text, /Warm-up and build-up:/);
     assert.match(text, /Planned attempts:/);
@@ -1417,6 +1424,158 @@ test("max-test display replaces inherited template work, including saved session
     training.sections.some(
       (section) => section.title === "Primary progression",
     ),
+  );
+});
+
+test("mixed test week covers all three lifts in two 65-minute sessions", () => {
+  const program = generate({ templateId: "mixed_strength_8w_testing" });
+  const [first, second] = program.trainingBlocks[0].trainingWeeks[7].sessions;
+  assert.deepEqual(
+    v2.sessionMaxTests(first).map((item) => item.movementId),
+    ["snatch", "front_squat"],
+  );
+  assert.deepEqual(
+    v2.sessionMaxTests(second).map((item) => item.movementId),
+    ["clean_and_jerk"],
+  );
+  assert.equal(first.conditioning, null);
+  assert.equal(second.conditioning.durationMinutes, 30);
+  assert.equal(second.conditioning.rounds, 10);
+  for (const session of [first, second]) {
+    assert.equal(session.estimatedDurationMinutes, 65);
+    assert.equal(
+      session.sections.reduce(
+        (sum, section) => sum + section.estimatedDurationMinutes,
+        0,
+      ),
+      65,
+    );
+    for (const prescription of v2.sessionMaxTests(session)) {
+      assert.equal(prescription.warmupSets.length, 5);
+      assert.equal(prescription.plannedAttempts.length, 3);
+      assert.ok(prescription.minimumRestSeconds >= 240);
+    }
+  }
+  const display = v2.formatSessionForDisplay(second);
+  assert.ok(
+    display.sections.some(
+      (section) =>
+        section.title === "Conditioning" && section.estimatedTime === "30 min",
+    ),
+  );
+  const invalid = structuredClone(program);
+  invalid.trainingBlocks[0].trainingWeeks[7].sessions[1].conditioning.estimatedDurationMinutes = 40;
+  assert.equal(v2.validateProgram(invalid).valid, false);
+});
+
+test("two tests keep attempts and confirmed PRs separate across persistence", () => {
+  let program = generate({ templateId: "mixed_strength_8w_testing" });
+  const session = program.trainingBlocks[0].trainingWeeks[7].sessions[0];
+  const [snatch, squat] = v2.sessionMaxTests(session);
+  const result = {
+    attemptNumber: 1,
+    loadKg: 130,
+    result: "success",
+    perceivedRpe: 9,
+    technicalQuality: "good",
+    painReported: false,
+    notes: null,
+  };
+  program = v2.recordMaxAttempt({
+    program,
+    sessionId: session.id,
+    prescriptionId: squat.id,
+    result,
+  });
+  assert.equal(
+    v2.findSession(program, session.id).maxTestPrescription.attemptResults
+      .length,
+    0,
+  );
+  program = v2.confirmMaxUpdate({
+    program,
+    sessionId: session.id,
+    prescriptionId: squat.id,
+    confirmedAt: "2026-09-22T12:00:00Z",
+  });
+  program = v2.recordMaxAttempt({
+    program,
+    sessionId: session.id,
+    prescriptionId: snatch.id,
+    result: { ...result, loadKg: 80 },
+  });
+  program = v2.confirmMaxUpdate({
+    program,
+    sessionId: session.id,
+    prescriptionId: snatch.id,
+    confirmedAt: "2026-09-22T12:01:00Z",
+  });
+  let saved;
+  v2.persistValidatedProgram(program, (value) => {
+    saved = JSON.stringify(value);
+  });
+  const restored = JSON.parse(saved);
+  assert.equal(v2.validateProgram(restored).valid, true);
+  assert.deepEqual(
+    v2
+      .sessionMaxTests(v2.findSession(restored, session.id))
+      .map((item) => item.attemptResults[0].loadKg),
+    [80, 130],
+  );
+  assert.equal(
+    restored.movementMaxes.find((item) => item.movementId === "front_squat")
+      .testedOneRepMaxKg,
+    130,
+  );
+  assert.equal(
+    restored.movementMaxes.find((item) => item.movementId === "snatch")
+      .technicalOneRepMaxKg,
+    80,
+  );
+  assert.throws(
+    () =>
+      v2.recordMaxAttempt({
+        program,
+        sessionId: session.id,
+        prescriptionId: "missing",
+        result,
+      }),
+    /NOT_FOUND/,
+  );
+});
+
+test("updating an untouched test week preserves previous weeks and rejects started tests", () => {
+  const original = generate({ templateId: "mixed_strength_8w_testing" });
+  for (const session of original.trainingBlocks[0].trainingWeeks[7].sessions)
+    delete session.testWeekPlanVersion;
+  const before = structuredClone(original);
+  const sessionId = original.trainingBlocks[0].trainingWeeks[7].sessions[0].id;
+  const upgraded = v2.regenerateSessionSection({
+    program: original,
+    sessionId,
+    scope: "full_session",
+    seed: "update",
+  }).program;
+  assert.deepEqual(original, before);
+  assert.deepEqual(
+    upgraded.trainingBlocks[0].trainingWeeks.slice(0, 7),
+    before.trainingBlocks[0].trainingWeeks.slice(0, 7),
+  );
+  assert.ok(
+    upgraded.trainingBlocks[0].trainingWeeks[7].sessions.every(
+      (item) => item.testWeekPlanVersion === 1,
+    ),
+  );
+  original.trainingBlocks[0].trainingWeeks[7].sessions[0].status = "completed";
+  assert.throws(
+    () =>
+      v2.regenerateSessionSection({
+        program: original,
+        sessionId: original.trainingBlocks[0].trainingWeeks[7].sessions[1].id,
+        scope: "full_session",
+        seed: "update",
+      }),
+    /ALREADY_STARTED/,
   );
 });
 

@@ -248,12 +248,14 @@ export interface MaxTestPrescription {
 export interface MaxAttemptInput {
   program: ProgramV2;
   sessionId: string;
+  prescriptionId?: string;
   result: MaxAttemptResult;
 }
 
 export interface MaxUpdateInput {
   program: ProgramV2;
   sessionId: string;
+  prescriptionId?: string;
   confirmedAt: string;
   trainingMaxPercentage?: number;
 }
@@ -671,6 +673,8 @@ export interface TrainingSession {
   stress: SessionStress;
   feedback: SessionFeedback | null;
   maxTestPrescription: MaxTestPrescription | null;
+  additionalMaxTestPrescriptions?: MaxTestPrescription[];
+  testWeekPlanVersion?: number;
   createdAt: string;
   updatedAt: string;
 }

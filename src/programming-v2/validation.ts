@@ -11,7 +11,7 @@ import type {
   ValidationResult,
 } from "./types";
 import { VALIDATOR_VERSION } from "./types";
-import { validateMaxTestPrescription } from "./max-testing";
+import { validateMaxTestPrescription, sessionMaxTests } from "./max-testing";
 import { V2_TEMPLATE_REGISTRY, getV2TemplateDefinition } from "./template";
 import { validateProgrammeIdentity } from "./profile";
 import {
@@ -690,6 +690,67 @@ export function validateSession(
   path = `sessions.${session.id}`,
 ): ValidationResult {
   const issues: ValidationIssue[] = [];
+  const tests = sessionMaxTests(session);
+  for (const test of session.additionalMaxTestPrescriptions ?? []) {
+    issues.push(
+      ...validateMaxTestPrescription(test).map((message) =>
+        issue(
+          "INVALID_MAX_TEST_PRESCRIPTION",
+          "error",
+          `${path}.additionalMaxTestPrescriptions`,
+          message,
+        ),
+      ),
+    );
+  }
+  if (
+    (session.additionalMaxTestPrescriptions?.length ?? 0) > 0 &&
+    (session.sessionType !== "max_test" || !session.maxTestPrescription)
+  ) {
+    issues.push(
+      issue(
+        "UNEXPECTED_MAX_TEST_PRESCRIPTION",
+        "error",
+        path,
+        "Additional tests require a max-test session and primary test.",
+      ),
+    );
+  }
+  if (
+    new Set(tests.map((test) => test.id)).size !== tests.length ||
+    new Set(tests.map((test) => test.movementId)).size !== tests.length ||
+    tests.some((test) => test.sessionId !== session.id)
+  ) {
+    issues.push(
+      issue(
+        "INVALID_MAX_TEST_IDENTITY",
+        "error",
+        path,
+        "Each test must have a distinct identity and movement within its session.",
+      ),
+    );
+  }
+  if (session.testWeekPlanVersion === 1) {
+    const total =
+      tests.reduce((sum, test) => sum + test.estimatedDurationMinutes, 0) +
+      (session.conditioning?.estimatedDurationMinutes ?? 0) +
+      5;
+    if (
+      session.sessionType !== "max_test" ||
+      !tests.length ||
+      total !== session.estimatedDurationMinutes ||
+      total > 65
+    ) {
+      issues.push(
+        issue(
+          "TEST_SESSION_DURATION_MISMATCH",
+          "error",
+          path,
+          "Tests, transitions and conditioning must fit the complete session estimate within 65 minutes.",
+        ),
+      );
+    }
+  }
   if (session.sessionType === "max_test") {
     if (!session.maxTestPrescription) {
       issues.push(

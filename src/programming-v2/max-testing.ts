@@ -82,6 +82,17 @@ export function defaultTestType(movementId: string): MaxTestType | null {
   return null;
 }
 
+export function sessionMaxTests(
+  session: TrainingSession,
+): MaxTestPrescription[] {
+  return session.maxTestPrescription
+    ? [
+        session.maxTestPrescription,
+        ...(session.additionalMaxTestPrescriptions ?? []),
+      ]
+    : [];
+}
+
 export function calculateEstimatedOneRepMax(
   loadKg: number,
   reps: number,

@@ -9,6 +9,7 @@ import type {
   WarmupExercise,
 } from "./types";
 import { calculateWorkingWeight } from "./duration";
+import { sessionMaxTests } from "./max-testing";
 
 function numberText(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
@@ -288,14 +289,26 @@ export function formatSessionForDisplay(
     exerciseSection(session, "primary", "Primary progression"),
     exerciseSection(session, "secondary", "Secondary progression"),
   ];
-  if (session.sessionType === "max_test" && session.maxTestPrescription) {
-    sections.push({
-      id: `${session.id}-max-test`,
-      title: "Max test",
-      estimatedTime: `${numberText(session.maxTestPrescription.estimatedDurationMinutes)} min`,
-      exercises: [],
-      lines: maxTestLines(session),
-    });
+  if (session.sessionType === "max_test") {
+    for (const test of sessionMaxTests(session)) {
+      sections.push({
+        id: `${session.id}-max-test-${test.id}`,
+        title: `Max test: ${test.movementName}`,
+        estimatedTime: `${numberText(test.estimatedDurationMinutes)} min`,
+        exercises: [],
+        lines: maxTestLines({ ...session, maxTestPrescription: test }),
+      });
+    }
+    if (session.testWeekPlanVersion === 1)
+      sections.push({
+        id: `${session.id}-test-transition`,
+        title: "Transition and recovery",
+        estimatedTime: "5 min",
+        exercises: [],
+        lines: [
+          "Keep the session within 65 minutes. Preserve the full rest between attempts; omit an optional attempt or shorten conditioning if time runs out.",
+        ],
+      });
   }
   if (conditioning) {
     sections.push({
@@ -341,12 +354,20 @@ export function formatSessionForDisplay(
     sessionNumber: session.sessionNumber,
     heading: `Week ${session.weekNumber} – Session ${session.sessionNumber}`,
     objective: session.objective,
-    estimatedTime: `${maxTest?.estimatedDurationMinutes ?? session.estimatedDurationMinutes} min`,
+    estimatedTime: `${session.testWeekPlanVersion === 1 ? session.estimatedDurationMinutes : (maxTest?.estimatedDurationMinutes ?? session.estimatedDurationMinutes)} min`,
     fatigue: `${session.expectedFatigue}, ${session.fatigueFocus.replaceAll("_", " ")}`,
     provisional: session.provisional,
     communityWorkoutAdvice: session.communityWorkoutAdvice,
     sections: maxTest
-      ? sections.filter((section) => section.id === `${session.id}-max-test`)
+      ? sections.filter(
+          (section) =>
+            section.id.startsWith(`${session.id}-max-test-`) ||
+            (session.testWeekPlanVersion === 1 &&
+              [
+                `${session.id}-conditioning`,
+                `${session.id}-test-transition`,
+              ].includes(section.id)),
+        )
       : sections,
   };
 }

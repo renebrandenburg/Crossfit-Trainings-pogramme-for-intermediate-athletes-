@@ -2287,7 +2287,7 @@
       }
     }
 
-    async function handleRecordV2MaxAttempt(sessionId, result) {
+    async function handleRecordV2MaxAttempt(sessionId, result, prescriptionId) {
       if (!v2Api?.recordMaxAttempt) return;
       const current = (appStateRef.current.v2Programs || []).find(
         (program) => program.id === appStateRef.current.activeV2ProgramId,
@@ -2295,6 +2295,7 @@
       if (!current) return;
       try {
         const updated = v2Api.recordMaxAttempt({
+          prescriptionId,
           program: current,
           sessionId,
           result,
@@ -2313,7 +2314,7 @@
       }
     }
 
-    async function handleConfirmV2MaxUpdate(sessionId) {
+    async function handleConfirmV2MaxUpdate(sessionId, prescriptionId) {
       if (!v2Api?.confirmMaxUpdate) return;
       const current = (appStateRef.current.v2Programs || []).find(
         (program) => program.id === appStateRef.current.activeV2ProgramId,
@@ -2321,6 +2322,7 @@
       if (!current) return;
       try {
         const updated = v2Api.confirmMaxUpdate({
+          prescriptionId,
           program: current,
           sessionId,
           confirmedAt: new Date().toISOString(),
@@ -4812,6 +4814,9 @@
           ? isV2
             ? h(V2SessionCard, {
                 session: recommendedSession.v2Session,
+                canUpdateTestWeek: v2Api.canUpdateMixedTestWeek(
+                  selectActiveV2Program(appState),
+                ),
                 onRegenerate: onRegenerateV2,
                 onComplete: onCompleteV2,
                 onRecordMaxAttempt,
@@ -5894,6 +5899,9 @@
                 session?.engineVersion === "v2"
                   ? h(V2SessionCard, {
                       session: session.v2Session,
+                      canUpdateTestWeek: v2Api.canUpdateMixedTestWeek(
+                        selectActiveV2Program(appState),
+                      ),
                       onRegenerate: onRegenerateV2,
                       onComplete: onCompleteV2,
                       onRecordMaxAttempt,
@@ -8624,8 +8632,12 @@
     );
   }
 
-  function V2MaxTestForm({ session, onRecord, onConfirm }) {
-    const test = session.maxTestPrescription;
+  function V2MaxTestForm({
+    session,
+    test = session.maxTestPrescription,
+    onRecord,
+    onConfirm,
+  }) {
     if (!test) return null;
     const nextAttempt = test.plannedAttempts.find(
       (attempt) =>
@@ -8636,7 +8648,7 @@
     return h(
       "details",
       { className: "v2-completion v2-max-test" },
-      h("summary", null, "Record max-test attempt"),
+      h("summary", null, `Record ${test.movementName} attempt`),
       h(
         "p",
         { className: test.eligibility.eligible ? "notice" : "error-message" },
@@ -8657,17 +8669,21 @@
           onSubmit: (event) => {
             event.preventDefault();
             const data = new FormData(event.currentTarget);
-            onRecord(session.id, {
-              attemptNumber: Number(data.get("maxAttemptNumber")),
-              loadKg: Number(data.get("maxAttemptLoad")),
-              result: String(data.get("maxAttemptResult")),
-              perceivedRpe: Number(data.get("maxAttemptRpe") || 0) || null,
-              technicalQuality: String(
-                data.get("maxAttemptQuality") || "acceptable",
-              ),
-              painReported: data.get("maxAttemptPain") === "on",
-              notes: String(data.get("maxAttemptNotes") || "").trim() || null,
-            });
+            onRecord(
+              session.id,
+              {
+                attemptNumber: Number(data.get("maxAttemptNumber")),
+                loadKg: Number(data.get("maxAttemptLoad")),
+                result: String(data.get("maxAttemptResult")),
+                perceivedRpe: Number(data.get("maxAttemptRpe") || 0) || null,
+                technicalQuality: String(
+                  data.get("maxAttemptQuality") || "acceptable",
+                ),
+                painReported: data.get("maxAttemptPain") === "on",
+                notes: String(data.get("maxAttemptNotes") || "").trim() || null,
+              },
+              test.id,
+            );
           },
         },
         h(
@@ -8770,7 +8786,7 @@
             {
               className: "ghost-button",
               type: "button",
-              onClick: () => onConfirm(session.id),
+              onClick: () => onConfirm(session.id, test.id),
             },
             "Confirm new max and update training max",
           )
@@ -8780,6 +8796,7 @@
 
   function V2SessionCard({
     session,
+    canUpdateTestWeek = false,
     onRegenerate,
     onComplete,
     onRecordMaxAttempt = () => {},
@@ -8849,17 +8866,33 @@
       ),
       session.status === "planned"
         ? session.sessionType === "max_test"
-          ? h(V2MaxTestForm, {
-              session,
-              onRecord: onRecordMaxAttempt,
-              onConfirm: onConfirmMaxUpdate,
-            })
+          ? v2Api.sessionMaxTests(session).map((test) =>
+              h(V2MaxTestForm, {
+                key: test.id,
+                test,
+                session,
+                onRecord: onRecordMaxAttempt,
+                onConfirm: onConfirmMaxUpdate,
+              }),
+            )
           : h(V2CompletionForm, {
               session,
               onComplete: (feedback) => onComplete(session.id, feedback),
             })
         : null,
-      session.status === "planned"
+      canUpdateTestWeek && session.weekNumber === 8
+        ? h(
+            "button",
+            {
+              className: "ghost-button",
+              type: "button",
+              onClick: () => regenerate("full_session"),
+              disabled: regenerating,
+            },
+            "Update test week: snatch + front squat / clean & jerk + EMOM",
+          )
+        : null,
+      session.status === "planned" && session.sessionType !== "max_test"
         ? h(
             "div",
             { className: "v2-actions" },
@@ -9122,6 +9155,7 @@
               h(V2SessionCard, {
                 key: session.id,
                 session,
+                canUpdateTestWeek: v2Api.canUpdateMixedTestWeek(program),
                 onRegenerate,
                 onComplete,
                 onRecordMaxAttempt,

@@ -1231,6 +1231,55 @@ test("React renders complete V2 strength and skill prescriptions from the valida
   }
 });
 
+test("mixed test week displays three separate test forms and saves a front squat attempt", async () => {
+  const mounted = mountApp();
+  try {
+    openMoreTool(mounted, "Build programme");
+    mounted.fireEvent.change(mounted.ui.getByLabelText("Training template"), {
+      target: { value: "mixed_strength_8w_testing" },
+    });
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Generate six-week V2 block" }),
+    );
+    await mounted.waitFor(() =>
+      assert.ok(mounted.readState().activeV2ProgramId),
+    );
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Week 8", exact: true }),
+    );
+    const programme = mounted.ui.getByTestId("v2-programme");
+    await mounted.waitFor(() =>
+      assert.equal(programme.querySelectorAll(".v2-max-test").length, 3),
+    );
+    assert.match(programme.textContent, /Max test: Snatch/);
+    assert.match(programme.textContent, /Max test: Front squat/);
+    assert.match(programme.textContent, /Max test: Clean and jerk/);
+    assert.match(programme.textContent, /30-minute EMOM/);
+    assert.doesNotMatch(programme.textContent, /Primary progression/);
+    const form = [...programme.querySelectorAll(".v2-max-test")].find((item) =>
+      item.querySelector("summary").textContent.includes("Front squat"),
+    );
+    mounted.fireEvent.change(form.querySelector('[name="maxAttemptLoad"]'), {
+      target: { value: "130" },
+    });
+    mounted.fireEvent.submit(form.querySelector("form"));
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      const program = state.v2Programs.find(
+        (item) => item.id === state.activeV2ProgramId,
+      );
+      const session = program.trainingBlocks[0].trainingWeeks[7].sessions[0];
+      assert.equal(
+        session.additionalMaxTestPrescriptions[0].attemptResults[0].loadKg,
+        130,
+      );
+      assert.equal(session.maxTestPrescription.attemptResults.length, 0);
+    });
+  } finally {
+    mounted.cleanup();
+  }
+});
+
 test("REG-012 React passes the selected goal, block, template, level, maxes, and skills into V2", async () => {
   const mounted = mountApp();
 
