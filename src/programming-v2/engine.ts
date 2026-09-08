@@ -2470,6 +2470,7 @@ export function generateMixedStrengthBlock(
     createdAt: input.generatedAt,
     updatedAt: input.generatedAt,
   };
+  applyMixedTestWeekPlan(draft);
   const generationSummary = createProgrammeGenerationSummary(draft, profile);
   if (!generationSummary.identityValidation.valid) {
     throw new Error(
@@ -2495,6 +2496,234 @@ export function generateV2Program(input: GenerateProgramInput): ProgramV2 {
     throw new Error("GENERATION_REQUEST_MISSING_PROGRAMME_TYPE");
   getV2TemplateDefinition(input.templateId);
   return generateMixedStrengthBlock(input);
+}
+
+// Only untouched mixed-strength test weeks are upgraded. Completed training,
+// existing attempts, and other programme types keep their original records.
+export function canUpdateMixedTestWeek(program: ProgramV2 | null): boolean {
+  if (
+    !program ||
+    program.generationRequest.programmeType !== "mixed_strength_8w_testing" ||
+    program.generationRequest.sessionsPerWeek !== 2 ||
+    (program.programmeProfile &&
+      (program.programmeProfile.primaryGoal !== "mixed" ||
+        program.programmeProfile.trainingBlock !== "mixed_strength"))
+  )
+    return false;
+  const week = program.trainingBlocks
+    .find((block) => block.id === program.activeTrainingBlockId)
+    ?.trainingWeeks.find((item) => item.weekNumber === 8);
+  return Boolean(
+    week &&
+    week.sessions.length === 2 &&
+    week.sessions.every(
+      (session) =>
+        session.status === "planned" &&
+        session.testWeekPlanVersion !== 1 &&
+        [
+          session.maxTestPrescription,
+          ...(session.additionalMaxTestPrescriptions ?? []),
+        ].every(
+          (test) => !test || (!test.attemptResults.length && !test.maxUpdate),
+        ),
+    ),
+  );
+}
+
+export function applyMixedTestWeekPlan(program: ProgramV2): boolean {
+  if (
+    program.generationRequest.programmeType !== "mixed_strength_8w_testing" ||
+    program.generationRequest.sessionsPerWeek !== 2 ||
+    (program.programmeProfile &&
+      (program.programmeProfile.primaryGoal !== "mixed" ||
+        program.programmeProfile.trainingBlock !== "mixed_strength"))
+  )
+    return false;
+  const block = program.trainingBlocks.find(
+    (item) => item.id === program.activeTrainingBlockId,
+  );
+  const week = block?.trainingWeeks.find((item) => item.weekNumber === 8);
+  if (
+    !block ||
+    !week ||
+    week.sessions.length !== 2 ||
+    week.sessions.every((session) => session.testWeekPlanVersion === 1)
+  )
+    return false;
+  if (
+    week.sessions.some(
+      (session) =>
+        session.status !== "planned" ||
+        [
+          session.maxTestPrescription,
+          ...(session.additionalMaxTestPrescriptions ?? []),
+        ].some(
+          (test) => test && (test.attemptResults.length || test.maxUpdate),
+        ),
+    )
+  ) {
+    throw new Error("TEST_WEEK_ALREADY_STARTED");
+  }
+  const request = program.generationRequest;
+  const priorSessions = block.trainingWeeks
+    .filter((item) => item.weekNumber < 8)
+    .flatMap((item) => item.sessions);
+  const input: GenerateProgramInput = {
+    programId: program.id,
+    ownerId: program.ownerId,
+    generatedAt: program.updatedAt,
+    athleteLevel: request.athleteLevel,
+    maxes: request.known1RMs,
+    equipment: request.availableEquipment,
+    restrictions: request.limitations,
+    weightIncrementKg: 2.5,
+    roundingMode: "nearest",
+  };
+  const groups = [["snatch", "front_squat"], ["clean_and_jerk"]];
+  week.sessions = week.sessions.map((session, index) => {
+    const tests = groups[index]!.map((movementId) => {
+      if (
+        !movementAllowed(
+          movementId,
+          "primary",
+          input.equipment,
+          input.restrictions,
+        )
+      ) {
+        throw new Error(`REQUIRED_MOVEMENT_UNAVAILABLE:${movementId}`);
+      }
+      const stored = program.movementMaxes?.find(
+        (item) => item.movementId === movementId,
+      );
+      const previousMaxKg =
+        stored?.testedOneRepMaxKg ??
+        stored?.technicalOneRepMaxKg ??
+        request.known1RMs[movementId as keyof typeof request.known1RMs] ??
+        null;
+      const prescription = buildMaxTestPrescription({
+        id: stableUuid(session.id, "max-test", movementId),
+        sessionId: session.id,
+        movementId,
+        testType: defaultTestType(movementId)!,
+        previousMaxKg,
+        trainingMaxKg:
+          stored?.trainingMaxKg ??
+          (previousMaxKg == null
+            ? null
+            : calculateTrainingMax(previousMaxKg, movementId)),
+        eligibility: calculateMaxTestEligibility({
+          movementId,
+          athleteLevel: request.athleteLevel,
+          sessions: priorSessions,
+        }),
+        athleteLevel: request.athleteLevel,
+        incrementKg: input.weightIncrementKg,
+        roundingMode: input.roundingMode,
+      });
+      return {
+        ...prescription,
+        estimatedDurationMinutes: 30,
+        stoppingRules: [
+          ...prescription.stoppingRules,
+          "Allow 30 minutes including the full build-up. If more recovery is needed, skip remaining attempts or shorten conditioning; never shorten prescribed rest.",
+        ],
+      };
+    });
+    const conditioning: ConditioningPrescription | null =
+      index === 0
+        ? null
+        : (() => {
+            const engineId = engineMovementId(input, "test-week-easy-engine");
+            const stepId = movementAllowed(
+              "box_step_up",
+              "conditioning",
+              input.equipment,
+              input.restrictions,
+            )
+              ? "box_step_up"
+              : "air_squat";
+            const ids = [engineId, stepId, "push_up"];
+            for (const id of ids) {
+              if (
+                !movementAllowed(
+                  id,
+                  "conditioning",
+                  input.equipment,
+                  input.restrictions,
+                )
+              )
+                throw new Error(`REQUIRED_MOVEMENT_UNAVAILABLE:${id}`);
+            }
+            const movements = [
+              conditioningMovement(engineId, { durationSeconds: 35 }),
+              conditioningMovement(stepId, { reps: 6 }),
+              conditioningMovement("push_up", { reps: 5 }),
+            ];
+            return {
+              id: stableUuid(session.id, "test-week-emom"),
+              sessionId: session.id,
+              format: "emom",
+              durationMinutes: 30,
+              rounds: 10,
+              timeCapMinutes: null,
+              workSeconds: null,
+              restSeconds: null,
+              intervalSeconds: 60,
+              executionMode: "rotate",
+              movements,
+              stations: movements.map((movement, i) => ({
+                minute: i + 1,
+                movement,
+              })),
+              intendedStimulus:
+                "Optional easy conditioning after testing at RPE 5–6. Rest for the remainder of each minute. Shorten or skip this block if testing takes longer, pain occurs, or technique deteriorates; finish the session within 65 minutes.",
+              targetDurationMin: null,
+              targetDurationMax: null,
+              targetRpe: 6,
+              scalingOptions: measurableConditioningScaling(),
+              estimatedDurationMinutes: 30,
+            };
+          })();
+    const sections: SessionSection[] = tests.map((test, i) => ({
+      id: stableUuid(session.id, "test-section", test.movementId),
+      sessionId: session.id,
+      section: i === 0 ? "primary" : "secondary",
+      order: i + 1,
+      estimatedDurationMinutes: 30,
+    }));
+    sections.push({
+      id: stableUuid(session.id, "test-transition"),
+      sessionId: session.id,
+      section: "transition",
+      order: sections.length + 1,
+      estimatedDurationMinutes: 5,
+    });
+    if (conditioning)
+      sections.push({
+        id: stableUuid(session.id, "test-conditioning-section"),
+        sessionId: session.id,
+        section: "conditioning",
+        order: sections.length + 1,
+        estimatedDurationMinutes: 30,
+      });
+    return {
+      ...session,
+      objective: `Test ${tests.map((test) => test.movementName).join(" + ")}`,
+      intendedStimulus:
+        "Test each lift separately with its own build-up, attempt records and stopping rules. Keep all prescribed rest; the session budget is 65 minutes.",
+      maxTestPrescription: tests[0]!,
+      additionalMaxTestPrescriptions: tests.slice(1),
+      testWeekPlanVersion: 1,
+      conditioning,
+      sections,
+      durationTargetMinutes: 65,
+      estimatedDurationMinutes: 65,
+      durationValidationStatus: "warning_long" as const,
+      revision: session.revision + 1,
+    };
+  });
+  block.plannedTestMovementIds = groups.flat();
+  return true;
 }
 
 export function findSession(
