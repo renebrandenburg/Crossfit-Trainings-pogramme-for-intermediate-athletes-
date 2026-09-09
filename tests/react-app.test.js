@@ -2929,6 +2929,75 @@ test("REG-001 REG-002 React keeps programme and week selection canonical across 
   }
 });
 
+for (const source of ["local reload", "account sign-in"]) {
+  test(`React renders a legacy V2 programme without generation metadata after ${source}`, async () => {
+    const storedState = historicalEightWeekStrengthState();
+    delete storedState.v2Programs[0].generationRequest;
+    delete storedState.v2Programs[0].programmeProfile;
+    const originalProgram = structuredClone(storedState.v2Programs[0]);
+    const v2 = freshRequire("../build/programming-v2.cjs");
+    assert.equal(v2.validateProgram(originalProgram).valid, true);
+    const supabaseMock = createMockSupabase({
+      remote: {
+        programming_engine_flags: [
+          {
+            user_id: "user-1",
+            v2_enabled: true,
+            rollout_group: "selected_users",
+          },
+        ],
+        athlete_states: [
+          {
+            user_id: "user-1",
+            schema_version: 1,
+            state: {
+              ...storedState,
+              profile: cloneDefaultProfile(),
+              planSchemaVersion: 3,
+            },
+            updated_at: new Date(Date.now() + 60_000).toISOString(),
+          },
+        ],
+      },
+    });
+    const mounted =
+      source === "local reload"
+        ? mountApp({ storedState })
+        : mountApp({ supabaseMock });
+    try {
+      if (source === "account sign-in") {
+        await mounted.waitFor(() =>
+          assert.equal(supabaseMock.authListenerCount(), 1),
+        );
+        supabaseMock.emitAuth("SIGNED_IN", {
+          user: { id: "user-1", email: "athlete@example.com" },
+        });
+        await waitForSignedIn(mounted);
+        await mounted.waitFor(() =>
+          assert.equal(
+            mounted.readState().activeV2ProgramId,
+            originalProgram.id,
+          ),
+        );
+      }
+      assert.equal(
+        mounted.ui.queryByText("The app could not finish rendering"),
+        null,
+      );
+      assert.ok(mounted.ui.getAllByTestId("v2-session-card").length > 0);
+      if (source === "local reload") {
+        openMoreTool(mounted, "Build programme");
+        await mounted.waitFor(() =>
+          assert.ok(mounted.ui.getByTestId("v2-programme")),
+        );
+      }
+      assert.deepEqual(mounted.readState().v2Programs[0], originalProgram);
+    } finally {
+      mounted.cleanup();
+    }
+  });
+}
+
 test("REG-014 React reloads a historical eight-week Strength programme without changing it", async () => {
   const storedState = historicalEightWeekStrengthState();
   const originalProgram = structuredClone(storedState.v2Programs[0]);
