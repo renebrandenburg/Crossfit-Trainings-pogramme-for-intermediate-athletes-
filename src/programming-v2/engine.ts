@@ -2501,9 +2501,11 @@ export function generateV2Program(input: GenerateProgramInput): ProgramV2 {
 // Only untouched mixed-strength test weeks are upgraded. Completed training,
 // existing attempts, and other programme types keep their original records.
 export function canUpdateMixedTestWeek(program: ProgramV2 | null): boolean {
+  // Historical programmes can be valid without a saved generation request.
+  // Keep them readable, but do not offer an upgrade we cannot safely recreate.
   if (
     !program ||
-    program.generationRequest.programmeType !== "mixed_strength_8w_testing" ||
+    program.generationRequest?.programmeType !== "mixed_strength_8w_testing" ||
     program.generationRequest.sessionsPerWeek !== 2 ||
     (program.programmeProfile &&
       (program.programmeProfile.primaryGoal !== "mixed" ||
