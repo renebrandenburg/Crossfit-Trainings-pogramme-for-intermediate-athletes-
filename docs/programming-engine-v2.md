@@ -277,3 +277,20 @@ V1 rather than breaking account hydration.
 Recommended follow-up: run a selected-athlete rollout, compare estimates with
 actual duration for a full block, tune coefficients, add one block template at a
 time, and only then introduce controlled AI variations behind their own flag.
+
+### Conditioning alternatives
+
+Conditioning regeneration exchanges one aerobic station (run, row, bike, or
+ski) for a different available modality. It respects saved equipment and
+movement/family restrictions, excludes duplicate stations, and uses the existing
+pace estimates to convert distance or calories to approximately equivalent work.
+Timed stations retain their duration. The workout format, clock, target RPE,
+and progression exercises stay fixed. Calibrated EMOM station data is refreshed
+with the displayed movements, and the full programme must validate before the
+alternative is returned. Seed contents determine the candidate order.
+
+This is deliberately limited to basic aerobic substitutions. Competition
+prescriptions with attached standards are preserved. If no eligible alternative
+passes validation, regeneration reports that no suitable alternative is available
+and keeps the original programme. Warm-up and accessory regeneration retain their
+existing behavior.

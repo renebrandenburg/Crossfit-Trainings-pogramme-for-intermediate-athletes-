@@ -2244,7 +2244,10 @@
       } catch (error) {
         console.error("V2 regeneration was rejected.", error);
         notify(
-          "Regeneration failed validation. The previous session remains unchanged.",
+          error instanceof Error &&
+            error.message === "NO_CONDITIONING_ALTERNATIVE"
+            ? "No suitable conditioning alternative is available for this workout and your equipment or restrictions. The session is unchanged."
+            : "Regeneration failed validation. The previous session remains unchanged.",
         );
       }
     }

@@ -1,3 +1,4 @@
+import { getMovement, movementAllowed } from "./catalog";
 import {
   stableUuid,
   findSession,
@@ -28,6 +29,7 @@ import {
 } from "./max-testing";
 import { assertValidProgram, validateProgram } from "./validation";
 import {
+  MOVEMENT_PACE_PROFILES,
   calibrateConditioningPrescription,
   createConditioningPerformance,
 } from "./conditioning";
@@ -161,51 +163,113 @@ function rematerializeNextSection(
   program.trainingBlocks = replacement.trainingBlocks;
 }
 
+// Only exchange basic aerobic modalities. Skill, loaded, and competition
+// prescriptions need their own equivalence rules and must not be guessed.
 function regenerateConditioning(
   session: TrainingSession,
   seed: string,
-  athleteLevel: ProgramV2["generationRequest"]["athleteLevel"],
+  program: ProgramV2,
 ): TrainingSession {
-  if (!session.conditioning) return session;
   const conditioning = session.conditioning;
-  const movements = [...conditioning.movements];
-  if (movements.length > 1) {
-    const shift = Math.max(1, seed.length % movements.length);
-    movements.push(...movements.splice(0, shift));
-  } else if (movements[0]) {
-    const only = movements[0];
-    movements[0] = {
-      ...only,
-      reps:
-        only.reps == null
-          ? null
-          : Math.max(1, only.reps + (seed.length % 2 ? 1 : -1)),
-      calories:
-        only.calories == null
-          ? null
-          : Math.max(1, only.calories + (seed.length % 2 ? 1 : -1)),
-      distanceMeters:
-        only.distanceMeters == null
-          ? null
-          : Math.max(50, only.distanceMeters + (seed.length % 2 ? 50 : -50)),
-    };
+  if (!conditioning || conditioning.competitionMetadata) {
+    throw new Error("NO_CONDITIONING_ALTERNATIVE");
   }
-  return internalEngine.recalculateSession({
-    ...session,
-    revision: session.revision + 1,
-    conditioning: calibrateConditioningPrescription(
+  const request = program.generationRequest;
+  const engineIds = ["run", "row", "bike", "ski"];
+  const occupied = new Set(
+    conditioning.movements.map((item) => item.movementId),
+  );
+  const alternatives = conditioning.movements.flatMap((original, index) => {
+    if (!engineIds.includes(original.movementId)) return [];
+    const originalPace = MOVEMENT_PACE_PROFILES[original.movementId]!;
+    const seconds =
+      original.durationSeconds ??
+      (original.distanceMeters != null
+        ? original.distanceMeters * (originalPace.secondsPerMeter ?? 0)
+        : (original.calories ?? 0) * (originalPace.secondsPerCalorie ?? 0));
+    if (seconds <= 0) return [];
+    return engineIds
+      .filter(
+        (id) =>
+          !occupied.has(id) &&
+          movementAllowed(
+            id,
+            "conditioning",
+            request.availableEquipment,
+            request.limitations,
+          ),
+      )
+      .map((id) => {
+        const movement = getMovement(id)!;
+        const pace = MOVEMENT_PACE_PROFILES[id]!;
+        const timed = original.durationSeconds != null;
+        const useDistance =
+          !timed &&
+          (id === "run" ||
+            (original.distanceMeters != null && pace.secondsPerMeter != null));
+        return {
+          index,
+          movement: {
+            ...original,
+            movementId: id,
+            movementName: movement.name,
+            movementFamilyId: movement.familyId,
+            equipment: [...movement.equipment],
+            reps: null,
+            loadKg: null,
+            percentageReference: null,
+            distanceMeters: useDistance
+              ? Math.max(
+                  10,
+                  Math.round(seconds / pace.secondsPerMeter! / 10) * 10,
+                )
+              : null,
+            calories:
+              !timed && !useDistance
+                ? Math.max(1, Math.round(seconds / pace.secondsPerCalorie!))
+                : null,
+          },
+        };
+      });
+  });
+  // Hash the seed contents, not its length: UI-generated seeds have equal lengths.
+  alternatives.sort((a, b) =>
+    stableUuid(seed, a.index, a.movement.movementId).localeCompare(
+      stableUuid(seed, b.index, b.movement.movementId),
+    ),
+  );
+  for (const alternative of alternatives) {
+    const movements = conditioning.movements.map((movement, index) =>
+      index === alternative.index ? alternative.movement : movement,
+    );
+    const calibrated = calibrateConditioningPrescription(
       {
         ...conditioning,
-        id: stableUuid(session.id, "conditioning", seed),
+        id: stableUuid(
+          session.id,
+          "conditioning",
+          seed,
+          alternative.movement.movementId,
+        ),
         movements,
+      },
+      { level: request.athleteLevel },
+    );
+    const replacement = internalEngine.recalculateSession({
+      ...session,
+      revision: session.revision + 1,
+      conditioning: {
+        ...calibrated,
         stations: (conditioning.stations ?? []).map((station, index) => ({
           ...station,
-          movement: movements[index] ?? station.movement,
+          movement: calibrated.movements[index] ?? station.movement,
         })),
       },
-      { level: athleteLevel },
-    ),
-  });
+    });
+    if (validateProgram(replaceSession(program, replacement)).valid)
+      return replacement;
+  }
+  throw new Error("NO_CONDITIONING_ALTERNATIVE");
 }
 
 function regenerateWarmup(
@@ -306,7 +370,7 @@ export function regenerateSessionSection(
     replacement = regenerateConditioning(
       replacement,
       `${input.seed}:conditioning`,
-      input.program.generationRequest.athleteLevel,
+      input.program,
     );
     changedSectionIds.push(`${original.id}-conditioning`);
   }
