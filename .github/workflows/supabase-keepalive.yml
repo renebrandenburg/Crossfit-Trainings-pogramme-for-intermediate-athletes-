@@ -3,7 +3,7 @@ name: Yuugee Supabase keepalive
 on:
   workflow_dispatch:
   schedule:
-    - cron: '17 5,13,21 * * *'
+    - cron: "17 5,13,21 * * *"
 
 permissions:
   contents: read

@@ -56,7 +56,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      # The shared auth-setup project uses Chromium for every browser job.
+      - run: npx playwright install --with-deps chromium ${{ matrix.browser }}
       - run: npm run test:e2e -- --project=${{ matrix.browser }}
         env:
           CI: true

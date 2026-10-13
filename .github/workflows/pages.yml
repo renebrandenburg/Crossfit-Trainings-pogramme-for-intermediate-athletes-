@@ -70,7 +70,18 @@ jobs:
 
       - name: Verify generated database types
         run: |
-          supabase gen types typescript --local --schema public > /tmp/database.types.ts
+          # Container registries can transiently rate-limit postgres-meta pulls.
+          # Retry generation only; an actual type diff must still fail immediately.
+          for attempt in 1 2 3; do
+            if supabase gen types typescript --local --schema public > /tmp/database.types.ts; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "Database type generation failed after 3 attempts" >&2
+              exit 1
+            fi
+            sleep "$((attempt * 15))"
+          done
           diff -u -B types/database.types.ts /tmp/database.types.ts
 
   deploy:
