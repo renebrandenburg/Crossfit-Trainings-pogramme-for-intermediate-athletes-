@@ -1855,3 +1855,57 @@ test("competition prescriptions and completed sessions cannot be swapped", () =>
     /Completed sessions cannot be regenerated/,
   );
 });
+
+test("conditioning renders saved kg and percentages in regular and EMOM prescriptions", () => {
+  const program = generate();
+  for (const format of ["for_time", "emom"]) {
+    const session = structuredClone(sessions(program)[0]);
+    const movement = {
+      ...conditioningMovement("hang_clean_and_jerk", { reps: 5 }),
+      loadKg: 52.5,
+      percentageReference: 50,
+    };
+    session.conditioning.format = format;
+    session.conditioning.movements = [movement];
+    session.conditioning.executionMode = "rotate";
+    session.conditioning.intervalSeconds = 60;
+    session.conditioning.stations = [{ minute: 1, movement }];
+    const before = structuredClone(session);
+    const rendered = JSON.stringify(v2.formatSessionForDisplay(session));
+    assert.match(
+      rendered,
+      /5 Hang Clean Plus Jerk at 52.5 kg \(50% of clean and jerk 1RM\)/,
+    );
+    assert.doesNotMatch(rendered, /load not set/);
+    assert.deepEqual(session, before);
+    movement.loadKg = null;
+    assert.match(
+      JSON.stringify(v2.formatSessionForDisplay(session)),
+      /at 50% of clean and jerk 1RM/,
+    );
+    movement.loadKg = 40;
+    movement.percentageReference = null;
+    assert.match(
+      JSON.stringify(v2.formatSessionForDisplay(session)),
+      /at 40 kg/,
+    );
+  }
+});
+
+test("saved competition workouts show actionable guidance when barbell loads are missing", () => {
+  const program = profileProgram("competition", "competition_preparation");
+  const session = sessions(program).find((item) =>
+    item.conditioning?.movements.some(
+      (movement) => movement.movementId === "hang_clean_and_jerk",
+    ),
+  );
+  const saved = JSON.parse(JSON.stringify(session));
+  const before = structuredClone(saved);
+  const rendered = JSON.stringify(v2.formatSessionForDisplay(saved));
+  assert.match(rendered, /Hang Clean Plus Jerk \(load not set\)/);
+  assert.match(rendered, /No prescribed weight is saved/);
+  assert.match(rendered, /RPE 6–7/);
+  assert.match(rendered, /at least two repetitions in reserve/);
+  assert.doesNotMatch(rendered, /Burpee \(load not set\)/);
+  assert.deepEqual(saved, before);
+});

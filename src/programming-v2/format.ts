@@ -8,6 +8,7 @@ import type {
   TrainingSession,
   WarmupExercise,
 } from "./types";
+import { getMovement } from "./catalog";
 import { calculateWorkingWeight } from "./duration";
 import { sessionMaxTests } from "./max-testing";
 
@@ -113,7 +114,7 @@ function warmupTarget(exercise: WarmupExercise): string {
 }
 
 function conditioningTarget(movement: ConditioningMovement): string {
-  const movementName = conditioningMovementName(movement);
+  const movementName = `${conditioningMovementName(movement)}${conditioningLoadText(movement)}`;
   if (movement.reps != null) return `${movement.reps} ${movementName}`;
   if (movement.calories != null)
     return `${movement.calories} cal ${movementName}`;
@@ -124,6 +125,38 @@ function conditioningTarget(movement: ConditioningMovement): string {
     return `${movement.durationSeconds}-sec ${movementName}`;
   }
   return movementName;
+}
+
+function conditioningLoadText(movement: ConditioningMovement): string {
+  const kg = movement.loadKg;
+  const percentage = movement.percentageReference;
+  const hasKg = kg != null && Number.isFinite(kg) && kg > 0;
+  const hasPercentage =
+    percentage != null && Number.isFinite(percentage) && percentage > 0;
+  const reference =
+    movement.movementFamilyId === "clean_and_jerk"
+      ? "clean and jerk"
+      : movement.movementFamilyId === "snatch"
+        ? "snatch"
+        : "reference lift";
+  const percentageText = hasPercentage
+    ? `${numberText(percentage)}% of ${reference} 1RM`
+    : null;
+  if (hasKg)
+    return ` at ${numberText(kg)} kg${percentageText ? ` (${percentageText})` : ""}`;
+  if (percentageText) return ` at ${percentageText}`;
+  return getMovement(movement.movementId)?.loadable ? " (load not set)" : "";
+}
+
+function missingConditioningLoadLines(
+  conditioning: ConditioningPrescription,
+): string[] {
+  return conditioning.movements
+    .filter((movement) => conditioningLoadText(movement) === " (load not set)")
+    .map(
+      (movement) =>
+        `Loading — ${conditioningMovementName(movement)}: No prescribed weight is saved. Choose a load at RPE 6–7 that keeps every planned set technically sound with at least two repetitions in reserve.`,
+    );
 }
 
 function conditioningMovementName(movement: ConditioningMovement): string {
@@ -324,6 +357,7 @@ export function formatSessionForDisplay(
                 .map(conditioningTarget)
                 .join(", ")}.`,
             ]),
+        ...missingConditioningLoadLines(conditioning),
         `Stimulus: ${conditioning.intendedStimulus}`,
         ...(conditioning.competitionMetadata
           ? [
