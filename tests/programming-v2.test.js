@@ -1633,3 +1633,225 @@ test("max-test calculations enforce estimates and the two-failure stopping rule"
     false,
   );
 });
+
+test("conditioning alternatives change a movement and preserve the training prescription", () => {
+  const program = generate();
+  for (const session of sessions(program).filter((item) => item.conditioning)) {
+    const before = structuredClone(program);
+    const input = {
+      program,
+      sessionId: session.id,
+      scope: "conditioning",
+      seed: "alternative-a",
+    };
+    const result = v2.regenerateSessionSection(input);
+    const next = v2.findSession(result.program, session.id);
+    const repeat = v2.findSession(
+      v2.regenerateSessionSection(input).program,
+      session.id,
+    );
+    assert.notDeepEqual(
+      next.conditioning.movements.map((item) => item.movementId),
+      session.conditioning.movements.map((item) => item.movementId),
+    );
+    assert.deepEqual(next.conditioning, repeat.conditioning);
+    for (const field of [
+      "format",
+      "durationMinutes",
+      "timeCapMinutes",
+      "targetRpe",
+      "intendedStimulus",
+      "workSeconds",
+      "restSeconds",
+    ]) {
+      assert.deepEqual(next.conditioning[field], session.conditioning[field]);
+    }
+    assert.deepEqual(next.exercises, session.exercises);
+    assert.deepEqual(next.trackAssignments, session.trackAssignments);
+    assert.deepEqual(next.warmup, session.warmup);
+    assert.equal(
+      new Set(next.conditioning.movements.map((item) => item.movementId)).size,
+      next.conditioning.movements.length,
+    );
+    for (const movement of next.conditioning.movements) {
+      assert.ok(
+        v2.movementAllowed(
+          movement.movementId,
+          "conditioning",
+          EQUIPMENT,
+          program.generationRequest.limitations,
+        ),
+      );
+    }
+    assert.equal(result.validation.valid, true);
+    assert.deepEqual(program, before);
+  }
+});
+
+test("conditioning alternatives obey equipment and movement restrictions", () => {
+  const program = generate();
+  const session = sessions(program)[0];
+  const original = session.conditioning.movements.find((item) =>
+    ["run", "row", "bike", "ski"].includes(item.movementId),
+  );
+  const allowed = ["run", "row", "bike", "ski"].find(
+    (id) => id !== original.movementId,
+  );
+  program.generationRequest.limitations.movementIds = [
+    "run",
+    "row",
+    "bike",
+    "ski",
+  ].filter((id) => id !== original.movementId && id !== allowed);
+  const result = v2.regenerateSessionSection({
+    program,
+    sessionId: session.id,
+    scope: "conditioning",
+    seed: "restricted",
+  });
+  const next = v2.findSession(result.program, session.id);
+  assert.ok(
+    next.conditioning.movements.some((item) => item.movementId === allowed),
+  );
+  program.generationRequest.limitations.movementIds.push(allowed);
+  const before = structuredClone(program);
+  assert.throws(
+    () =>
+      v2.regenerateSessionSection({
+        program,
+        sessionId: session.id,
+        scope: "conditioning",
+        seed: "restricted",
+      }),
+    /NO_CONDITIONING_ALTERNATIVE/,
+  );
+  assert.deepEqual(program, before);
+  program.generationRequest.limitations.movementIds = [];
+  program.generationRequest.limitations.movementFamilyIds = [
+    "running",
+    "rowing",
+    "bike",
+    "ski",
+  ].filter((family) => family !== original.movementFamilyId);
+  assert.throws(
+    () =>
+      v2.regenerateSessionSection({
+        program,
+        sessionId: session.id,
+        scope: "conditioning",
+        seed: "family",
+      }),
+    /NO_CONDITIONING_ALTERNATIVE/,
+  );
+  program.generationRequest.limitations.movementFamilyIds = [];
+  program.generationRequest.availableEquipment = v2.getMovement(
+    original.movementId,
+  ).equipment;
+  if (original.movementId !== "run")
+    program.generationRequest.limitations.movementIds = ["run"];
+  assert.throws(
+    () =>
+      v2.regenerateSessionSection({
+        program,
+        sessionId: session.id,
+        scope: "conditioning",
+        seed: "equipment",
+      }),
+    /NO_CONDITIONING_ALTERNATIVE/,
+  );
+});
+
+test("equal-length regeneration seeds can produce different alternatives", () => {
+  const program = generate();
+  const session = sessions(program)[0];
+  const choices = new Set(
+    ["seed-a", "seed-b", "seed-c", "seed-d", "seed-e", "seed-f"].map((seed) => {
+      const result = v2.regenerateSessionSection({
+        program,
+        sessionId: session.id,
+        scope: "conditioning",
+        seed,
+      });
+      return JSON.stringify(
+        v2.findSession(result.program, session.id).conditioning.movements,
+      );
+    }),
+  );
+  assert.ok(choices.size > 1);
+});
+
+test("conditioning alternatives preserve approximate station work when converting units", () => {
+  const program = generate();
+  const session = sessions(program).find(
+    (item) => item.conditioning.format === "emom",
+  );
+  const original = session.conditioning.movements.find((item) =>
+    ["run", "row", "bike", "ski"].includes(item.movementId),
+  );
+  function workSeconds(movement) {
+    const pace = v2.MOVEMENT_PACE_PROFILES[movement.movementId];
+    return (
+      movement.durationSeconds ??
+      (movement.distanceMeters != null
+        ? movement.distanceMeters * pace.secondsPerMeter
+        : movement.calories * pace.secondsPerCalorie)
+    );
+  }
+  for (const id of ["run", "row", "bike", "ski"].filter(
+    (id) => id !== original.movementId,
+  )) {
+    program.generationRequest.limitations.movementIds = [
+      "run",
+      "row",
+      "bike",
+      "ski",
+    ].filter(
+      (candidate) => candidate !== original.movementId && candidate !== id,
+    );
+    const result = v2.regenerateSessionSection({
+      program,
+      sessionId: session.id,
+      scope: "conditioning",
+      seed: "units",
+    });
+    const next = v2
+      .findSession(result.program, session.id)
+      .conditioning.movements.find((item) => item.movementId === id);
+    assert.ok(Math.abs(workSeconds(next) / workSeconds(original) - 1) <= 0.1);
+    assert.equal(next.reps, null);
+    assert.equal(next.loadKg, null);
+    assert.equal(next.percentageReference, null);
+  }
+});
+
+test("competition prescriptions and completed sessions cannot be swapped", () => {
+  const program = generate();
+  const session = sessions(program)[0];
+  session.conditioning.competitionMetadata = {
+    competitionStyle: true,
+    movementStandards: [],
+    pacingPlan: [],
+    setStrategy: [],
+    transitionGoals: [],
+    scoreType: "rounds_reps",
+    targetScoreGuidance: null,
+    tieBreakPoints: [],
+  };
+  const before = structuredClone(program);
+  const input = {
+    program,
+    sessionId: session.id,
+    scope: "conditioning",
+    seed: "protected",
+  };
+  assert.throws(
+    () => v2.regenerateSessionSection(input),
+    /NO_CONDITIONING_ALTERNATIVE/,
+  );
+  assert.deepEqual(program, before);
+  session.status = "completed";
+  assert.throws(
+    () => v2.regenerateSessionSection(input),
+    /Completed sessions cannot be regenerated/,
+  );
+});
