@@ -436,6 +436,7 @@ export interface ExercisePrescription {
 }
 
 export interface ConditioningMovement {
+  loadSource?: "suggested";
   movementId: string;
   movementName: string;
   movementFamilyId: MovementFamilyId;
