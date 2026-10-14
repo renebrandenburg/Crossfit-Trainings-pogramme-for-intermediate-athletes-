@@ -1900,6 +1900,11 @@ test("saved competition workouts show actionable guidance when barbell loads are
     ),
   );
   const saved = JSON.parse(JSON.stringify(session));
+  saved.conditioning.movements.forEach((movement) => {
+    movement.loadKg = null;
+    movement.percentageReference = null;
+    delete movement.loadSource;
+  });
   const before = structuredClone(saved);
   const rendered = JSON.stringify(v2.formatSessionForDisplay(saved));
   assert.match(rendered, /Hang Clean Plus Jerk \(load not set\)/);
@@ -1908,4 +1913,151 @@ test("saved competition workouts show actionable guidance when barbell loads are
   assert.match(rendered, /at least two repetitions in reserve/);
   assert.doesNotMatch(rendered, /Burpee \(load not set\)/);
   assert.deepEqual(saved, before);
+});
+
+function legacyUnweightedCompetition() {
+  const program = profileProgram("competition", "competition_preparation");
+  for (const session of sessions(program)) {
+    for (const movement of session.conditioning?.movements || []) {
+      movement.loadKg = null;
+      movement.percentageReference = null;
+      delete movement.loadSource;
+    }
+  }
+  return program;
+}
+
+test("new conditioning programmes calculate and render suggested weights from the correct 1RM", () => {
+  const program = profileProgram("competition", "competition_preparation");
+  const cleanSession = sessions(program).find((session) =>
+    session.conditioning?.movements.some(
+      (movement) => movement.movementId === "hang_clean_and_jerk",
+    ),
+  );
+  const clean = cleanSession.conditioning.movements.find(
+    (movement) => movement.movementId === "hang_clean_and_jerk",
+  );
+  assert.equal(clean.loadKg, 50);
+  assert.equal(clean.percentageReference, 50);
+  assert.match(
+    JSON.stringify(v2.formatSessionForDisplay(cleanSession)),
+    /50 kg \(50% of clean and jerk 1RM\) · suggested/,
+  );
+  const snatch = sessions(program)
+    .flatMap((session) => session.conditioning?.movements || [])
+    .find((movement) => movement.movementId === "hang_power_snatch");
+  assert.equal(snatch.loadKg, 30); // 40% of snatch 75, not clean and jerk 100.
+  assert.equal(v2.validateProgram(program).valid, true);
+});
+
+test("existing programmes gain missing weights without changing completed work or explicit loads", () => {
+  const program = legacyUnweightedCompetition();
+  const targets = sessions(program).filter((session) =>
+    session.conditioning?.movements.some(
+      (movement) => movement.movementId === "hang_clean_and_jerk",
+    ),
+  );
+  targets[0].status = "completed";
+  const explicit = targets[1].conditioning.movements.find(
+    (movement) => movement.movementId === "hang_clean_and_jerk",
+  );
+  explicit.loadKg = 42.5;
+  const before = structuredClone(program);
+  const upgraded = v2.applySuggestedConditioningLoads(program);
+  assert.deepEqual(program, before);
+  assert.deepEqual(v2.findSession(upgraded, targets[0].id), targets[0]);
+  assert.deepEqual(v2.findSession(upgraded, targets[1].id), targets[1]);
+  const next = v2.findSession(upgraded, targets[2].id);
+  assert.equal(
+    next.conditioning.movements.find(
+      (movement) => movement.movementId === "hang_clean_and_jerk",
+    ).loadKg,
+    50,
+  );
+  assert.deepEqual(next.exercises, targets[2].exercises);
+  assert.equal(upgraded.id, program.id);
+  assert.equal(upgraded.updatedAt, program.updatedAt);
+  assert.strictEqual(v2.applySuggestedConditioningLoads(upgraded), upgraded);
+  assert.equal(v2.validateProgram(upgraded).valid, true);
+});
+
+test("loading suggestions respect percentages, intensity, rounding, and missing maxima", () => {
+  for (const [rpe, expected] of [
+    [5, 30],
+    [7, 40],
+    [8, 50],
+  ]) {
+    const program = legacyUnweightedCompetition();
+    const session = sessions(program).find((item) =>
+      item.conditioning?.movements.some(
+        (movement) => movement.movementId === "hang_clean_and_jerk",
+      ),
+    );
+    session.conditioning.targetRpe = rpe;
+    const upgraded = v2.applySuggestedConditioningLoads(program);
+    assert.equal(
+      v2
+        .findSession(upgraded, session.id)
+        .conditioning.movements.find(
+          (movement) => movement.movementId === "hang_clean_and_jerk",
+        ).loadKg,
+      expected,
+    );
+  }
+  const program = legacyUnweightedCompetition();
+  const session = sessions(program).find((item) =>
+    item.conditioning?.movements.some(
+      (movement) => movement.movementId === "hang_clean_and_jerk",
+    ),
+  );
+  const movement = session.conditioning.movements.find(
+    (item) => item.movementId === "hang_clean_and_jerk",
+  );
+  movement.percentageReference = 43;
+  const upgraded = v2.applySuggestedConditioningLoads(program);
+  assert.equal(
+    v2
+      .findSession(upgraded, session.id)
+      .conditioning.movements.find(
+        (item) => item.movementId === "hang_clean_and_jerk",
+      ).loadKg,
+    42.5,
+  );
+  for (const max of [null, undefined, 0, -1, NaN, Infinity]) {
+    program.generationRequest.known1RMs.clean_and_jerk = max;
+    assert.equal(
+      v2
+        .findSession(v2.applySuggestedConditioningLoads(program), session.id)
+        .conditioning.movements.find(
+          (item) => item.movementId === "hang_clean_and_jerk",
+        ).loadKg,
+      null,
+    );
+  }
+});
+
+test("suggested loads preserve inactive sessions and use conservative beginner rounding", () => {
+  const program = legacyUnweightedCompetition();
+  program.generationRequest.athleteLevel = "beginner";
+  program.generationRequest.known1RMs.clean_and_jerk = 97;
+  const targets = sessions(program).filter((session) =>
+    session.conditioning?.movements.some(
+      (movement) => movement.movementId === "hang_clean_and_jerk",
+    ),
+  );
+  targets[0].status = "skipped";
+  targets[1].status = "blocked";
+  const updated = v2.applySuggestedConditioningLoads(program, 5);
+  assert.deepEqual(v2.findSession(updated, targets[0].id), targets[0]);
+  assert.deepEqual(v2.findSession(updated, targets[1].id), targets[1]);
+  assert.equal(
+    v2
+      .findSession(updated, targets[2].id)
+      .conditioning.movements.find(
+        (movement) => movement.movementId === "hang_clean_and_jerk",
+      ).loadKg,
+    35,
+  );
+  program.status = "completed";
+  assert.strictEqual(v2.applySuggestedConditioningLoads(program), program);
 });

@@ -344,6 +344,16 @@
     };
   }
 
+  function restoreConditioningLoads(program) {
+    if (
+      !v2Api?.applySuggestedConditioningLoads ||
+      !v2Api.validateProgram(program).valid
+    )
+      return program;
+    const restored = v2Api.applySuggestedConditioningLoads(program);
+    return v2Api.validateProgram(restored).valid ? restored : program;
+  }
+
   function normalizeAthleteState(value) {
     const fallback = defaultAthleteState();
     const source =
@@ -379,12 +389,14 @@
       ? resolvePlanTransition(activePlan, normalized.selectedWeek)
       : { selectedWeek: normalized.selectedWeek };
     const v2Programs = Array.isArray(source.v2Programs)
-      ? source.v2Programs.filter(
-          (program) =>
-            program &&
-            typeof program === "object" &&
-            program.engineVersion === "v2",
-        )
+      ? source.v2Programs
+          .filter(
+            (program) =>
+              program &&
+              typeof program === "object" &&
+              program.engineVersion === "v2",
+          )
+          .map(restoreConditioningLoads)
       : [];
     const requestedV2Id =
       typeof source.activeV2ProgramId === "string"
@@ -564,7 +576,7 @@
         }
       }
     });
-    const v2Programs = [...mergedById.values()];
+    const v2Programs = [...mergedById.values()].map(restoreConditioningLoads);
     const localActiveId = localState?.activeV2ProgramId;
     const v2ProgramRevisions = Object.fromEntries(
       v2Programs.map((program) => [
@@ -1413,7 +1425,7 @@
               }
               const validRemoteProgram =
                 remoteProgram && v2Api?.validateProgram(remoteProgram).valid
-                  ? remoteProgram
+                  ? restoreConditioningLoads(remoteProgram)
                   : null;
               const movementRestrictions = {
                 movementIds: restrictionRows

@@ -1,3 +1,4 @@
+import { applySuggestedConditioningLoads } from "./conditioning-loads";
 import { getMovement, movementAllowed } from "./catalog";
 import {
   calculateExerciseDurationMinutes,
@@ -2443,7 +2444,7 @@ export function generateMixedStrengthBlock(
     createdAt: input.generatedAt,
     updatedAt: input.generatedAt,
   };
-  const draft: ProgramV2 = {
+  let draft: ProgramV2 = {
     schemaVersion: PROGRAM_SCHEMA_VERSION,
     engineVersion: ENGINE_VERSION,
     templateVersion: template.templateVersion,
@@ -2471,6 +2472,7 @@ export function generateMixedStrengthBlock(
     updatedAt: input.generatedAt,
   };
   applyMixedTestWeekPlan(draft);
+  draft = applySuggestedConditioningLoads(draft, input.weightIncrementKg);
   const generationSummary = createProgrammeGenerationSummary(draft, profile);
   if (!generationSummary.identityValidation.valid) {
     throw new Error(

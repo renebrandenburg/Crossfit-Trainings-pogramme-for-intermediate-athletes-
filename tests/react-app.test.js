@@ -4809,3 +4809,57 @@ test("React Testing Library keeps failed remote workout saves locally for retry"
     cleanup();
   }
 });
+
+test("Calendar restores suggested weights for an existing unweighted competition programme", async () => {
+  const v2 = freshRequire("../build/programming-v2.cjs");
+  const program = v2.generateV2Program({
+    ...INTERMEDIATE_V2_ATHLETE,
+    programId: "33333333-3333-4333-a333-333333333333",
+    ownerId: null,
+    generatedAt: "2026-08-03T08:00:00.000Z",
+    goal: "competition",
+    blockType: "competition_preparation",
+    templateId: "mixed_strength_8w_testing",
+    sessionCount: 2,
+    seed: "missing-load-regression",
+    restrictions: { movementIds: [], movementFamilyIds: [], guidance: null },
+    weightIncrementKg: 2.5,
+    roundingMode: "nearest",
+  });
+  for (const session of program.trainingBlocks.flatMap((block) =>
+    block.trainingWeeks.flatMap((week) => week.sessions),
+  )) {
+    for (const movement of session.conditioning?.movements || []) {
+      movement.loadKg = null;
+      movement.percentageReference = null;
+      delete movement.loadSource;
+    }
+  }
+  const mounted = mountApp({
+    storedState: {
+      v2Programs: [program],
+      activeV2ProgramId: program.id,
+      activeProgrammingEngine: "v2",
+      selectedWeek: 1,
+      cycleStartDate: "2026-08-03",
+    },
+  });
+  try {
+    mounted.fireEvent.click(
+      mounted.ui.getByRole("button", { name: "Calendar" }),
+    );
+    await mounted.waitFor(() => {
+      assert.match(
+        mounted
+          .view("calendarView")
+          .getAllByTestId("v2-session-card")
+          .map((card) => card.textContent)
+          .join(" "),
+        /(?:50 kg \(50% of clean and jerk 1RM\)|30 kg \(40% of snatch 1RM\)) · suggested/,
+      );
+    });
+    assert.equal(mounted.readState().activeV2ProgramId, program.id);
+  } finally {
+    mounted.cleanup();
+  }
+});

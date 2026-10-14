@@ -294,3 +294,24 @@ prescriptions with attached standards are preserved. If no eligible alternative
 passes validation, regeneration reports that no suitable alternative is available
 and keeps the original programme. Warm-up and accessory regeneration retain their
 existing behavior.
+
+### Suggested conditioning loads
+
+New programmes and valid saved programmes loaded into the app fill missing
+weights for `hang_clean_and_jerk` and `hang_power_snatch` from their respective
+saved `generationRequest.known1RMs`. The app labels these values **suggested**.
+The initial programming defaults are 30% for target RPE up to 5, 40% for target
+RPE 6–7 (also the fallback when target RPE is absent), and 50% for target RPE 8+.
+Beginner defaults are ten percentage points lower, with a 25% floor. These are
+explicit programming heuristics, not a physiological conversion of RPE to 1RM.
+
+A saved percentage takes precedence over these defaults. New programmes round
+down to the requested weight increment; older programmes without that saved
+setting use 2.5 kg. Missing or invalid maxima retain the existing loading
+guidance. A numerical load already present is never overwritten.
+
+Hydration is deterministic and idempotent. It fills only planned sessions with
+no completion feedback, preserves programme/session identity and progress,
+and leaves completed, skipped, blocked sessions and completed programmes alone.
+Both local and remote hydration apply the same helper with programme validation
+before and after. No programme regeneration or database migration is needed.

@@ -143,7 +143,7 @@ function conditioningLoadText(movement: ConditioningMovement): string {
     ? `${numberText(percentage)}% of ${reference} 1RM`
     : null;
   if (hasKg)
-    return ` at ${numberText(kg)} kg${percentageText ? ` (${percentageText})` : ""}`;
+    return ` at ${numberText(kg)} kg${percentageText ? ` (${percentageText})` : ""}${movement.loadSource === "suggested" ? " · suggested" : ""}`;
   if (percentageText) return ` at ${percentageText}`;
   return getMovement(movement.movementId)?.loadable ? " (load not set)" : "";
 }
