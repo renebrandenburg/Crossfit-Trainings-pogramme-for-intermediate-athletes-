@@ -865,7 +865,7 @@ function createCompetitionConditioning(
   const eventTwo = [
     conditioningMovement("hang_power_snatch", { reps: 5 }),
     conditioningMovement("box_step_up", { reps: 10 }),
-    conditioningMovement(engineId, { durationSeconds: 60 }),
+    conditioningMovement(engineId, engineId === "run" ? { distanceMeters: 120 } : { calories: 6 }),
   ];
   if (isRecoveryWeek(week)) {
     const durationMinutes = Math.min(
