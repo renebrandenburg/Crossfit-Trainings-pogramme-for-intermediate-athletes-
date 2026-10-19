@@ -1911,38 +1911,70 @@ test("saved competition workouts show actionable guidance when barbell loads are
 });
 
 test("interval validation rejects 60-second row after lifting in a 90-second window", () => {
-  const programme = v2.generateV2Program(generationInput({
-    templateId: "competition_preparation_6w",
-    blockType: "competition_preparation",
-  }));
+  const programme = v2.generateV2Program(
+    generationInput({
+      templateId: "competition_preparation_6w",
+      blockType: "competition_preparation",
+    }),
+  );
   const prescribed = sessions(programme)
     .map((session) => session.conditioning)
-    .find((conditioning) => conditioning?.format === "intervals" &&
-      conditioning?.workSeconds === 90 &&
-      conditioning.movements.some((movement) => movement.movementId === "hang_power_snatch"));
+    .find(
+      (conditioning) =>
+        conditioning?.format === "intervals" &&
+        conditioning?.workSeconds === 90 &&
+        conditioning.movements.some(
+          (movement) => movement.movementId === "hang_power_snatch",
+        ),
+    );
   assert.ok(prescribed, "competition intervals should exist");
   const machine = prescribed.movements.find((movement) =>
-    ["row", "bike", "ski", "run"].includes(movement.movementId));
+    ["row", "bike", "ski", "run"].includes(movement.movementId),
+  );
   assert.ok(machine);
   assert.notEqual(machine.durationSeconds, 60);
   assert.ok(machine.calories != null || machine.distanceMeters != null);
   const invalid = structuredClone(prescribed);
-  const index = invalid.movements.findIndex((movement) => movement.movementId === machine.movementId);
-  invalid.movements[index] = { ...invalid.movements[index], calories: null, distanceMeters: null, durationSeconds: 60 };
+  const index = invalid.movements.findIndex(
+    (movement) => movement.movementId === machine.movementId,
+  );
+  invalid.movements[index] = {
+    ...invalid.movements[index],
+    calories: null,
+    distanceMeters: null,
+    durationSeconds: 60,
+  };
   const validated = v2.validateConditioningPrescription(invalid);
   assert.equal(validated.valid, false);
-  assert.ok(validated.issues.some((issue) => issue.code === "INTERVAL_WORK_EXCEEDS_CLOCK"));
+  assert.ok(
+    validated.issues.some(
+      (issue) => issue.code === "INTERVAL_WORK_EXCEEDS_CLOCK",
+    ),
+  );
 });
 
 test("interval validation includes equipment transition time", () => {
-  const programme = v2.generateV2Program(generationInput({
-    templateId: "competition_preparation_6w",
-    blockType: "competition_preparation",
-  }));
-  const interval = sessions(programme).map((session) => session.conditioning)
-    .find((item) => item?.format === "intervals" && item.workSeconds === 90 &&
-      item.movements.some((movement) => movement.movementId === "hang_power_snatch"));
+  const programme = v2.generateV2Program(
+    generationInput({
+      templateId: "competition_preparation_6w",
+      blockType: "competition_preparation",
+    }),
+  );
+  const interval = sessions(programme)
+    .map((session) => session.conditioning)
+    .find(
+      (item) =>
+        item?.format === "intervals" &&
+        item.workSeconds === 90 &&
+        item.movements.some(
+          (movement) => movement.movementId === "hang_power_snatch",
+        ),
+    );
   assert.ok(interval);
   const validated = v2.validateConditioningPrescription(interval);
-  assert.ok(!validated.issues.some((issue) => issue.code === "INTERVAL_WORK_EXCEEDS_CLOCK"));
+  assert.ok(
+    !validated.issues.some(
+      (issue) => issue.code === "INTERVAL_WORK_EXCEEDS_CLOCK",
+    ),
+  );
 });
