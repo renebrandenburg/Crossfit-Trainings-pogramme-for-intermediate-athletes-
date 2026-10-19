@@ -565,7 +565,10 @@ export function validateConditioningPrescription(
     const minimumWorkSeconds = timedSeconds + untimedStations * 12;
     const minimumTransitionSeconds =
       Math.max(0, conditioning.movements.length - 1) * 5;
-    if (minimumWorkSeconds + minimumTransitionSeconds > conditioning.workSeconds) {
+    if (
+      minimumWorkSeconds + minimumTransitionSeconds >
+      conditioning.workSeconds
+    ) {
       issues.push(
         issue(
           "INTERVAL_WORK_EXCEEDS_CLOCK",
