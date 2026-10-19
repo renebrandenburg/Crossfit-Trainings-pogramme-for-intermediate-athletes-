@@ -552,6 +552,33 @@ export function validateConditioningPrescription(
       }
     }
   }
+  // The interval clock must include every station and its transitions.
+  // This is a conservative lower bound, not a promise about athlete pace.
+  if (conditioning.format === "intervals" && conditioning.workSeconds != null) {
+    const timedSeconds = conditioning.movements.reduce(
+      (total, movement) => total + (movement.durationSeconds ?? 0),
+      0,
+    );
+    const untimedStations = conditioning.movements.filter(
+      (movement) => movement.durationSeconds == null,
+    ).length;
+    const minimumWorkSeconds = timedSeconds + untimedStations * 12;
+    const minimumTransitionSeconds =
+      Math.max(0, conditioning.movements.length - 1) * 5;
+    if (
+      minimumWorkSeconds + minimumTransitionSeconds >
+      conditioning.workSeconds
+    ) {
+      issues.push(
+        issue(
+          "INTERVAL_WORK_EXCEEDS_CLOCK",
+          "error",
+          `${path}.workSeconds`,
+          `Movements and equipment transitions require at least ${minimumWorkSeconds + minimumTransitionSeconds} seconds, exceeding the ${conditioning.workSeconds}-second work interval. Use a shorter calorie/distance target or extend the interval.`,
+        ),
+      );
+    }
+  }
   if (conditioning.format === "intervals" && conditioning.restSeconds == null) {
     issues.push(
       issue(
