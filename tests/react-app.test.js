@@ -4810,7 +4810,7 @@ test("React Testing Library keeps failed remote workout saves locally for retry"
   }
 });
 
-test("REG-LEGACY-V2 keeps older programmes with outdated interval timing", async () => {
+test("Legacy V2 interval programmes remain visible", async () => {
   const v2 = freshRequire("../build/programming-v2.cjs");
   const program = v2.generateV2Program({
     ...INTERMEDIATE_V2_ATHLETE,
@@ -4861,10 +4861,7 @@ test("REG-LEGACY-V2 keeps older programmes with outdated interval timing", async
         (option) => option.value === `v2:${program.id}`,
       ),
     );
-    assert.equal(
-      mounted.ui.queryByTestId("v2-programme-rejected"),
-      null,
-    );
+    assert.equal(mounted.ui.queryByTestId("v2-programme-rejected"), null);
     assert.equal(mounted.readState().v2Programs.length, 2);
   } finally {
     mounted.cleanup();
