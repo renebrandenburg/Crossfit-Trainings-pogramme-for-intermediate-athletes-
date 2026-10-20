@@ -59,6 +59,7 @@ function createMockSupabase({
   const authListeners = new Set();
   const data = {
     athlete_states: remote.athlete_states || [],
+    training_programs: remote.training_programs || [],
     athlete_movement_restrictions: remote.athlete_movement_restrictions || [],
     programming_engine_flags: remote.programming_engine_flags || [],
     workout_logs: remote.workout_logs || [],
@@ -136,7 +137,10 @@ function createMockSupabase({
           };
           return ownerBuilder;
         }
-        if (table === "athlete_movement_restrictions") {
+        if (
+          table === "athlete_movement_restrictions" ||
+          table === "training_programs"
+        ) {
           return {
             eq: async (_column, value) => {
               const result = await selected();
@@ -4807,5 +4811,116 @@ test("React Testing Library keeps failed remote workout saves locally for retry"
   } finally {
     console.warn = originalWarn;
     cleanup();
+  }
+});
+
+test("Legacy V2 interval programmes remain visible", async () => {
+  const v2 = freshRequire("../build/programming-v2.cjs");
+  const program = v2.generateV2Program({
+    ...INTERMEDIATE_V2_ATHLETE,
+    programId: "a876db29-618c-4d6f-a742-46a84b5d7ac0",
+    ownerId: null,
+    generatedAt: "2026-09-01T10:00:00.000Z",
+    blockType: "competition_preparation",
+    templateId: "competition_preparation_6w",
+    sessionCount: 2,
+    seed: "legacy-interval-recovery",
+    restrictions: { movementIds: [], movementFamilyIds: [], guidance: null },
+    weightIncrementKg: 2.5,
+    roundingMode: "nearest",
+  });
+  const interval = program.trainingBlocks[0].trainingWeeks
+    .flatMap((week) => week.sessions)
+    .map((session) => session.conditioning)
+    .find(
+      (conditioning) =>
+        conditioning?.format === "intervals" &&
+        conditioning.workSeconds === 90 &&
+        conditioning.movements.some(
+          (movement) => movement.movementId === "hang_power_snatch",
+        ),
+    );
+  assert.ok(interval);
+  const machine = interval.movements.at(-1);
+  machine.calories = null;
+  machine.distanceMeters = null;
+  machine.durationSeconds = 60;
+  const errors = v2
+    .validateProgram(program)
+    .issues.filter((issue) => issue.severity === "error");
+  assert.ok(errors.length > 0);
+  assert.ok(
+    errors.every((issue) => issue.code === "INTERVAL_WORK_EXCEEDS_CLOCK"),
+  );
+
+  const storedState = historicalEightWeekStrengthState();
+  storedState.v2Programs.push(program);
+  storedState.activeV2ProgramId = program.id;
+  const mounted = mountApp({ storedState });
+  try {
+    openMoreTool(mounted, "Build programme");
+    const selector = mounted.ui.getByLabelText("Active programme");
+    assert.ok(
+      Array.from(selector.options).some(
+        (option) => option.value === `v2:${program.id}`,
+      ),
+    );
+    assert.equal(mounted.ui.queryByTestId("v2-programme-rejected"), null);
+    assert.equal(mounted.readState().v2Programs.length, 2);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("Signed-in recovery loads missing V2 programmes from saved graph snapshots", async () => {
+  const archived = historicalEightWeekStrengthState().v2Programs[0];
+  const account = privateAthleteState("Recovery Athlete");
+  const supabaseMock = createMockSupabase({
+    session: { user: { id: "user-1", email: "athlete@example.com" } },
+    remote: {
+      athlete_states: [
+        {
+          user_id: "user-1",
+          schema_version: 1,
+          state: account,
+          updated_at: "2026-10-20T10:00:00.000Z",
+        },
+      ],
+      programming_engine_flags: [
+        {
+          user_id: "user-1",
+          v2_enabled: true,
+          rollout_group: "selected_users",
+        },
+      ],
+      training_programs: [
+        {
+          user_id: "user-1",
+          validated_snapshot: archived,
+          revision: 4,
+        },
+      ],
+    },
+  });
+  const mounted = mountApp({
+    supabaseMock,
+    url: "https://app.example.test/",
+  });
+  try {
+    await waitForSignedIn(mounted);
+    await mounted.waitFor(() => {
+      const state = mounted.readState();
+      assert.ok(state.v2Programs.some((item) => item.id === archived.id));
+      assert.equal(state.v2ProgramRevisions[archived.id], 4);
+    });
+    openMoreTool(mounted, "Build programme");
+    const selector = mounted.ui.getByLabelText("Active programme");
+    assert.ok(
+      Array.from(selector.options).some(
+        (option) => option.value === `v2:${archived.id}`,
+      ),
+    );
+  } finally {
+    mounted.cleanup();
   }
 });

@@ -250,6 +250,24 @@
     }
   }
 
+  // Existing programmes predating the interval feasibility rule remain readable.
+  // Do not waive any other validation errors or relax checks for new programmes.
+  function isLegacyIntervalOnlyInvalid(program, validation) {
+    const createdAt = Date.parse(String(program?.createdAt || ""));
+    return (
+      Number.isFinite(createdAt) &&
+      createdAt < Date.parse("2026-10-19T17:00:00Z") &&
+      validation &&
+      !validation.valid &&
+      validation.issues.some((item) => item.severity === "error") &&
+      validation.issues.every(
+        (item) =>
+          item.severity !== "error" ||
+          item.code === "INTERVAL_WORK_EXCEEDS_CLOCK",
+      )
+    );
+  }
+
   function validateV2ProgramsForPersistence(programs) {
     const values = Array.isArray(programs) ? programs : [];
     if (values.length && !v2Api) {
@@ -257,7 +275,9 @@
     }
     values.forEach((program) => {
       const validation = v2Api.validateProgram(program);
-      if (!validation.valid) {
+      const invalid =
+        !validation.valid && !isLegacyIntervalOnlyInvalid(program, validation);
+      if (invalid) {
         throw new Error(
           `Invalid V2 programme: ${validation.issues
             .filter((item) => item.severity === "error")
@@ -558,7 +578,9 @@
           (!Number.isFinite(remoteTime) || localTime > remoteTime))
       ) {
         const validation = v2Api?.validateProgram(program);
-        if (validation?.valid) {
+        const canLoad =
+          validation?.valid || isLegacyIntervalOnlyInvalid(program, validation);
+        if (canLoad) {
           mergedById.set(program.id, program);
           localWins.add(program.id);
         }
@@ -1395,8 +1417,14 @@
           const resolvedFlag = resolvedV2FeatureFlag(remoteFlag.enabled);
           setV2FeatureFlag(resolvedFlag);
           if (resolvedFlag.source === "supabase") {
-            const [remoteV2, restrictionRows] = await Promise.all([
+            const [remoteV2, archivedV2, restrictionRows] = await Promise.all([
               remoteStore.loadActiveProgrammingEngineV2(),
+              remoteStore
+                .loadSavedProgrammingEngineV2(ownerId)
+                .catch((error) => {
+                  console.warn("Could not load archived V2 programmes.", error);
+                  return [];
+                }),
               remoteStore.loadMovementRestrictions(ownerId),
             ]);
             if (!isCurrentAuth(ownerId, authEpoch)) return;
@@ -1404,17 +1432,25 @@
               const remoteProgram = remoteV2?.program || null;
               if (remoteProgram) {
                 const validation = v2Api?.validateProgram(remoteProgram);
-                if (!validation?.valid) {
+                const rejectedRemote =
+                  !validation?.valid &&
+                  !isLegacyIntervalOnlyInvalid(remoteProgram, validation);
+                if (rejectedRemote) {
                   console.warn(
                     "Remote V2 programme failed local validation and was not loaded.",
                     validation?.issues,
                   );
                 }
               }
-              const validRemoteProgram =
-                remoteProgram && v2Api?.validateProgram(remoteProgram).valid
-                  ? remoteProgram
-                  : null;
+              const remoteValidation = remoteProgram
+                ? v2Api?.validateProgram(remoteProgram)
+                : null;
+              const remoteIsCompatible =
+                remoteValidation?.valid ||
+                isLegacyIntervalOnlyInvalid(remoteProgram, remoteValidation);
+              const validRemoteProgram = remoteIsCompatible
+                ? remoteProgram
+                : null;
               const movementRestrictions = {
                 movementIds: restrictionRows
                   .map((item) => item.movementId)
@@ -1427,24 +1463,32 @@
                   current.movementRestrictions?.guidance ||
                   null,
               };
+              const available = new Map(
+                (current.v2Programs || []).map((item) => [item.id, item]),
+              );
+              const revisions = { ...(current.v2ProgramRevisions || {}) };
+              for (const archived of archivedV2) {
+                const program = archived.program;
+                if (!program?.id || available.has(program.id)) continue;
+                const validation = v2Api?.validateProgram(program);
+                if (
+                  validation?.valid ||
+                  isLegacyIntervalOnlyInvalid(program, validation)
+                ) {
+                  available.set(program.id, program);
+                  revisions[program.id] = archived.revision;
+                }
+              }
+              if (validRemoteProgram) {
+                available.set(validRemoteProgram.id, validRemoteProgram);
+                revisions[validRemoteProgram.id] = remoteV2.revision;
+              }
               return {
                 ...current,
-                v2Programs: validRemoteProgram
-                  ? [
-                      validRemoteProgram,
-                      ...(current.v2Programs || []).filter(
-                        (item) => item.id !== validRemoteProgram.id,
-                      ),
-                    ]
-                  : current.v2Programs || [],
+                v2Programs: [...available.values()],
                 activeV2ProgramId:
                   validRemoteProgram?.id || current.activeV2ProgramId || null,
-                v2ProgramRevisions: validRemoteProgram
-                  ? {
-                      ...(current.v2ProgramRevisions || {}),
-                      [validRemoteProgram.id]: remoteV2.revision,
-                    }
-                  : current.v2ProgramRevisions || {},
+                v2ProgramRevisions: revisions,
                 movementRestrictions,
               };
             });
@@ -8989,7 +9033,8 @@
     onConfirmMaxUpdate,
   }) {
     const validation = program ? v2Api.validateProgram(program) : null;
-    const rejected = Boolean(program && !validation.valid);
+    const legacyCompatible = isLegacyIntervalOnlyInvalid(program, validation);
+    const rejected = Boolean(program && !validation.valid && !legacyCompatible);
     const [setupOpen, setSetupOpen] = ReactRuntime.useState(
       !program || rejected,
     );
