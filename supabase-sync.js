@@ -1445,6 +1445,26 @@
             }
           : { enabled: false, rolloutGroup: "disabled", updatedAt: null };
       },
+      async loadSavedProgrammingEngineV2(userId) {
+        const ownerId = requiredString(
+          userId,
+          "User ID",
+          "load_saved_programming_engine_v2",
+        );
+        const result = await client
+          .from("training_programs")
+          .select("validated_snapshot,revision")
+          .eq("user_id", ownerId);
+        if (result?.error && isMissingV2Schema(result.error)) return [];
+        const rows = assertNoError(result, "load_saved_programming_engine_v2");
+        if (!Array.isArray(rows)) return [];
+        return rows
+          .filter((row) => row?.validated_snapshot?.engineVersion === "v2")
+          .map((row) => ({
+            program: row.validated_snapshot,
+            revision: Number(row.revision) || 0,
+          }));
+      },
       async loadActiveProgrammingEngineV2() {
         const result = await client.rpc("load_active_programming_engine_v2");
         if (result?.error && isMissingV2Schema(result.error)) return null;
