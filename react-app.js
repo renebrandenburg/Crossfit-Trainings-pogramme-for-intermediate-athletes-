@@ -276,8 +276,7 @@
     values.forEach((program) => {
       const validation = v2Api.validateProgram(program);
       const invalid =
-        !validation.valid &&
-        !isLegacyIntervalOnlyInvalid(program, validation);
+        !validation.valid && !isLegacyIntervalOnlyInvalid(program, validation);
       if (invalid) {
         throw new Error(
           `Invalid V2 programme: ${validation.issues
