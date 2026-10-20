@@ -4809,3 +4809,64 @@ test("React Testing Library keeps failed remote workout saves locally for retry"
     cleanup();
   }
 });
+
+test("REG-LEGACY-V2 keeps older programmes with outdated interval timing", async () => {
+  const v2 = freshRequire("../build/programming-v2.cjs");
+  const program = v2.generateV2Program({
+    ...INTERMEDIATE_V2_ATHLETE,
+    programId: "a876db29-618c-4d6f-a742-46a84b5d7ac0",
+    ownerId: null,
+    generatedAt: "2026-09-01T10:00:00.000Z",
+    blockType: "competition_preparation",
+    templateId: "competition_preparation_6w",
+    sessionCount: 2,
+    seed: "legacy-interval-recovery",
+    restrictions: { movementIds: [], movementFamilyIds: [], guidance: null },
+    weightIncrementKg: 2.5,
+    roundingMode: "nearest",
+  });
+  const interval = program.trainingBlocks[0].trainingWeeks
+    .flatMap((week) => week.sessions)
+    .map((session) => session.conditioning)
+    .find(
+      (conditioning) =>
+        conditioning?.format === "intervals" &&
+        conditioning.workSeconds === 90 &&
+        conditioning.movements.some(
+          (movement) => movement.movementId === "hang_power_snatch",
+        ),
+    );
+  assert.ok(interval);
+  const machine = interval.movements.at(-1);
+  machine.calories = null;
+  machine.distanceMeters = null;
+  machine.durationSeconds = 60;
+  const errors = v2
+    .validateProgram(program)
+    .issues.filter((issue) => issue.severity === "error");
+  assert.ok(errors.length > 0);
+  assert.ok(
+    errors.every((issue) => issue.code === "INTERVAL_WORK_EXCEEDS_CLOCK"),
+  );
+
+  const storedState = historicalEightWeekStrengthState();
+  storedState.v2Programs.push(program);
+  storedState.activeV2ProgramId = program.id;
+  const mounted = mountApp({ storedState });
+  try {
+    openMoreTool(mounted, "Build programme");
+    const selector = mounted.ui.getByLabelText("Active programme");
+    assert.ok(
+      Array.from(selector.options).some(
+        (option) => option.value === `v2:${program.id}`,
+      ),
+    );
+    assert.equal(
+      mounted.ui.queryByTestId("v2-programme-rejected"),
+      null,
+    );
+    assert.equal(mounted.readState().v2Programs.length, 2);
+  } finally {
+    mounted.cleanup();
+  }
+});
