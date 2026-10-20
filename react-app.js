@@ -250,6 +250,24 @@
     }
   }
 
+  // Existing programmes predating the interval feasibility rule remain readable.
+  // Do not waive any other validation errors or relax checks for new programmes.
+  function isLegacyIntervalOnlyInvalid(program, validation) {
+    const createdAt = Date.parse(String(program?.createdAt || ""));
+    return (
+      Number.isFinite(createdAt) &&
+      createdAt < Date.parse("2026-10-19T17:00:00Z") &&
+      validation &&
+      !validation.valid &&
+      validation.issues.some((item) => item.severity === "error") &&
+      validation.issues.every(
+        (item) =>
+          item.severity !== "error" ||
+          item.code === "INTERVAL_WORK_EXCEEDS_CLOCK",
+      )
+    );
+  }
+
   function validateV2ProgramsForPersistence(programs) {
     const values = Array.isArray(programs) ? programs : [];
     if (values.length && !v2Api) {
@@ -257,7 +275,7 @@
     }
     values.forEach((program) => {
       const validation = v2Api.validateProgram(program);
-      if (!validation.valid) {
+      if (!validation.valid && !isLegacyIntervalOnlyInvalid(program, validation)) {
         throw new Error(
           `Invalid V2 programme: ${validation.issues
             .filter((item) => item.severity === "error")
@@ -558,7 +576,10 @@
           (!Number.isFinite(remoteTime) || localTime > remoteTime))
       ) {
         const validation = v2Api?.validateProgram(program);
-        if (validation?.valid) {
+        if (
+          validation?.valid ||
+          isLegacyIntervalOnlyInvalid(program, validation)
+        ) {
           mergedById.set(program.id, program);
           localWins.add(program.id);
         }
@@ -1404,15 +1425,23 @@
               const remoteProgram = remoteV2?.program || null;
               if (remoteProgram) {
                 const validation = v2Api?.validateProgram(remoteProgram);
-                if (!validation?.valid) {
+                if (
+                  !validation?.valid &&
+                  !isLegacyIntervalOnlyInvalid(remoteProgram, validation)
+                ) {
                   console.warn(
                     "Remote V2 programme failed local validation and was not loaded.",
                     validation?.issues,
                   );
                 }
               }
+              const remoteValidation = remoteProgram
+                ? v2Api?.validateProgram(remoteProgram)
+                : null;
               const validRemoteProgram =
-                remoteProgram && v2Api?.validateProgram(remoteProgram).valid
+                remoteProgram &&
+                (remoteValidation?.valid ||
+                  isLegacyIntervalOnlyInvalid(remoteProgram, remoteValidation))
                   ? remoteProgram
                   : null;
               const movementRestrictions = {
@@ -8989,7 +9018,11 @@
     onConfirmMaxUpdate,
   }) {
     const validation = program ? v2Api.validateProgram(program) : null;
-    const rejected = Boolean(program && !validation.valid);
+    const rejected = Boolean(
+      program &&
+        !validation.valid &&
+        !isLegacyIntervalOnlyInvalid(program, validation),
+    );
     const [setupOpen, setSetupOpen] = ReactRuntime.useState(
       !program || rejected,
     );
