@@ -275,10 +275,9 @@
     }
     values.forEach((program) => {
       const validation = v2Api.validateProgram(program);
-      if (
-        !validation.valid &&
-        !isLegacyIntervalOnlyInvalid(program, validation)
-      ) {
+      const invalid = !validation.valid &&
+        !isLegacyIntervalOnlyInvalid(program, validation);
+      if (invalid) {
         throw new Error(
           `Invalid V2 programme: ${validation.issues
             .filter((item) => item.severity === "error")
@@ -579,10 +578,9 @@
           (!Number.isFinite(remoteTime) || localTime > remoteTime))
       ) {
         const validation = v2Api?.validateProgram(program);
-        if (
-          validation?.valid ||
-          isLegacyIntervalOnlyInvalid(program, validation)
-        ) {
+        const canLoad =
+          validation?.valid || isLegacyIntervalOnlyInvalid(program, validation);
+        if (canLoad) {
           mergedById.set(program.id, program);
           localWins.add(program.id);
         }
@@ -1428,10 +1426,10 @@
               const remoteProgram = remoteV2?.program || null;
               if (remoteProgram) {
                 const validation = v2Api?.validateProgram(remoteProgram);
-                if (
+                const rejectedRemote =
                   !validation?.valid &&
-                  !isLegacyIntervalOnlyInvalid(remoteProgram, validation)
-                ) {
+                  !isLegacyIntervalOnlyInvalid(remoteProgram, validation);
+                if (rejectedRemote) {
                   console.warn(
                     "Remote V2 programme failed local validation and was not loaded.",
                     validation?.issues,
@@ -1441,12 +1439,12 @@
               const remoteValidation = remoteProgram
                 ? v2Api?.validateProgram(remoteProgram)
                 : null;
-              const validRemoteProgram =
-                remoteProgram &&
-                (remoteValidation?.valid ||
-                  isLegacyIntervalOnlyInvalid(remoteProgram, remoteValidation))
-                  ? remoteProgram
-                  : null;
+              const remoteIsCompatible =
+                remoteValidation?.valid ||
+                isLegacyIntervalOnlyInvalid(remoteProgram, remoteValidation);
+              const validRemoteProgram = remoteIsCompatible
+                ? remoteProgram
+                : null;
               const movementRestrictions = {
                 movementIds: restrictionRows
                   .map((item) => item.movementId)
@@ -9021,11 +9019,8 @@
     onConfirmMaxUpdate,
   }) {
     const validation = program ? v2Api.validateProgram(program) : null;
-    const rejected = Boolean(
-      program &&
-        !validation.valid &&
-        !isLegacyIntervalOnlyInvalid(program, validation),
-    );
+    const legacyCompatible = isLegacyIntervalOnlyInvalid(program, validation);
+    const rejected = Boolean(program && !validation.valid && !legacyCompatible);
     const [setupOpen, setSetupOpen] = ReactRuntime.useState(
       !program || rejected,
     );
