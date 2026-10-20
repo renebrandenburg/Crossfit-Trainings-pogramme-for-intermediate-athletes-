@@ -275,7 +275,10 @@
     }
     values.forEach((program) => {
       const validation = v2Api.validateProgram(program);
-      if (!validation.valid && !isLegacyIntervalOnlyInvalid(program, validation)) {
+      if (
+        !validation.valid &&
+        !isLegacyIntervalOnlyInvalid(program, validation)
+      ) {
         throw new Error(
           `Invalid V2 programme: ${validation.issues
             .filter((item) => item.severity === "error")
