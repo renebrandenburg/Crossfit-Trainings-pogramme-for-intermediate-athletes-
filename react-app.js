@@ -1419,10 +1419,12 @@
           if (resolvedFlag.source === "supabase") {
             const [remoteV2, archivedV2, restrictionRows] = await Promise.all([
               remoteStore.loadActiveProgrammingEngineV2(),
-              remoteStore.loadSavedProgrammingEngineV2(ownerId).catch((error) => {
-                console.warn("Could not load archived V2 programmes.", error);
-                return [];
-              }),
+              remoteStore
+                .loadSavedProgrammingEngineV2(ownerId)
+                .catch((error) => {
+                  console.warn("Could not load archived V2 programmes.", error);
+                  return [];
+                }),
               remoteStore.loadMovementRestrictions(ownerId),
             ]);
             if (!isCurrentAuth(ownerId, authEpoch)) return;
