@@ -1417,8 +1417,12 @@
           const resolvedFlag = resolvedV2FeatureFlag(remoteFlag.enabled);
           setV2FeatureFlag(resolvedFlag);
           if (resolvedFlag.source === "supabase") {
-            const [remoteV2, restrictionRows] = await Promise.all([
+            const [remoteV2, archivedV2, restrictionRows] = await Promise.all([
               remoteStore.loadActiveProgrammingEngineV2(),
+              remoteStore.loadSavedProgrammingEngineV2(ownerId).catch((error) => {
+                console.warn("Could not load archived V2 programmes.", error);
+                return [];
+              }),
               remoteStore.loadMovementRestrictions(ownerId),
             ]);
             if (!isCurrentAuth(ownerId, authEpoch)) return;
@@ -1457,24 +1461,32 @@
                   current.movementRestrictions?.guidance ||
                   null,
               };
+              const available = new Map(
+                (current.v2Programs || []).map((item) => [item.id, item]),
+              );
+              const revisions = { ...(current.v2ProgramRevisions || {}) };
+              for (const archived of archivedV2) {
+                const program = archived.program;
+                if (!program?.id || available.has(program.id)) continue;
+                const validation = v2Api?.validateProgram(program);
+                if (
+                  validation?.valid ||
+                  isLegacyIntervalOnlyInvalid(program, validation)
+                ) {
+                  available.set(program.id, program);
+                  revisions[program.id] = archived.revision;
+                }
+              }
+              if (validRemoteProgram) {
+                available.set(validRemoteProgram.id, validRemoteProgram);
+                revisions[validRemoteProgram.id] = remoteV2.revision;
+              }
               return {
                 ...current,
-                v2Programs: validRemoteProgram
-                  ? [
-                      validRemoteProgram,
-                      ...(current.v2Programs || []).filter(
-                        (item) => item.id !== validRemoteProgram.id,
-                      ),
-                    ]
-                  : current.v2Programs || [],
+                v2Programs: [...available.values()],
                 activeV2ProgramId:
                   validRemoteProgram?.id || current.activeV2ProgramId || null,
-                v2ProgramRevisions: validRemoteProgram
-                  ? {
-                      ...(current.v2ProgramRevisions || {}),
-                      [validRemoteProgram.id]: remoteV2.revision,
-                    }
-                  : current.v2ProgramRevisions || {},
+                v2ProgramRevisions: revisions,
                 movementRestrictions,
               };
             });
