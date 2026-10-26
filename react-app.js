@@ -10981,8 +10981,13 @@
     const [editingLog, setEditingLog] = ReactRuntime.useState(null);
     const selectedWeek = appState.selectedWeek;
     const activePlan = selectActivePlan(appState);
+    const activeProgramming = selectActiveProgrammingSessions(appState);
     const selectedDayId =
-      logSelection.dayId || (activePlan ? "" : getProgramDays()[0].id);
+      logSelection.dayId ||
+      activeProgramming.sessions.find(
+        (session) => Number(session.week) === Number(selectedWeek),
+      )?.id ||
+      (activeProgramming.program ? "" : getProgramDays()[0].id);
     const matchingTimer =
       pendingTimerResult &&
       pendingTimerResult.dayId === selectedDayId &&
@@ -10990,9 +10995,7 @@
         ? pendingTimerResult
         : null;
     const timerSummary = matchingTimer ? formatTimerResult(matchingTimer) : "";
-    const activeSessions = selectActiveProgrammingSessions(
-      appState,
-    ).sessions.filter(
+    const activeSessions = activeProgramming.sessions.filter(
       (session) => Number(session.week) === Number(selectedWeek),
     );
 
@@ -11276,7 +11279,7 @@
                   name: "logDay",
                   required: true,
                   disabled: Boolean(
-                    activePlan &&
+                    activeProgramming.program &&
                     !activeSessions.length &&
                     !matchingTimer?.sessionSnapshot,
                   ),
@@ -11286,8 +11289,13 @@
                 },
                 h(
                   "optgroup",
-                  { label: activePlan?.title || "CrossFit Training Programme" },
-                  activePlan
+                  {
+                    label:
+                      activeProgramming.program?.title ||
+                      activeProgramming.program?.name ||
+                      "CrossFit Training Programme",
+                  },
+                  activeProgramming.program
                     ? activeSessions.length
                       ? activeSessions.map((session) =>
                           h(
