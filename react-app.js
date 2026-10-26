@@ -11289,7 +11289,12 @@
                 },
                 h(
                   "optgroup",
-                  { label: activeProgramming.program?.title || activeProgramming.program?.name || "CrossFit Training Programme" },
+                  {
+                    label:
+                      activeProgramming.program?.title ||
+                      activeProgramming.program?.name ||
+                      "CrossFit Training Programme",
+                  },
                   activeProgramming.program
                     ? activeSessions.length
                       ? activeSessions.map((session) =>
